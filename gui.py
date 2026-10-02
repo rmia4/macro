@@ -530,7 +530,11 @@ class EditorWindow:
 
         self.top = tk.Toplevel(gui.root)
         self.top.minsize(900, 560)
-        restore_geometry(self.top, gui.settings["editor_geometry"])
+        saved_geometry = gui.settings["editor_geometry"]
+        if saved_geometry:
+            restore_geometry(self.top, saved_geometry)
+        else:
+            self.top.withdraw()  # 처음 열 때는 메인 창 가운데에 놓은 뒤 보인다
         self._undo: list[list[dict]] = []
         self._redo: list[list[dict]] = []
         self.top.protocol("WM_DELETE_WINDOW", self.close)
@@ -552,6 +556,8 @@ class EditorWindow:
         self.v_title.trace_add("write", lambda *a: self._auto_coord())
         self._update_title()
         self.refresh()
+        if not saved_geometry:
+            center_on_parent(self.top, gui.root)
 
     # ---- 화면 구성 ----
     def _build(self) -> None:
@@ -940,6 +946,7 @@ class EventDialog:
         kind = init.get("kind", kind)
         labels = dict(kinds)
         self.top = tk.Toplevel(parent)
+        self.top.withdraw()  # 위치를 잡은 뒤 보인다
         self.top.title("이벤트 수정" if item else "이벤트 추가")
         self.top.transient(parent)
         self.top.resizable(False, False)
@@ -957,6 +964,7 @@ class EventDialog:
                 pass
         self._build()
         self._on_kind()
+        center_on_parent(self.top, parent)
 
     def _build(self) -> None:
         f = ttk.Frame(self.top, padding=10)
@@ -1135,6 +1143,23 @@ class Overlay:
         self.visible = False
 
 
+def center_on_parent(top, parent) -> None:
+    """작은 창을 부모 창 가운데에 놓는다 (화면 밖으로 나가지 않게). 숨겨 둔 창이면 위치를 잡은 뒤 보인다."""
+    top.update_idletasks()
+    parent.update_idletasks()
+    w, h = top.winfo_reqwidth(), top.winfo_reqheight()
+    px, py = parent.winfo_rootx(), parent.winfo_rooty()
+    pw, ph = parent.winfo_width(), parent.winfo_height()
+    if pw <= 1 or ph <= 1 or not parent.winfo_viewable():  # 부모가 아직 안 보이면 화면 가운데
+        px, py, pw, ph = 0, 0, top.winfo_screenwidth(), top.winfo_screenheight()
+    x = px + (pw - w) // 2
+    y = py + (ph - h) // 2
+    x = max(0, min(x, top.winfo_screenwidth() - w))
+    y = max(0, min(y, top.winfo_screenheight() - h))
+    top.geometry(f"+{x}+{y}")
+    top.deiconify()
+
+
 def restore_geometry(window, geometry: str) -> None:
     """저장된 'WxH+X+Y' 복원. 위치가 화면 밖이면(모니터 변경 등) 크기만 복원."""
     import re
@@ -1158,6 +1183,7 @@ class HotkeyCaptureDialog:
         self._pending: list[str] = []
         self._down: set[str] = set()
         self.top = tk.Toplevel(parent)
+        self.top.withdraw()  # 위치를 잡은 뒤 보인다
         self.top.title("핫키 지정")
         self.top.transient(parent)
         self.top.resizable(False, False)
@@ -1173,6 +1199,7 @@ class HotkeyCaptureDialog:
         ttk.Button(btns, text="취소", command=self.top.destroy).pack(side="left")
         self.top.bind("<KeyPress>", self.on_press)
         self.top.bind("<KeyRelease>", self.on_release)
+        center_on_parent(self.top, parent)
 
     def _name(self, event) -> str | None:
         name = keys.name_from_tk(event.keysym, event.keycode, windows=sys.platform == "win32")

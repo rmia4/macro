@@ -618,3 +618,31 @@ def test_overlay_play_text_infinite(gui):
     gui.app._player.loop_index = 12
     pump(gui)
     assert gui.overlay.label.cget("text") == "▶ alpha · 12/∞"
+
+
+def test_small_dialogs_centered_on_parent(gui):
+    import editor_model as em
+    from gui import EventDialog, HotkeyCaptureDialog
+    gui.root.geometry("800x600+100+50")
+    gui.root.update()
+    for dlg in (EventDialog(gui.root, em.ADD_KINDS, kind="click"), HotkeyCaptureDialog(gui.root)):
+        gui.root.update()
+        top = dlg.top
+        cx = top.winfo_rootx() + top.winfo_width() // 2
+        cy = top.winfo_rooty() + top.winfo_height() // 2
+        pcx = gui.root.winfo_rootx() + gui.root.winfo_width() // 2
+        pcy = gui.root.winfo_rooty() + gui.root.winfo_height() // 2
+        assert abs(cx - pcx) <= 30 and abs(cy - pcy) <= 30, (cx, cy, pcx, pcy)
+        top.destroy()
+
+
+def test_editor_first_open_centered(gui):
+    gui.root.geometry("1000x700+100+50")
+    gui.root.update()
+    gui.settings["editor_geometry"] = ""
+    gui.on_add()
+    gui.root.update()
+    top = gui.editor.top
+    cx = top.winfo_rootx() + top.winfo_width() // 2
+    pcx = gui.root.winfo_rootx() + gui.root.winfo_width() // 2
+    assert top.winfo_viewable() and abs(cx - pcx) <= 30
