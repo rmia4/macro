@@ -14,10 +14,11 @@ import keys
 from hotkeys import CONTROL_KEYS, HOTKEY_PLAY, HOTKEY_QUIT, HOTKEY_RECORD, HotkeyListener
 from player import PlayOptions, Player, options_from_dict, options_to_dict, set_option
 from profiles import Macro, delete_macro, list_macros, load_macro, macro_path, save_macro
+from paths import app_dir, is_frozen
 from recorder import Recorder
 from vision import Vision, conditions_in
 
-MACROS_DIR = Path(__file__).resolve().parent / "macros"
+MACROS_DIR = app_dir() / "macros"
 
 HELP = """명령: record | play | stop | save <이름> | load <이름> | delete <이름> | list | set <옵션> <값> | show | quit
 핫키: {rec}=녹화 시작/종료, {play}=재생/중지, {quit}=종료""".format(
@@ -300,8 +301,67 @@ class App:
             self.log("매크로: (없음)")
 
 
+def selftest() -> int:
+    """빌드한 exe 점검: 필요한 모듈이 모두 들어 있고 화면 캡처·창·입력 백엔드가 동작하는지.
+    결과는 exe 폴더의 selftest.log 에 남긴다 (콘솔 없는 exe 용). 성공 0, 실패 1."""
+    import traceback
+    lines = []
+    try:
+        import cv2
+        import mss  # noqa: F401
+        import numpy  # noqa: F401
+        import tkinter as tk
+        from pynput import keyboard, mouse  # noqa: F401
+        lines.append(f"modules ok (opencv {cv2.__version__})")
+        from vision import MssGrabber
+        g = MssGrabber()
+        w, h = g.screen_size()
+        g.grab(0, 0, 2, 2)
+        lines.append(f"screen capture ok ({w}x{h})")
+        if input_backend.IS_WINDOWS:
+            input_backend.init_process()
+            b = input_backend.WindowsBackend()
+            lines.append(f"backend ok (cursor {b.cursor_pos()}, admin={input_backend.is_admin()})")
+        root = tk.Tk()
+        root.withdraw()
+        root.update()
+        root.destroy()
+        lines.append("tk ok")
+        lines.append(f"data dir: {app_dir()}")
+        code = 0
+    except Exception:
+        lines.append(traceback.format_exc())
+        code = 1
+    lines.append("SELFTEST " + ("OK" if code == 0 else "FAILED"))
+    (app_dir() / "selftest.log").write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
+    return code
+
+
+def report_crash() -> None:
+    """콘솔 없는 exe 에서 처리되지 않은 오류: crash.log 를 남기고 오류 창을 띄운다."""
+    import traceback
+    text = traceback.format_exc()
+    path = app_dir() / "crash.log"
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("매크로 도구 오류", f"프로그램 오류로 종료합니다.\n자세한 내용: {path}\n\n{text[-800:]}")
+        root.destroy()
+    except Exception:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if "--selftest" in argv:
+        return selftest()
     if not input_backend.IS_WINDOWS:
         print("이 도구는 Windows 전용입니다.")
         return 1
@@ -310,8 +370,14 @@ def main(argv: list[str] | None = None) -> int:
         print("[경고] 관리자 권한이 아닙니다. 게임이 관리자 권한으로 실행 중이면 "
               "입력이 무시되므로 이 도구도 관리자 권한으로 실행하세요.")
     if "--cli" not in argv:
-        from gui import run_gui
-        return run_gui(App(input_backend.WindowsBackend()))
+        try:
+            from gui import run_gui
+            return run_gui(App(input_backend.WindowsBackend()))
+        except Exception:
+            if not is_frozen():
+                raise
+            report_crash()
+            return 1
     app = App(input_backend.WindowsBackend())
 
     def quit_now() -> None:

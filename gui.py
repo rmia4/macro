@@ -1813,6 +1813,9 @@ def run_gui(app: App) -> int:
     gui.hotkey_listener = HotkeyListener(gui.hotkey_bindings(), gui.hotkey_suppressed)
     gui.hotkey_listener.start()
     gui.log("준비 완료. '+ 추가'로 새 매크로를 만들거나 목록에서 선택해 재생하세요.")
+    if input_backend.IS_WINDOWS and not input_backend.is_admin():
+        gui.log("[참고] 관리자 권한이 아닙니다. 게임이 관리자 권한으로 실행 중이면 입력이 무시되므로 "
+                "이 프로그램도 관리자 권한으로 실행하세요.")
     try:
         root.mainloop()
     finally:

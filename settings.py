@@ -6,8 +6,9 @@ import os
 from pathlib import Path
 
 import keys
+from paths import app_dir
 
-SETTINGS_PATH = Path(__file__).resolve().parent / "settings.json"
+SETTINGS_PATH = app_dir() / "settings.json"
 
 OVERLAY_POSITIONS = ("off", "nw", "n", "ne", "w", "e", "sw", "s", "se")
 

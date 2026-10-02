@@ -2,7 +2,23 @@
 
 Steam 싱글 플레이 게임의 반복 작업(클릭·드래그·키·스크롤)을 녹화하고 재생한다. 현재 **1단계(MVP)**.
 
-## 설치 / 실행
+## 실행 파일 (.exe)
+Python 없이 `MacroTool.exe` 하나로 실행할 수 있다. 매크로(`macros/`)와 설정(`settings.json`)은 **exe와 같은 폴더**에
+만들어지므로, exe는 쓰기 가능한 폴더(예: `문서\MacroTool\`)에 두고 쓴다. 게임이 관리자 권한이면 exe도
+"관리자 권한으로 실행"한다. 오류로 종료되면 같은 폴더에 `crash.log`가 남는다.
+
+- **GitHub에서 받기**: 저장소 Actions 탭 → `Build Windows exe` → 최근 실행 → Artifacts의 `MacroTool-windows`.
+  `v1.0` 같은 태그를 푸시하면 Releases에도 올라간다. (Windows에서 테스트 → 빌드 → exe 자가진단까지 자동 실행)
+- **직접 빌드** (Windows):
+  ```
+  pip install -r requirements.txt pyinstaller
+  python build.py          # -> dist\MacroTool.exe
+  dist\MacroTool.exe --selftest   # 점검 결과를 dist\selftest.log 에 기록
+  ```
+- 처음 실행 시 Windows SmartScreen이 "알 수 없는 게시자" 경고를 띄울 수 있다(서명되지 않은 exe). `추가 정보 → 실행`.
+  일부 백신은 키 입력 자동화 프로그램을 의심 파일로 분류할 수 있다.
+
+## 설치 / 실행 (소스)
 ```
 pip install -r requirements.txt
 python main.py          # GUI (기본)

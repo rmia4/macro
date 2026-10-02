@@ -11,3 +11,7 @@ macros/*/
 profiles/*.json
 settings.json
 settings.tmp
+
+# 실행 기록
+selftest.log
+crash.log
