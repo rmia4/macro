@@ -72,6 +72,15 @@ def test_validate_for_save():
     assert any("핫키/제어 키" in e for e in em.validate_for_save("x", "a", items, lib, None))
     assert any("이름" in e for e in em.validate_for_save("../x", None, items, lib, None))
     assert em.validate_for_save("OTHER2", None, items, lib, None) == []
+    # 조합 핫키
+    assert em.validate_for_save("x", "Ctrl + F1", items, lib, None) == []
+    assert any("제어 키" in e for e in em.validate_for_save("x", "ctrl+f9", items, lib, None))
+    assert any("최대 2개" in e for e in em.validate_for_save("x", "ctrl+shift+f1", items, lib, None))
+    lib["combo"] = Macro(hotkey="ctrl+f1")
+    assert any("CTRL+F1" in e for e in em.validate_for_save("x", "f1+ctrl", items, lib, None))
+    both = em.build_items("tap", key="ctrl") + em.build_items("tap", key="q")
+    assert em.validate_for_save("y", "ctrl+f2", both, lib, None) == []    # ctrl 만 포함: 충돌 아님
+    assert any("핫키/제어 키" in e for e in em.validate_for_save("y", "ctrl+q", both, lib, None))
 
 
 def test_consecutive_moves_grouped_into_path():

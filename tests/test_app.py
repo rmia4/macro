@@ -30,6 +30,18 @@ def test_repl_commands(tmp_path):
     assert app.handle("quit") is False
 
 
+def test_hotkey_dispatch_combos():
+    hits = []
+    d = HotkeyDispatcher({"f1": lambda: hits.append("f1"), "ctrl+f1": lambda: hits.append("ctrl+f1"),
+                          "a+s": lambda: hits.append("a+s")})
+    d.press("f1"); d.release("f1")
+    d.press("ctrl_r"); d.press("f1"); d.release("f1"); d.release("ctrl_r")   # 큰 조합 우선
+    d.press("f1"); d.press("ctrl"); d.release("ctrl"); d.release("f1")       # 순서 반대: f1 만
+    d.press("s"); d.press("a"); d.release("a"); d.release("s")               # 아무 순서나
+    d.press("w"); d.press("f1"); d.release("f1"); d.release("w")             # 다른 키 누른 채 단일 핫키
+    assert hits == ["f1", "ctrl+f1", "f1", "a+s", "f1"]
+
+
 def test_hotkey_dispatch_ignores_autorepeat():
     hits = []
     d = HotkeyDispatcher({"f8": lambda: hits.append(1)})
@@ -92,16 +104,3 @@ def test_cli_play_without_macro(tmp_path):
     app, out = make_app(tmp_path)
     app.handle("play")
     assert out[-1].startswith("오류: 재생할 매크로가 없습니다")
-
-
-def test_set_enabled_persists_and_stops_playing(tmp_path):
-    from profiles import load_macro
-    app, out = make_app(tmp_path)
-    m = Macro(events=[{"t": 0, "type": "kdown", "key": "a"}])
-    app.store("m", m)
-    app.start_play(m, PlayOptions(), "m")
-    app.set_enabled("m", False)
-    app._thread.join(1)
-    assert not app.playing and load_macro(tmp_path / "m.json").enabled is False
-    app.set_enabled("m", True)
-    assert load_macro(tmp_path / "m.json").enabled is True

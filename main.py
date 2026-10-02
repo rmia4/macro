@@ -9,6 +9,7 @@ import threading
 from pathlib import Path
 
 import input_backend
+import keys
 from hotkeys import CONTROL_KEYS, HOTKEY_PLAY, HOTKEY_QUIT, HOTKEY_RECORD, HotkeyListener
 from player import PlayOptions, Player, options_from_dict, options_to_dict, set_option
 from profiles import Macro, delete_macro, list_macros, load_macro, macro_path, save_macro
@@ -102,7 +103,7 @@ class App:
             player = self._player_factory(self.backend, options, log=self.log)
             self._player = player
             self.playing_macro, self.playing_name = macro, name
-            self.playing_keys = frozenset(ev["key"] for ev in macro.events if "key" in ev)
+            self.playing_keys = frozenset(keys.hotkey_key(ev["key"]) for ev in macro.events if "key" in ev)
             self._thread = threading.Thread(target=self._play, args=(player, macro), daemon=True)
             self._thread.start()
         self.log(f"▶ 재생 시작{f': {name}' if name else ''}")
@@ -167,15 +168,6 @@ class App:
                 pass
         self.log(f"저장: {name}")
         return name
-
-    def set_enabled(self, name: str, enabled: bool) -> None:
-        """재생 가능/안함 전환 (파일에도 저장). 재생 중인 매크로를 끄면 멈춘다."""
-        macro = self.library[name]
-        macro.enabled = enabled
-        save_macro(macro, macro_path(self.macros_dir, name))
-        if not enabled and self.playing and self.playing_name == name:
-            self.stop_play()
-        self.log(f"'{name}' 재생 {'켜짐' if enabled else '꺼짐'}")
 
     # ---- 저장 / 불러오기 / 삭제 (REPL, GUI 공용) ----
     def save(self, name: str) -> None:

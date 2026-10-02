@@ -56,7 +56,7 @@ def logs(g):
 # ---- 메인 화면 ----
 def test_list_shows_library(gui):
     assert gui.tree.get_children() == ("alpha", "beta")
-    assert gui.tree.item("alpha")["values"][:5] == ["● 켜짐", "alpha", "F6", "∞", 6]
+    assert gui.tree.item("alpha")["values"][:4] == ["alpha", "F6", "∞", 6]
 
 
 def test_play_selected_and_stop(gui):
@@ -92,7 +92,7 @@ def test_countdown_cancel(gui):
     gui.tree.selection_set("beta")
     gui.on_play()
     pump(gui)
-    assert gui.status.cget("text") == "시작 대기 중…"
+    assert gui.status.cget("text") == "5초 후 재생"
     gui.on_stop()
     pump(gui)
     assert gui.status.cget("text") == "대기 중" and not gui.app.playing
@@ -131,6 +131,8 @@ def test_add_opens_editor_and_records(gui):
     gui.hotkey_bindings()["f8"]()  # F8 = 녹화 시작
     pump(gui)
     assert gui.app.recording
+    assert ed.banner.cget("text").startswith("● 녹화 중")      # 기록 화면에 표시
+    assert gui.status.cget("text") == "대기 중"                 # 메인에는 표시 안 함
     assert "f6" in FakeRecorder.last.ignore_keys and "f8" in FakeRecorder.last.ignore_keys
     gui.hotkey_bindings()["f8"]()  # 녹화 종료 -> 목록 끝에 추가
     pump(gui)
@@ -190,11 +192,12 @@ def test_editor_save_new_with_hotkey_and_options(gui, tmp_path):
     assert ed.coord_space == "window"  # 창 제목을 넣으면 창 기준
     ed.insert_items(em.build_items("tap", key="e"))
     assert ed.on_save()
+    assert gui.editor is None  # 저장하면 창이 닫힌다
     m = gui.app.library["채집"]
     assert m.hotkey == "f7" and m.options["repeat"] == 5 and m.options["window_title"] == "My Game"
-    assert (tmp_path / "채집.json").exists() and not ed.dirty
+    assert (tmp_path / "채집.json").exists()
     assert "f7" in gui.hotkey_bindings()
-    assert gui.tree.item("채집")["values"][2] == "F7"
+    assert gui.tree.item("채집")["values"][1] == "F7"
 
 
 def test_editor_save_validation_errors(gui):
@@ -220,7 +223,7 @@ def test_editor_rename_existing(gui, tmp_path):
     ed.v_name.set("beta2")
     assert ed.on_save()
     assert "beta" not in gui.app.library and not (tmp_path / "beta.json").exists()
-    assert ed.old_name == "beta2"
+    assert "beta2" in gui.app.library and gui.selected() == "beta2"
 
 
 def test_editor_test_play(gui):
@@ -301,7 +304,7 @@ def test_event_dialog_fields_follow_kind(gui):
 
 def test_no_selection_does_nothing(gui):
     gui.tree.selection_remove(gui.tree.selection())
-    for fn in (gui.on_edit, gui.on_duplicate, gui.on_delete, gui.on_toggle_enabled):
+    for fn in (gui.on_edit, gui.on_duplicate, gui.on_delete):
         fn()
     assert gui.shown == [] and gui.editor is None
     assert set(gui.app.library) == {"alpha", "beta"}
@@ -314,31 +317,6 @@ def test_no_selection_does_nothing(gui):
     for fn in (ed.on_edit, ed.on_delete, lambda: ed.on_move(-1), lambda: ed.on_move(1)):
         fn()
     assert gui.shown == [] and ed.items == before
-
-
-def test_toggle_enabled(gui, tmp_path):
-    from profiles import load_macro
-    gui.tree.selection_set("alpha")
-    gui.on_toggle_enabled()
-    assert gui.app.library["alpha"].enabled is False
-    assert gui.tree.item("alpha")["values"][0] == "○ 꺼짐" and "disabled" in gui.tree.item("alpha")["tags"]
-    assert load_macro(tmp_path / "alpha.json").enabled is False
-    assert "f6" not in gui.hotkey_bindings()   # 꺼진 매크로는 핫키도 해제
-    gui.on_play(immediate=True)
-    pump(gui)
-    assert not gui.app.playing and "재생 꺼짐" in logs(gui)
-    gui.on_toggle_enabled()
-    assert gui.app.library["alpha"].enabled and "f6" in gui.hotkey_bindings()
-
-
-def test_editor_preserves_enabled_flag(gui):
-    gui.tree.selection_set("alpha")
-    gui.on_toggle_enabled()
-    gui.on_edit()
-    ed = gui.editor
-    ed.v_opts["repeat"].set("2")
-    assert ed.on_save()
-    assert gui.app.library["alpha"].enabled is False
 
 
 def test_event_dialog_cursor_option_and_path(gui):
@@ -363,3 +341,65 @@ def test_event_dialog_cursor_option_and_path(gui):
     d.v["x"].set("30")
     d._on_ok()
     assert d.result[0]["points"][-1] == [0.02, 30, 10]
+
+
+def test_editor_record_button_countdown_shown_in_editor(gui):
+    gui.on_add()
+    ed = gui.editor
+    gui.delay.set("3")
+    ed.toggle_record()
+    pump(gui)
+    assert ed.banner.cget("text").startswith("3초 후 녹화 시작")
+    assert gui.status.cget("text") == "대기 중" and "초 후" not in logs(gui)
+    ed.toggle_record()  # 카운트다운 중 다시 누르면 취소
+    pump(gui)
+    assert ed.banner.cget("text") == "대기" and not gui.app.recording
+
+
+def test_global_enable_toggle(gui):
+    gui.tree.selection_set("beta")
+    gui.toggle_macros_enabled()
+    assert not gui.macros_enabled and "실행 불가" in gui.btn_power.cget("text")
+    gui.on_play(immediate=True)
+    gui.hotkey_bindings()["f6"]()   # 매크로 핫키도 무시
+    pump(gui)
+    assert not gui.app.playing and "실행이 꺼져" in logs(gui)
+    gui.toggle_macros_enabled()
+    gui.on_play(immediate=True)
+    pump(gui)
+    assert gui.app.playing
+    gui.toggle_macros_enabled()     # 끄면 재생 중인 매크로도 멈춤
+    gui.app._thread.join(1)
+    assert not gui.app.playing
+
+
+def test_editor_combo_hotkey_save_and_binding(gui):
+    import editor_model as em
+    gui.on_add()
+    ed = gui.editor
+    ed.v_name.set("combo")
+    ed.v_hotkey.set("F2 + Ctrl")
+    ed.insert_items(em.build_items("tap", key="e"))
+    assert ed.on_save()
+    assert gui.app.library["combo"].hotkey == "ctrl+f2"
+    assert "ctrl+f2" in gui.hotkey_bindings()
+    assert gui.tree.item("combo")["values"][1] == "CTRL+F2"
+
+
+def test_hotkey_capture_dialog(gui):
+    from gui import HotkeyCaptureDialog
+
+    class Ev:
+        def __init__(self, keysym):
+            self.keysym, self.keycode = keysym, 0
+    d = HotkeyCaptureDialog(gui.root)
+    d.on_press(Ev("F1")); d.on_press(Ev("Control_L")); d.on_press(Ev("Shift_L"))  # 3번째 키는 무시
+    assert d.shown.cget("text") == "CTRL + F1"
+    d.on_release(Ev("Control_L"))
+    assert d.result is None
+    d.on_release(Ev("F1")); d.on_release(Ev("Shift_L"))
+    assert d.result == "ctrl+f1" and d.btn_ok.instate(["!disabled"])
+    d.on_press(Ev("a")); d.on_release(Ev("a"))   # 다시 누르면 새로 지정
+    assert d.result == "a"
+    d._ok()
+    assert d.confirmed

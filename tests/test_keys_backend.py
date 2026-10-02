@@ -55,3 +55,24 @@ def test_normalize_abs():
 def test_negative_wheel_data_masked():
     inp = ib.mouse_input(0, 0, -120, ib.MOUSEEVENTF_WHEEL)
     assert inp.mi.mouseData == (-120) & 0xFFFFFFFF
+
+
+def test_parse_hotkey_combos():
+    assert keys.parse_hotkey("F6") == "f6"
+    assert keys.parse_hotkey(" F1 + Ctrl ") == "ctrl+f1"        # 수정키가 앞으로
+    assert keys.parse_hotkey("ctrl_r+f1") == "ctrl+f1"          # 좌우 구분 안 함
+    assert keys.parse_hotkey("a+s") == "a+s"
+    assert keys.parse_hotkey("") is None and keys.parse_hotkey(None) is None
+    for bad in ("ctrl+shift+f1", "ctrl+", "nokey", "f1++a"):
+        with pytest.raises(ValueError):
+            keys.parse_hotkey(bad)
+
+
+def test_name_from_tk():
+    assert keys.name_from_tk("Control_L") == "ctrl"
+    assert keys.name_from_tk("F1") == "f1"
+    assert keys.name_from_tk("A") == "a"
+    assert keys.name_from_tk("KP_5") == "num5"
+    assert keys.name_from_tk("Prior") == "page_up"
+    assert keys.name_from_tk("exclam") is None
+    assert keys.name_from_tk("whatever", 0x70, windows=True) == "f1"   # Windows: VK 코드 우선

@@ -26,9 +26,8 @@ class Macro:
     coord_space: str = "screen"
     window: dict | None = None  # {"title", "width", "height"}
     version: int = VERSION
-    hotkey: str | None = None   # 이 매크로를 시작/중지하는 전역 핫키
+    hotkey: str | None = None   # 이 매크로를 시작/중지하는 전역 핫키 ('f6', 'ctrl+f1' 등)
     options: dict = field(default_factory=dict)  # 재생 옵션 (player.options_to_dict 형식)
-    enabled: bool = True        # False 면 재생하지 않음 (메인 화면에서 전환)
 
     @property
     def duration(self) -> float:
@@ -42,7 +41,6 @@ class Macro:
             "window": self.window,
             "hotkey": self.hotkey,
             "options": self.options,
-            "enabled": self.enabled,
             "events": self.events,
         }
 
@@ -64,17 +62,15 @@ class Macro:
         window = data.get("window")
         if window is not None and not isinstance(window, dict):
             raise MacroFormatError("window 는 객체여야 합니다")
-        hotkey = data.get("hotkey")
-        if hotkey is not None and not keys.is_known(hotkey):
-            raise MacroFormatError(f"알 수 없는 hotkey: {hotkey!r}")
+        try:
+            hotkey = keys.parse_hotkey(data.get("hotkey"))
+        except ValueError as e:
+            raise MacroFormatError(f"hotkey: {e}") from None
         options = data.get("options") or {}
         if not isinstance(options, dict):
             raise MacroFormatError("options 는 객체여야 합니다")
-        enabled = data.get("enabled", True)
-        if not isinstance(enabled, bool):
-            raise MacroFormatError("enabled 는 true/false 여야 합니다")
         return cls(events=events, screen=screen, coord_space=coord_space, window=window,
-                   version=version, hotkey=hotkey, options=options, enabled=enabled)
+                   version=version, hotkey=hotkey, options=options)
 
 
 def _is_num(v) -> bool:

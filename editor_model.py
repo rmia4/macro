@@ -218,10 +218,16 @@ def validate_for_save(name: str, hotkey: str | None, items: list[dict],
         for other in library:
             if other != old_name and other.lower() == name.strip().lower():
                 errors.append(f"이름: 같은 이름의 매크로가 이미 있습니다 ({other})")
+    parts: list[str] = []
     if hotkey:
-        if not keys.is_known(hotkey):
-            errors.append(f"핫키: 알 수 없는 키 {hotkey!r}")
-        elif hotkey in CONTROL_KEYS:
+        try:
+            hotkey = keys.parse_hotkey(hotkey)
+            parts = keys.hotkey_parts(hotkey)
+        except ValueError as e:
+            errors.append(f"핫키: {e}")
+            hotkey = None
+    if hotkey:
+        if any(p in CONTROL_KEYS for p in parts):
             errors.append(f"핫키: {', '.join(k.upper() for k in CONTROL_KEYS)} 는 제어 키라 쓸 수 없습니다")
         else:
             for other, m in library.items():
@@ -229,8 +235,10 @@ def validate_for_save(name: str, hotkey: str | None, items: list[dict],
                     errors.append(f"핫키: {hotkey.upper()} 는 '{other}' 매크로가 사용 중입니다")
     if not items:
         errors.append("이벤트가 없습니다 (녹화하거나 추가하세요)")
-    forbidden = set(CONTROL_KEYS) | ({hotkey} if hotkey else set())
-    used = sorted({i["key"] for i in items if i.get("key") in forbidden})
-    if used:
-        errors.append(f"이벤트에 핫키/제어 키가 들어 있습니다: {', '.join(used)} (재생 시 충돌)")
+    used_keys = {keys.hotkey_key(i["key"]) for i in items if "key" in i}
+    bad = sorted(k for k in CONTROL_KEYS if k in used_keys)
+    if parts and all(p in used_keys for p in parts):
+        bad.append(hotkey)
+    if bad:
+        errors.append(f"이벤트에 핫키/제어 키가 들어 있습니다: {', '.join(bad)} (재생 시 충돌)")
     return errors

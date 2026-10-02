@@ -35,3 +35,12 @@ def test_invalid(bad):
 def test_bad_names(tmp_path, name):
     with pytest.raises(ValueError):
         macro_path(tmp_path, name)
+
+
+def test_hotkey_normalized_on_load():
+    m = Macro.from_dict({"version": 1, "events": [], "hotkey": "F1+Ctrl"})
+    assert m.hotkey == "ctrl+f1"
+    with pytest.raises(MacroFormatError):
+        Macro.from_dict({"version": 1, "events": [], "hotkey": "ctrl+shift+f1"})
+    # 이전 버전 파일의 enabled 키는 무시
+    assert Macro.from_dict({"version": 1, "events": [], "enabled": False}).hotkey is None
