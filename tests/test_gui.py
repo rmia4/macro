@@ -551,7 +551,7 @@ def test_overlay_shows_flash_and_playback(gui):
     gui.tree.selection_set("beta")
     gui.on_play(immediate=True)
     pump(gui)
-    assert ov.visible and ov.label.cget("text").startswith("▶ beta · 루프 1/1")
+    assert ov.visible and ov.label.cget("text") == "▶ beta · 1/1"   # 아이콘·이름·횟수만
     assert ov.top.overrideredirect() and ov.top.attributes("-topmost")
     gui.app.stop_play()
     gui.app._thread.join(1)
@@ -608,3 +608,13 @@ def test_event_dialog_rmove_and_relpath(gui):
     d.v["scale_pct"].set("50")
     d._on_ok()
     assert [p[1] for p in d.result[0]["points"]] == [5, 5]
+
+
+def test_overlay_play_text_infinite(gui):
+    gui.tree.selection_set("alpha")   # repeat 0 = 무한
+    gui.on_play(immediate=True)
+    pump(gui)
+    assert gui.overlay.label.cget("text") == "▶ alpha · 1/∞"
+    gui.app._player.loop_index = 12
+    pump(gui)
+    assert gui.overlay.label.cget("text") == "▶ alpha · 12/∞"

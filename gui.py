@@ -338,12 +338,21 @@ class Gui:
         if self.app.recording:
             return f"● 녹화 중 ({HOTKEY_RECORD.upper()} 종료)", COLORS["rec"]
         if self.app.playing:
-            return f"▶ {self.progress_text() or self.app.playing_name or '재생 중'}", COLORS["play"]
+            return self.overlay_play_text(), COLORS["play"]
         if time.monotonic() < self._flash_until:
             if self.macros_enabled:
                 return "● 매크로 실행 가능", COLORS["play"]
             return "○ 매크로 실행 불가", COLORS["idle"]
         return None
+
+    def overlay_play_text(self) -> str:
+        """오버레이용 재생 표시: 재생 아이콘, 매크로 이름, 반복 횟수(현재/전체, 무한은 ∞)만."""
+        name = self.app.playing_name or "재생 중"
+        prog = self.app.progress
+        if prog is None:
+            return f"▶ {name}"
+        loop, _, repeat = prog
+        return f"▶ {name} · {max(loop, 1)}/{repeat or '∞'}"
 
     def progress_text(self) -> str:
         prog, macro = self.app.progress, self.app.playing_macro
