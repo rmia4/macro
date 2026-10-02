@@ -80,6 +80,8 @@ class Player:
         self._scale = (1.0, 1.0)
         self._cursor: tuple[int, int] | None = None
         self._last_rel: tuple[int, int] | None = None
+        self.loop_index = 0     # 진행 중인 루프 (1부터), GUI 표시용
+        self.event_index = -1   # 마지막으로 전송한 이벤트 인덱스
 
     def stop(self) -> None:
         self._stop.set()
@@ -102,6 +104,7 @@ class Player:
             while not self._stop.is_set() and (self.opt.repeat == 0 or n < self.opt.repeat):
                 if n and self._sleep(self.opt.loop_delay):
                     break
+                self.loop_index, self.event_index = n + 1, -1
                 if not self._play_once(macro):
                     break
                 n += 1
@@ -125,7 +128,7 @@ class Player:
         self._origin = self._clock()
         cum = prev = 0.0
         j = o.time_jitter / 100.0
-        for ev in events:
+        for i, ev in enumerate(events):
             dt = max(0.0, ev["t"] - prev) / o.speed
             prev = ev["t"]
             if j and dt > 0:
@@ -135,6 +138,7 @@ class Player:
                 return False
             if not self._dispatch(ev):
                 return False
+            self.event_index = i
         return True
 
     def _wait_until(self, cum: float) -> bool:

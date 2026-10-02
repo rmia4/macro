@@ -11,12 +11,13 @@ from pathlib import Path
 import input_backend
 from hotkeys import CONTROL_KEYS, HOTKEY_PLAY, HOTKEY_QUIT, HOTKEY_RECORD, HotkeyListener
 from player import PlayOptions, Player, set_option
-from profiles import Macro, MacroFormatError, list_macros, load_macro, macro_path, save_macro
+from profiles import (Macro, MacroFormatError, delete_macro, list_macros, load_macro, macro_path,
+                      save_macro)
 from recorder import Recorder
 
 MACROS_DIR = Path(__file__).resolve().parent / "macros"
 
-HELP = """명령: record | play | stop | save <이름> | load <이름> | list | set <옵션> <값> | show | quit
+HELP = """명령: record | play | stop | save <이름> | load <이름> | delete <이름> | list | set <옵션> <값> | show | quit
 핫키: {rec}=녹화 시작/종료, {play}=재생/중지, {quit}=종료""".format(
     rec=HOTKEY_RECORD.upper(), play=HOTKEY_PLAY.upper(), quit=HOTKEY_QUIT.upper())
 
@@ -29,6 +30,7 @@ class App:
         self.log = log
         self.options = PlayOptions()
         self.macro: Macro | None = None
+        self.macro_name: str | None = None  # 저장/불러온 이름 (새 녹화는 None)
         self._recorder_factory = recorder_factory
         self._player_factory = player_factory
         self._recorder = None
@@ -45,6 +47,14 @@ class App:
     def playing(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    @property
+    def progress(self) -> tuple[int, int, int] | None:
+        """재생 중이면 (루프 번호, 마지막 이벤트 인덱스, 반복 횟수 0=무한)."""
+        p = self._player
+        if p is None or not self.playing:
+            return None
+        return p.loop_index, p.event_index, getattr(p, "opt", p.options).repeat
+
     # ---- 녹화 / 재생 ----
     def toggle_record(self) -> None:
         with self._lock:
@@ -59,6 +69,7 @@ class App:
             else:
                 rec, self._recorder = self._recorder, None
                 self.macro = rec.stop()
+                self.macro_name = None
                 self.log(f"■ 녹화 종료: 이벤트 {len(self.macro.events)}개, {self.macro.duration:.2f}초")
 
     def toggle_play(self) -> None:
@@ -102,13 +113,21 @@ class App:
         if self.macro is None:
             raise ValueError("저장할 매크로가 없습니다")
         self.log(f"저장: {save_macro(self.macro, macro_path(self.macros_dir, name))}")
+        self.macro_name = macro_path(self.macros_dir, name).stem
 
     def load(self, name: str) -> None:
         self.macro = load_macro(macro_path(self.macros_dir, name))
+        self.macro_name = macro_path(self.macros_dir, name).stem
         self.log(f"불러옴: 이벤트 {len(self.macro.events)}개, {self.macro.duration:.2f}초")
         if self.macro.window and not self.options.window_title:
             self.log(f"힌트: 녹화 창 제목은 {self.macro.window.get('title')!r} "
                      "(window_title 로 포커스 제한 설정)")
+
+    def delete(self, name: str) -> None:
+        path = delete_macro(self.macros_dir, name)
+        if self.macro_name == path.stem:
+            self.macro_name = None  # 메모리의 매크로는 유지 (다시 저장 가능)
+        self.log(f"삭제: {path}")
 
     # ---- REPL ----
     def handle(self, line: str) -> bool:
@@ -135,6 +154,9 @@ class App:
             elif cmd == "load":
                 self._need(args, 1, "load <이름>")
                 self.load(args[0])
+            elif cmd == "delete":
+                self._need(args, 1, "delete <이름>")
+                self.delete(args[0])
             elif cmd == "list":
                 names = list_macros(self.macros_dir)
                 self.log("\n".join(names) if names else "(저장된 매크로 없음)")

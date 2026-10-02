@@ -21,6 +21,10 @@ def test_repl_commands(tmp_path):
     assert out[-1].startswith("오류")
     app.handle("load ../evil")
     assert out[-1].startswith("오류")
+    app.handle("delete demo")
+    assert not (tmp_path / "demo.json").exists() and app.macro_name is None
+    app.handle("delete demo")
+    assert out[-1].startswith("오류")
     app.handle("show")
     assert app.handle("") is True
     assert app.handle("quit") is False

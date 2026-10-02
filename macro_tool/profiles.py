@@ -122,3 +122,11 @@ def macro_path(directory: str | Path, name: str) -> Path:
 def list_macros(directory: str | Path) -> list[str]:
     d = Path(directory)
     return sorted(p.stem for p in d.glob("*.json")) if d.is_dir() else []
+
+
+def delete_macro(directory: str | Path, name: str) -> Path:
+    path = macro_path(directory, name)
+    if not path.is_file():
+        raise ValueError(f"매크로가 없습니다: {name}")
+    path.unlink()
+    return path

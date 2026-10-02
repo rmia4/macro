@@ -195,3 +195,12 @@ def test_set_option():
                       ("mouse_mode", "x"), ("approach", "maybe"), ("repeat", "abc")]:
         with pytest.raises(ValueError):
             set_option(o, name, val)
+
+
+def test_progress_indices():
+    p, be, clock, m = build([key(0.1, "kdown"), key(0.2, "kup")], repeat=3)
+    seen = []
+    clock.on_wait = lambda: seen.append((p.loop_index, p.event_index))
+    p.run(m)
+    assert (p.loop_index, p.event_index) == (3, 1)
+    assert (2, -1) in seen and (1, 0) in seen
