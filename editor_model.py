@@ -12,14 +12,15 @@ import re
 import keys
 import vision
 from hotkeys import CONTROL_KEYS
-from profiles import BUTTONS, MAX_REPEAT, block_pairs, macro_path
+from profiles import BUTTONS, MAX_REPEAT, block_pairs, blocks, macro_path
 
 EVENT_LABELS = {"move": "마우스 이동", "mdown": "마우스 누름", "mup": "마우스 뗌",
                 "scroll": "스크롤", "kdown": "키 누름", "kup": "키 뗌", "wait": "지연",
                 "path": "마우스 이동 경로", "rmove": "마우스 상대 이동", "relpath": "상대 이동 경로",
                 "repeat_start": "🔁 반복 시작", "repeat_end": "🔁 반복 끝",
-                "wait_until": "🔍 조건 대기(실험)"}
-BLOCK_MARKERS = ("repeat_start", "repeat_end")
+                "wait_until": "🔍 조건 대기(실험)", "if_start": "❓ 만약(실험)", "else": "↪ 아니면",
+                "if_end": "❓ 분기 끝", "break_if": "⏹ 반복 탈출(실험)", "click_image": "🖱 이미지 클릭(실험)"}
+BLOCK_MARKERS = ("repeat_start", "repeat_end", "if_start", "else", "if_end")
 
 # 추가 가능한 종류 (tap/click 은 누름+뗌 두 개의 이벤트를 만든다)
 ADD_KINDS = [("tap", "키 입력 (누르고 떼기)"), ("kdown", "키 누름"), ("kup", "키 뗌"),
@@ -30,6 +31,8 @@ PATH_KINDS = [("path", "마우스 이동 경로")]  # 경로 항목 수정 전�
 RELPATH_KINDS = [("relpath", "상대 이동 경로")]
 REPEAT_START_KINDS = [("repeat_start", "반복 시작")]
 REPEAT_END_KINDS = [("repeat_end", "반복 끝")]
+ELSE_KINDS = [("else", "아니면")]
+IF_END_KINDS = [("if_end", "분기 끝")]
 
 # 종류별 입력 필드 (cursor: 좌표 대신 현재 커서 위치에서 입력 가능)
 KIND_FIELDS = {
@@ -37,7 +40,7 @@ KIND_FIELDS = {
     "click": {"button", "pos", "cursor", "hold"}, "mdown": {"button", "pos", "cursor"},
     "mup": {"button", "pos", "cursor"}, "move": {"pos"}, "scroll": {"pos", "cursor", "scroll"},
     "wait": set(), "path": {"pos", "duration"}, "rmove": {"delta"}, "relpath": {"duration", "scale"},
-    "repeat_start": {"count"}, "repeat_end": set(),
+    "repeat_start": {"count"}, "repeat_end": set(), "else": set(), "if_end": set(),
 }
 GROUPED = {"move": "path", "rmove": "relpath"}  # 연속되면 묶이는 이벤트 -> 묶음 항목 종류
 DEFAULT_HOLD_MS = {"tap": 50, "click": 60}
@@ -100,12 +103,14 @@ def item_duration(item: dict) -> float:
 
 
 def expanded_duration(items: list[dict]) -> float:
-    """반복 구간을 펼쳤을 때의 실행 시간. 한 바퀴 = 구간 안 이벤트들 + '반복 끝' 지연."""
+    """반복 구간을 펼쳤을 때의 실행 시간. 한 바퀴 = 구간 안 이벤트들 + '반복 끝' 지연.
+    무한 반복이 있으면 inf. 조건 분기·조건 대기는 판정 결과를 알 수 없어 모든 항목을 그대로 더한 추정값."""
     stack = [[0.0, 1]]  # [누적 시간, 반복 횟수]
     for it in items:
         if it["type"] == "repeat_start":
             stack[-1][0] += item_duration(it)
-            stack.append([0.0, it.get("count", 1)])
+            count = it.get("count", 1)
+            stack.append([0.0, count if count > 0 else float("inf")])
         elif it["type"] == "repeat_end" and len(stack) > 1:
             inner, count = stack.pop()
             stack[-1][0] += (inner + item_duration(it)) * count
@@ -114,17 +119,19 @@ def expanded_duration(items: list[dict]) -> float:
     while len(stack) > 1:  # 짝이 안 맞는 경우(편집 중)는 1회로 계산
         inner, _ = stack.pop()
         stack[-1][0] += inner
-    return round(stack[0][0], 4)
+    total = stack[0][0]
+    return total if total == float("inf") else round(total, 4)
 
 
 def depths(items: list[dict]) -> list[int]:
     """각 항목의 반복 구간 중첩 깊이 (표시용 들여쓰기)."""
     out, d = [], 0
     for it in items:
-        if it["type"] == "repeat_end":
+        typ = it["type"]
+        if typ in ("repeat_end", "if_end"):
             d = max(0, d - 1)
-        out.append(d)
-        if it["type"] == "repeat_start":
+        out.append(max(0, d - 1) if typ == "else" else d)
+        if typ in ("repeat_start", "if_start"):
             d += 1
     return out
 
@@ -139,9 +146,24 @@ def block_partner(items: list[dict], i: int) -> int | None:
     return pairs.get(i, rev.get(i))
 
 
+def block_members(items: list[dict], i: int) -> set[int]:
+    """구간 표시 i 를 지울 때 함께 지울 표시들. 시작/끝은 서로(+'아니면'), '아니면'은 혼자."""
+    try:
+        b = blocks(items)
+    except ValueError:
+        return {i}
+    for start, end in b.repeat.items():
+        if i in (start, end):
+            return {start, end}
+    for start, end in b.if_end.items():
+        if i in (start, end):
+            return {start, end} | ({b.if_else[start]} if start in b.if_else else set())
+    return {i}
+
+
 def block_error(items: list[dict]) -> str | None:
     try:
-        block_pairs(items)
+        blocks(items)
         return None
     except ValueError as e:
         return str(e)
@@ -152,19 +174,28 @@ def wrap_repeat(items: list[dict], selected: list[int], count: int) -> tuple[lis
 
     범위가 다른 구간과 엇갈리면(시작만 포함 등) ValueError. (새 목록, 새 선택) 반환.
     """
-    if not 1 <= count <= MAX_REPEAT:
-        raise ValueError(f"반복 횟수는 1~{MAX_REPEAT} 이어야 합니다")
-    start = {"type": "repeat_start", "count": count, "dt": 0.0}
-    end = {"type": "repeat_end", "dt": 0.0}
+    if not 0 <= count <= MAX_REPEAT:
+        raise ValueError(f"반복 횟수는 0(무한)~{MAX_REPEAT} 이어야 합니다")
+    return _wrap(items, selected, {"type": "repeat_start", "count": count, "dt": 0.0}, [{"type": "repeat_end", "dt": 0.0}])
+
+
+def wrap_if(items: list[dict], selected: list[int], cond: dict, with_else: bool = False) -> tuple[list[dict], list[int]]:
+    """(실험적) 선택 범위를 '만약 [조건]' ~ ('아니면') ~ '분기 끝'으로 감싼다."""
+    vision.validate_condition(cond)
+    tail = ([{"type": "else", "dt": 0.0}] if with_else else []) + [{"type": "if_end", "dt": 0.0}]
+    return _wrap(items, selected, {"type": "if_start", "cond": cond, "dt": 0.0}, tail)
+
+
+def _wrap(items, selected, start: dict, tail: list[dict]) -> tuple[list[dict], list[int]]:
     if not selected:
-        return items + [start, end], [len(items), len(items) + 1]
+        return items + [start] + tail, [len(items), len(items) + len(tail)]
     a, b = min(selected), max(selected)
     inner = items[a:b + 1]
     if block_error(inner):
-        raise ValueError("선택 범위가 다른 반복 구간과 겹칩니다. 구간 전체를 포함하도록 선택하세요")
-    start["dt"] = inner[0].get("dt", 0.0)  # 첫 이벤트 앞의 지연은 구간 앞으로 옮긴다
+        raise ValueError("선택 범위가 다른 구간과 겹칩니다. 구간 전체를 포함하도록 선택하세요")
+    start = dict(start, dt=inner[0].get("dt", 0.0))  # 첫 이벤트 앞의 지연은 구간 앞으로 옮긴다
     inner = [dict(inner[0], dt=0.0)] + inner[1:]
-    return items[:a] + [start] + inner + [end] + items[b + 1:], [a, b + 2]
+    return items[:a] + [start] + inner + tail + items[b + 1:], [a, b + 1 + len(tail)]
 
 
 def total_duration(items: list[dict]) -> float:
@@ -183,7 +214,20 @@ def describe(item: dict) -> str:
     if typ == "wait":
         return ""
     if typ == "repeat_start":
-        return f"×{item['count']}회 반복"
+        return f"×{item['count']}회 반복" if item["count"] > 0 else "무한 반복 (반복 탈출로 종료)"
+    if typ == "if_start":
+        return f"{vision.describe_condition(item['cond'])} 이면"
+    if typ == "break_if":
+        return f"{vision.describe_condition(item['cond'])} 이면 반복 구간 종료"
+    if typ == "click_image":
+        timeout = item.get("timeout", 10)
+        limit = f"최대 {timeout:g}초" if timeout > 0 else "무제한"
+        after = "중지" if item.get("on_timeout", "stop") == "stop" else "계속"
+        dx, dy = item.get("offset", [0, 0])
+        shift = f" ({dx:+g}, {dy:+g})" if dx or dy else ""
+        return f"'{item['cond']['template']}'{shift} {item.get('button', 'left')} 클릭 · {limit} · 초과 시 {after}"
+    if typ in ("else", "if_end"):
+        return ""
     if typ == "wait_until":
         timeout = item.get("timeout", 10)
         limit = f"최대 {timeout:g}초" if timeout > 0 else "무제한"
@@ -261,7 +305,7 @@ def build_items(kind: str, *, delay_ms="0", key: str = "", button: str = "left",
         if base["dx"] == 0 and base["dy"] == 0:
             raise ValueError("스크롤 양이 0 입니다")
     if "count" in fields:
-        base["count"] = _int(count, "반복 횟수", 1)
+        base["count"] = _int(count, "반복 횟수", 0)
         if base["count"] > MAX_REPEAT:
             raise ValueError(f"반복 횟수는 {MAX_REPEAT} 이하여야 합니다")
     if "delta" in fields:
@@ -314,10 +358,9 @@ def rescale_relpath(points: list, duration: float, scale: float) -> list:
     return out
 
 
-def build_wait_until(*, delay_ms="0", kind="image", template="", region=None, threshold_pct="85",
-                     x="0", y="0", color="#000000", tolerance="20", negate=False,
-                     timeout_s="10", on_timeout="stop", interval_ms="100") -> dict:
-    """(실험적) 조건 대기 항목. region: None(화면 전체) 또는 [x, y, w, h] (문자열 허용). 잘못되면 ValueError."""
+def build_condition(*, kind="image", template="", region=None, threshold_pct="85",
+                    x="0", y="0", color="#000000", tolerance="20", negate=False) -> dict:
+    """(실험적) 조건. region: None(화면 전체) 또는 [x, y, w, h] (문자열 허용). 잘못되면 ValueError."""
     if kind == "image":
         cond = {"kind": "image", "template": str(template).strip(),
                 "threshold": _int(threshold_pct, "일치도 기준(%)", 1) / 100}
@@ -330,6 +373,10 @@ def build_wait_until(*, delay_ms="0", kind="image", template="", region=None, th
     if negate:
         cond["negate"] = True
     vision.validate_condition(cond)
+    return cond
+
+
+def _wait_fields(timeout_s, on_timeout, interval_ms) -> dict:
     try:
         timeout = float(str(timeout_s).strip())
     except ValueError:
@@ -338,8 +385,34 @@ def build_wait_until(*, delay_ms="0", kind="image", template="", region=None, th
         raise ValueError("최대 대기(초): 0 이상이어야 합니다 (0 = 무제한)")
     if on_timeout not in ("stop", "continue"):
         raise ValueError("시간 초과 시 동작이 잘못되었습니다")
+    return {"timeout": timeout, "on_timeout": on_timeout, "interval": _int(interval_ms, "확인 간격(ms)", 10) / 1000}
+
+
+def build_wait_until(*, delay_ms="0", timeout_s="10", on_timeout="stop", interval_ms="100", **cond_kw) -> dict:
+    """(실험적) 조건 대기 항목."""
+    cond = build_condition(**cond_kw)
     return {"type": "wait_until", "dt": _int(delay_ms, "앞 지연(ms)", 0) / 1000, "cond": cond,
-            "timeout": timeout, "on_timeout": on_timeout, "interval": _int(interval_ms, "확인 간격(ms)", 10) / 1000}
+            **_wait_fields(timeout_s, on_timeout, interval_ms)}
+
+
+def build_check(kind_event: str, *, delay_ms="0", **cond_kw) -> dict:
+    """(실험적) 판정 한 번 하는 항목: 'if_start'(만약) 또는 'break_if'(반복 탈출)."""
+    if kind_event not in ("if_start", "break_if"):
+        raise ValueError(f"알 수 없는 종류: {kind_event}")
+    return {"type": kind_event, "dt": _int(delay_ms, "앞 지연(ms)", 0) / 1000, "cond": build_condition(**cond_kw)}
+
+
+def build_click_image(*, delay_ms="0", button="left", offset_x="0", offset_y="0", hold_ms="60",
+                      timeout_s="10", on_timeout="stop", interval_ms="100", **cond_kw) -> dict:
+    """(실험적) 이미지 클릭 항목: 이미지가 보일 때까지 기다렸다가 찾은 위치(+보정)를 클릭."""
+    cond = build_condition(**dict(cond_kw, negate=False))
+    if cond["kind"] != "image":
+        raise ValueError("이미지 클릭은 이미지 조건만 쓸 수 있습니다")
+    if button not in BUTTONS:
+        raise ValueError(f"알 수 없는 버튼: {button!r}")
+    return {"type": "click_image", "dt": _int(delay_ms, "앞 지연(ms)", 0) / 1000, "cond": cond,
+            "button": button, "offset": [_int(offset_x, "보정 X"), _int(offset_y, "보정 Y")],
+            "hold": _int(hold_ms, "누름 유지(ms)", 0) / 1000, **_wait_fields(timeout_s, on_timeout, interval_ms)}
 
 
 def item_fields(item: dict) -> dict:

@@ -51,7 +51,7 @@ def test_hotkey_normalized_on_load():
     [{"t": 0, "type": "repeat_start", "count": 2}],
     [{"t": 0, "type": "repeat_end"}],
     [{"t": 0, "type": "repeat_end"}, {"t": 0, "type": "repeat_start", "count": 2}],
-    [{"t": 0, "type": "repeat_start", "count": 0}, {"t": 0, "type": "repeat_end"}],
+    [{"t": 0, "type": "repeat_start", "count": -1}, {"t": 0, "type": "repeat_end"}],
     [{"t": 0, "type": "repeat_start", "count": "3"}, {"t": 0, "type": "repeat_end"}],
 ])
 def test_repeat_blocks_validated(events):
@@ -74,3 +74,31 @@ def test_wait_until_validation():
                 dict(ok, interval=0)):
         with pytest.raises(MacroFormatError):
             Macro.from_dict({"version": 1, "events": [bad]})
+
+
+
+@pytest.mark.parametrize("events", [
+    [{"t": 0, "type": "else"}],
+    [{"t": 0, "type": "if_start", "cond": {"kind": "pixel", "x": 1, "y": 1, "color": "#000000"}}],
+    [{"t": 0, "type": "if_start", "cond": {"kind": "pixel", "x": 1, "y": 1, "color": "#000000"}},
+     {"t": 0, "type": "else"}, {"t": 0, "type": "else"}, {"t": 0, "type": "if_end"}],
+    [{"t": 0, "type": "repeat_start", "count": 1},
+     {"t": 0, "type": "if_start", "cond": {"kind": "pixel", "x": 1, "y": 1, "color": "#000000"}},
+     {"t": 0, "type": "repeat_end"}, {"t": 0, "type": "if_end"}],                 # 엇갈림
+    [{"t": 0, "type": "if_start"}, {"t": 0, "type": "if_end"}],                  # 조건 없음
+    [{"t": 0, "type": "click_image", "cond": {"kind": "pixel", "x": 1, "y": 1, "color": "#000000"}}],
+    [{"t": 0, "type": "click_image", "cond": {"kind": "image", "template": "a.png"}, "offset": [1]}],
+])
+def test_branch_and_click_validation(events):
+    with pytest.raises(MacroFormatError):
+        Macro.from_dict({"version": 1, "events": events})
+
+
+def test_blocks_structure():
+    from profiles import blocks
+    px = {"kind": "pixel", "x": 1, "y": 1, "color": "#000000"}
+    evs = [{"type": "repeat_start"}, {"type": "if_start", "cond": px}, {"type": "break_if"},
+           {"type": "else"}, {"type": "if_end"}, {"type": "repeat_end"}]
+    b = blocks(evs)
+    assert b.repeat == {0: 5} and b.if_end == {1: 4} and b.if_else == {1: 3} and b.else_end == {3: 4}
+    assert b.parent_repeat[2] == 0 and 0 not in b.parent_repeat

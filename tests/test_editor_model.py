@@ -1,6 +1,7 @@
 import pytest
 
 import editor_model as em
+import vision
 from profiles import Macro
 
 
@@ -172,7 +173,9 @@ def test_wrap_repeat_selection_and_empty():
     with pytest.raises(ValueError):
         em.wrap_repeat(new, [2, 3], 2)               # 시작만 포함하는 선택은 거부
     with pytest.raises(ValueError):
-        em.wrap_repeat(items, [0], 0)
+        em.wrap_repeat(items, [0], -1)
+    inf, _ = em.wrap_repeat(items, [0, 1], 0)                 # 0 = 무한
+    assert em.describe(inf[0]).startswith("무한 반복") and em.expanded_duration(inf) == float("inf")
 
 
 def test_expanded_duration_and_partner():
@@ -188,7 +191,8 @@ def test_expanded_duration_and_partner():
 def test_build_repeat_start_and_validation():
     assert em.build_items("repeat_start", delay_ms=0, count="7") == [{"type": "repeat_start", "count": 7, "dt": 0.0}]
     with pytest.raises(ValueError):
-        em.build_items("repeat_start", count="0")
+        em.build_items("repeat_start", count="-1")
+    assert em.build_items("repeat_start", count="0")[0]["count"] == 0
     assert em.item_fields({"type": "repeat_start", "count": 5, "dt": 0.2})["count"] == 5
     items = _keys("a") + [{"type": "repeat_end", "dt": 0}]
     assert any("반복 구간" in e for e in em.validate_for_save("x", None, items, {}, None))
@@ -228,3 +232,42 @@ def test_validate_missing_templates():
     assert any("조건 이미지가 없습니다: a.png" in e for e in em.validate_for_save("x", None, items, {}, None,
                                                                           available_templates=set()))
     assert em.validate_for_save("x", None, items, {}, None, available_templates={"a.png"}) == []
+
+
+PX = {"kind": "pixel", "x": 1, "y": 1, "color": "#000000"}
+
+
+def test_wrap_if_with_else_and_members():
+    items = _keys("a", "b")
+    new, sel = em.wrap_if(items, [0, 1], PX, with_else=True)
+    assert [i["type"] for i in new] == ["if_start", "kdown", "kup", "else", "if_end", "kdown", "kup"]
+    assert sel == [0, 4] and new[0]["dt"] == 0.1 and new[1]["dt"] == 0.0
+    assert em.depths(new) == [0, 1, 1, 0, 0, 0, 0]
+    assert em.describe(new[0]) == "픽셀 (1, 1) = #000000 ±20 이면"
+    assert em.block_members(new, 0) == {0, 3, 4} and em.block_members(new, 4) == {0, 3, 4}
+    assert em.block_members(new, 3) == {3}                     # '아니면'만 지우기
+    assert em.block_error(new) is None
+    nested, _ = em.wrap_repeat(new, [0, 4], 3)
+    assert em.depths(nested) == [0, 1, 2, 2, 1, 1, 0, 0, 0]
+    with pytest.raises(ValueError):
+        em.wrap_if(new, [0, 1], PX)                           # 만약만 걸친 선택
+    empty, sel = em.wrap_if([], [], PX)
+    assert [i["type"] for i in empty] == ["if_start", "if_end"] and sel == [0, 1]
+
+
+def test_build_check_and_click_image():
+    it = em.build_check("break_if", delay_ms="50", kind="image", template="x.png", region=None, negate=True)
+    assert it == {"type": "break_if", "dt": 0.05, "cond": {"kind": "image", "template": "x.png",
+                                                           "threshold": 0.85, "negate": True}}
+    assert em.describe(it).endswith("이면 반복 구간 종료")
+    ck = em.build_click_image(kind="image", template="x.png", button="right", offset_x="4", offset_y="-2",
+                              hold_ms="80", timeout_s="3", on_timeout="continue")
+    assert (ck["button"], ck["offset"], ck["hold"], ck["timeout"]) == ("right", [4, -2], 0.08, 3.0)
+    assert em.describe(ck) == "'x.png' (+4, -2) right 클릭 · 최대 3초 · 초과 시 계속"
+    with pytest.raises(ValueError):
+        em.build_click_image(kind="pixel", x=1, y=1, color="#000000")
+    with pytest.raises(ValueError):
+        em.build_check("wait_until", kind="pixel", x=1, y=1, color="#000000")
+    events = em.to_events([it, ck] + _keys("q"))
+    Macro.from_dict({"version": 1, "events": events})
+    assert "x.png" in vision.templates_in(events)

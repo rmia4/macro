@@ -348,3 +348,92 @@ def test_conditions_require_vision():
     with pytest.raises(ValueError):
         p.run(m)
     assert be.calls == []
+
+
+
+class PosVision(ScriptedVision):
+    """조건 결과와 찾은 위치를 순서대로 돌려준다."""
+    def check(self, cond, origin=(0, 0)):
+        self.checks.append(origin)
+        ok = self.results.pop(0) if self.results else False
+        return self.Match(ok, 1.0 if ok else 0.0, (300 + origin[0], 200 + origin[1]) if ok else None)
+
+
+def _kd(t, k):
+    return [key(t, "kdown", k), key(t + 0.01, "kup", k)]
+
+
+def test_if_else_branches():
+    evs = ([{"t": 0, "type": "if_start", "cond": PIX}] + _kd(0.1, "a") + [{"t": 0.2, "type": "else"}]
+           + _kd(0.3, "b") + [{"t": 0.4, "type": "if_end"}] + _kd(0.5, "c"))
+    for results, expected in (([True], "ac"), ([False], "bc")):
+        p, be, clock, m = build(evs)
+        p.vision = ScriptedVision(results)
+        p.run(m)
+        assert "".join(c[2] for c in be.calls if c[1] == "kdown") == expected
+
+
+def test_if_without_else_skips_block():
+    evs = [{"t": 0, "type": "if_start", "cond": PIX}] + _kd(0.1, "a") + [{"t": 0.2, "type": "if_end"}] + _kd(0.3, "c")
+    p, be, clock, m = build(evs)
+    p.vision = ScriptedVision([False])
+    p.run(m)
+    assert "".join(c[2] for c in be.calls if c[1] == "kdown") == "c"
+
+
+def test_break_if_exits_infinite_repeat():
+    evs = ([{"t": 0, "type": "repeat_start", "count": 0}] + _kd(0.1, "a")
+           + [{"t": 0.2, "type": "break_if", "cond": PIX}, {"t": 0.3, "type": "repeat_end"}] + _kd(0.4, "z"))
+    p, be, clock, m = build(evs)
+    p.vision = ScriptedVision([False, False, False, True])   # 4번째 판정에서 탈출
+    p.run(m)
+    assert "".join(c[2] for c in be.calls if c[1] == "kdown") == "aaaaz"
+
+
+def test_break_if_inner_only_and_outside_block():
+    evs = ([{"t": 0, "type": "repeat_start", "count": 2}, {"t": 0, "type": "repeat_start", "count": 5}]
+           + _kd(0.1, "a") + [{"t": 0.2, "type": "break_if", "cond": PIX}, {"t": 0.3, "type": "repeat_end"}]
+           + _kd(0.4, "b") + [{"t": 0.5, "type": "repeat_end"}])
+    p, be, clock, m = build(evs)
+    p.vision = ScriptedVision([False, True, True])   # 안쪽만 탈출, 바깥은 계속 (2회)
+    p.run(m)
+    assert "".join(c[2] for c in be.calls if c[1] == "kdown") == "aabab"
+    evs = _kd(0, "a") + [{"t": 0.1, "type": "break_if", "cond": PIX}] + _kd(0.2, "b")
+    p, be, clock, m = build(evs, repeat=3)
+    p.vision = ScriptedVision([False, True, False])   # 구간 밖: 이번 회차만 종료
+    p.run(m)
+    assert "".join(c[2] for c in be.calls if c[1] == "kdown") == "abaab"
+
+
+def test_click_image_waits_then_clicks_found_position():
+    img = {"kind": "image", "template": "ok.png"}
+    evs = [{"t": 0, "type": "click_image", "cond": img, "button": "right", "offset": [5, -3], "hold": 0.05,
+            "timeout": 10}, key(0.1, "kdown", "a")]
+    p, be, clock, m = build(evs)
+    p.vision = PosVision([False, False, True])
+    p.run(m)
+    names = be.names()
+    assert names[:3] == [("abs", 305, 197), ("mdown", "right"), ("mup", "right")]
+    t_down, t_up, t_key = be.calls[1][0], be.calls[2][0], be.calls[3][0]
+    assert round(t_down, 3) == 0.2 and round(t_up - t_down, 3) == 0.05
+    assert round(t_key - t_up, 3) == 0.1                     # 클릭 후 시간표 재정렬
+
+
+def test_click_image_timeout_continue_skips_click():
+    img = {"kind": "image", "template": "ok.png"}
+    evs = [{"t": 0, "type": "click_image", "cond": img, "timeout": 0.3, "on_timeout": "continue"},
+           key(0.1, "kdown", "a")]
+    p, be, clock, m = build(evs)
+    p.vision = PosVision([])
+    p.run(m)
+    assert [c[1] for c in be.calls] == ["kdown", "kup"]
+
+
+def test_click_image_stop_during_hold_releases_button():
+    img = {"kind": "image", "template": "ok.png"}
+    evs = [{"t": 0, "type": "click_image", "cond": img, "hold": 5}]
+    p, be, clock, m = build(evs)
+    p.vision = PosVision([True])
+    clock.on_wait = lambda: p.stop() if clock.t > 1 else None
+    p.run(m)
+    assert ("mup", "left") in be.names()

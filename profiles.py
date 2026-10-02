@@ -11,8 +11,12 @@ import vision
 
 VERSION = 1
 EVENT_TYPES = {"move", "rmove", "mdown", "mup", "scroll", "kdown", "kup", "wait",  # rmove: 상대 이동, wait: 지연만
-               "repeat_start", "repeat_end",  # 반복 구간: 사이의 이벤트를 count 번 반복 (중첩 가능)
-               "wait_until"}  # (실험적) 화면 조건이 맞을 때까지 대기
+               "repeat_start", "repeat_end",  # 반복 구간: 사이의 이벤트를 count 번 반복 (0 = 무한, 중첩 가능)
+               "wait_until",                  # (실험적) 화면 조건이 맞을 때까지 대기
+               "if_start", "else", "if_end",  # (실험적) 조건 분기
+               "break_if",                    # (실험적) 조건이 맞으면 가장 안쪽 반복 구간 종료
+               "click_image"}                 # (실험적) 이미지를 찾아 그 위치를 클릭
+COND_EVENTS = {"wait_until", "if_start", "break_if", "click_image"}
 ON_TIMEOUT = ("stop", "continue")
 MAX_REPEAT = 100000
 BUTTONS = {"left", "right", "middle", "x1", "x2"}
@@ -82,20 +86,60 @@ def _is_num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
-def block_pairs(events: list) -> dict[int, int]:
-    """반복 구간의 시작 인덱스 -> 끝 인덱스. 짝이 맞지 않으면 ValueError."""
-    pairs, stack = {}, []
+@dataclass
+class Blocks:
+    """반복 구간/조건 분기 구조 (모두 인덱스)."""
+    repeat: dict[int, int] = field(default_factory=dict)      # 반복 시작 -> 반복 끝
+    if_end: dict[int, int] = field(default_factory=dict)      # 만약 -> 분기 끝
+    if_else: dict[int, int] = field(default_factory=dict)     # 만약 -> 아니면 (있을 때만)
+    else_end: dict[int, int] = field(default_factory=dict)    # 아니면 -> 분기 끝
+    parent_repeat: dict[int, int] = field(default_factory=dict)  # 인덱스 -> 가장 안쪽 반복 시작
+
+
+_OPEN = {"repeat_start": "반복 시작", "if_start": "만약"}
+_CLOSE = {"repeat_end": ("repeat_start", "반복 끝"), "if_end": ("if_start", "분기 끝")}
+
+
+def blocks(events: list) -> Blocks:
+    """반복/분기 구조를 분석한다. 짝이 맞지 않거나 엇갈리면 ValueError."""
+    b = Blocks()
+    stack: list[int] = []   # 열린 블록의 시작 인덱스
+    repeats: list[int] = []
     for i, ev in enumerate(events):
         typ = ev.get("type") if isinstance(ev, dict) else None
-        if typ == "repeat_start":
+        if repeats:
+            b.parent_repeat[i] = repeats[-1]
+        if typ in _OPEN:
             stack.append(i)
-        elif typ == "repeat_end":
-            if not stack:
-                raise ValueError(f"{i + 1}번째 '반복 끝'에 짝이 되는 '반복 시작'이 없습니다")
-            pairs[stack.pop()] = i
+            if typ == "repeat_start":
+                repeats.append(i)
+        elif typ == "else":
+            if not stack or events[stack[-1]]["type"] != "if_start":
+                raise ValueError(f"{i + 1}번째 '아니면'이 '만약' 구간 안에 있지 않습니다")
+            if stack[-1] in b.if_else:
+                raise ValueError(f"{i + 1}번째 '아니면'이 중복되었습니다")
+            b.if_else[stack[-1]] = i
+        elif typ in _CLOSE:
+            want, label = _CLOSE[typ]
+            if not stack or events[stack[-1]]["type"] != want:
+                raise ValueError(f"{i + 1}번째 '{label}'에 짝이 되는 '{_OPEN[want]}'이 없습니다")
+            start = stack.pop()
+            if typ == "repeat_end":
+                b.repeat[start] = i
+                repeats.pop()
+            else:
+                b.if_end[start] = i
+                if start in b.if_else:
+                    b.else_end[b.if_else[start]] = i
     if stack:
-        raise ValueError(f"{stack[-1] + 1}번째 '반복 시작'에 짝이 되는 '반복 끝'이 없습니다")
-    return pairs
+        i = stack[-1]
+        raise ValueError(f"{i + 1}번째 '{_OPEN[events[i]['type']]}'에 짝이 되는 끝이 없습니다")
+    return b
+
+
+def block_pairs(events: list) -> dict[int, int]:
+    """반복 구간의 시작 인덱스 -> 끝 인덱스. 구조가 잘못되면 ValueError."""
+    return blocks(events).repeat
 
 
 def _validate_events(events: list) -> None:
@@ -124,11 +168,22 @@ def _validate_events(events: list) -> None:
             raise MacroFormatError(f"{where}: dx, dy 가 필요합니다")
         if typ in ("kdown", "kup") and not keys.is_known(ev.get("key", "")):
             raise MacroFormatError(f"{where}: 알 수 없는 key {ev.get('key')!r}")
-        if typ == "wait_until":
+        if typ in COND_EVENTS:
             try:
                 vision.validate_condition(ev.get("cond"))
             except ValueError as e:
                 raise MacroFormatError(f"{where}: {e}") from None
+        if typ == "click_image":
+            if ev["cond"].get("kind") != "image" or ev["cond"].get("negate"):
+                raise MacroFormatError(f"{where}: 이미지 클릭은 '보이는' 이미지 조건이어야 합니다")
+            if ev.get("button", "left") not in BUTTONS:
+                raise MacroFormatError(f"{where}: 잘못된 button {ev.get('button')!r}")
+            off = ev.get("offset", [0, 0])
+            if not (isinstance(off, list) and len(off) == 2 and all(_is_num(v) for v in off)):
+                raise MacroFormatError(f"{where}: offset 은 [x, y] 여야 합니다")
+            if not _is_num(ev.get("hold", 0.06)) or ev.get("hold", 0.06) < 0:
+                raise MacroFormatError(f"{where}: hold 는 0 이상이어야 합니다")
+        if typ in ("wait_until", "click_image"):
             if not _is_num(ev.get("timeout", 10)) or ev.get("timeout", 10) < 0:
                 raise MacroFormatError(f"{where}: timeout 은 0(무제한) 이상의 초여야 합니다")
             if ev.get("on_timeout", "stop") not in ON_TIMEOUT:
@@ -137,10 +192,10 @@ def _validate_events(events: list) -> None:
                 raise MacroFormatError(f"{where}: interval 은 0.01초 이상이어야 합니다")
         if typ == "repeat_start":
             count = ev.get("count")
-            if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= MAX_REPEAT:
-                raise MacroFormatError(f"{where}: 반복 횟수는 1~{MAX_REPEAT} 정수여야 합니다")
+            if not isinstance(count, int) or isinstance(count, bool) or not 0 <= count <= MAX_REPEAT:
+                raise MacroFormatError(f"{where}: 반복 횟수는 0(무한)~{MAX_REPEAT} 정수여야 합니다")
     try:
-        block_pairs(events)
+        blocks(events)
     except ValueError as e:
         raise MacroFormatError(str(e)) from None
 

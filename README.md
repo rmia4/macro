@@ -104,7 +104,8 @@ Windows, Python 3.11+ (tkinter 포함 설치 필요).
             {"t": 0.4, "type": "kdown", "key": "w"}]}
 ```
 이벤트 종류: `move`, `rmove`(상대 이동 `dx`, `dy`), `mdown`, `mup`, `scroll`, `kdown`, `kup`, `wait`(지연만),
-`repeat_start`(`count`: 1~100000) / `repeat_end`(반복 구간, 짝이 맞아야 하며 중첩 가능).
+`repeat_start`(`count`: 0=무한, 1~100000) / `repeat_end`(반복 구간, 짝이 맞아야 하며 중첩 가능),
+(실험적) `wait_until`, `if_start`/`else`/`if_end`, `break_if`, `click_image` — 아래 "화면 조건" 참고.
 `mdown`/`mup`/`scroll`은 `x`, `y`를 생략하면 현재 커서 위치에서 입력한다. `hotkey`는 `"f6"`, `"ctrl+f1"` 형식.
 GUI로 저장하면 `"hotkey": "f6"`과 `"options": {"repeat": 0, "speed": 1.0, ...}`(재생 옵션)도 함께 저장된다. 드래그는 별도 이벤트 없이 `mdown → move… → mup` 이다.
 
@@ -134,12 +135,28 @@ pip install -r requirements-dev.txt && python -m pytest tests
   재생 시작 전에 이미지가 모두 있는지 확인한다. 좌표는 매크로의 좌표 기준(화면/창)을 따른다.
 - 필요 패키지: `mss`, `opencv-python-headless`, `numpy` (requirements.txt).
 
+### (실험적) 조건 분기 · 반복 탈출 · 이미지 클릭
+기록 화면의 `화면(실험):` 줄에서 추가한다. 조건(이미지/픽셀, 반대로) 설정과 `지금 찾아보기`는 조건 대기와 같다.
+
+- **❓ 조건 분기**: 이벤트를 선택하고 누르면 `❓ 만약 [조건]` ~ `❓ 분기 끝`으로 감싼다. `'아니면' 구간도 만들기`를
+  체크하면 `↪ 아니면`이 추가되고, 그 아래에 넣은 이벤트는 조건이 맞지 않을 때 실행된다(`아니면` 줄을 선택하고 추가).
+  조건은 그 시점에 한 번 판정한다. `만약`이나 `분기 끝`을 지우면 짝이 함께 지워지고, `아니면`만 따로 지울 수도 있다.
+  반복 구간과 서로 중첩할 수 있다(엇갈리면 저장 불가).
+- **⏹ 반복 탈출**: 조건이 맞으면 가장 안쪽 반복 구간을 끝내고 그 다음으로 진행한다(구간 밖이면 이번 회차를 끝낸다).
+  반복 구간 횟수를 **0(무한)**으로 두고 함께 쓰면 "~가 보일 때까지 반복"이 된다.
+- **🖱 이미지 클릭**: 이미지가 보일 때까지 기다렸다가 찾은 위치의 중앙(+`보정 X, Y`)을 지정한 버튼으로 클릭한다.
+  최대 대기·시간 초과 시 동작은 조건 대기와 같고, 클릭 좌표 편차 옵션이 적용된다.
+
 JSON 형식:
 ```json
 {"t": 1.2, "type": "wait_until", "timeout": 10, "on_timeout": "stop", "interval": 0.1,
  "cond": {"kind": "image", "template": "이미지1.png", "region": [600, 400, 300, 150], "threshold": 0.85}}
 {"t": 2.0, "type": "wait_until", "timeout": 0, "on_timeout": "continue",
  "cond": {"kind": "pixel", "x": 120, "y": 40, "color": "#d03030", "tolerance": 20, "negate": true}}
+{"t": 2.5, "type": "if_start", "cond": {...}}  ...  {"t": 3, "type": "else"}  ...  {"t": 3.5, "type": "if_end"}
+{"t": 4.0, "type": "break_if", "cond": {...}}
+{"t": 4.5, "type": "click_image", "cond": {"kind": "image", "template": "확인.png"}, "button": "left",
+ "offset": [0, 5], "hold": 0.06, "timeout": 10, "on_timeout": "stop"}
 ```
 
 ## 알려진 한계

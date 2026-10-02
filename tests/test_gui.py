@@ -847,3 +847,83 @@ def test_run_screen_action_countdown_hides_and_restores(gui):
     for _ in range(14):
         time.sleep(0.1); gui.root.update()
     assert ran == [1] and ed.top.winfo_viewable()
+
+
+
+def test_branch_dialog_wraps_selection_with_else(gui):
+    import editor_model as em
+    from gui import ConditionDialog
+    ed, _ = _open_condition(gui)
+    ed.insert_items(em.build_items("tap", key="a", delay_ms=100))
+    ed.tree.selection_set(["0", "1"])
+    d = ConditionDialog(ed, mode="if")
+    d.v_kind.set("pixel"); d._on_kind()
+    d.v_px.set("20"); d.v_py.set("10"); d.v_color.set("#c83c1e")
+    d.v_with_else.set(True)
+    d._on_ok()
+    ed.wrap_if(d.result["cond"], d.result["with_else"])
+    assert [i["type"] for i in ed.items] == ["if_start", "kdown", "kup", "else", "if_end"]
+    assert "with_else" not in ed.items[0]
+    assert ed.tree.item("1")["values"][2] == "│ 키 누름" and ed.tree.item("3")["values"][2] == "↪ 아니면"
+    ed.tree.selection_set("4")                    # 분기 끝을 지우면 만약/아니면도 함께
+    ed.on_delete()
+    assert [i["type"] for i in ed.items] == ["kdown", "kup"]
+    ed.undo()
+    ed.tree.selection_set("3")                    # '아니면'만 지우기
+    ed.on_delete()
+    assert [i["type"] for i in ed.items] == ["if_start", "kdown", "kup", "if_end"]
+    ed.v_name.set("분기")
+    assert ed.on_save()
+
+
+def test_click_and_break_dialogs(gui):
+    from gui import ConditionDialog
+    ed, _ = _open_condition(gui)
+    d = ConditionDialog(ed, mode="click")
+    assert d.v_kind.get() == "image"
+    d.on_crop()
+    d.selector.on_press(Ev(420, 300)); d.selector.on_release(Ev(480, 330))
+    d.v_button.set("right"); d.v_off_x.set("3"); d.v_hold.set("80")
+    d._on_ok()
+    ck = d.result
+    assert ck["type"] == "click_image" and ck["button"] == "right" and ck["offset"] == [3, 0] and ck["hold"] == 0.08
+    d = ConditionDialog(ed, mode="break")
+    gui.root.update()
+    assert not d.f_click.winfo_ismapped()
+    d.v_kind.set("pixel"); d._on_kind()
+    d.v_negate.set(True)
+    d._on_ok()
+    assert d.result["type"] == "break_if" and d.result["cond"]["negate"] is True
+    assert "timeout" not in d.result
+    ed.insert_items([ck, d.result])
+    ed.v_name.set("클릭탈출")
+    assert ed.on_save()
+    assert gui.app.library["클릭탈출"].events[0]["type"] == "click_image"
+
+
+def test_edit_routes_condition_modes(gui, monkeypatch):
+    import editor_model as em
+    seen = []
+    import gui as gui_mod
+    monkeypatch.setattr(gui_mod.ConditionDialog, "ask", classmethod(lambda cls, ed, item=None, mode="wait": seen.append(mode)))
+    gui.on_add()
+    ed = gui.editor
+    px = {"kind": "pixel", "x": 1, "y": 1, "color": "#000000"}
+    ed.items = [em.build_wait_until(kind="pixel", x=1, y=1), {"type": "if_start", "cond": px, "dt": 0},
+                {"type": "break_if", "cond": px, "dt": 0}, {"type": "if_end", "dt": 0},
+                em.build_click_image(kind="image", template="a.png")]
+    ed.refresh_tree()
+    for i in (0, 1, 2, 4):
+        ed.tree.selection_set(str(i))
+        ed.on_edit()
+    assert seen == ["wait", "if", "break", "click"]
+
+
+def test_infinite_repeat_summary(gui, monkeypatch):
+    import editor_model as em
+    gui.on_add()
+    ed = gui.editor
+    ed.insert_items(em.build_items("tap", key="a"))
+    monkeypatch.setattr("gui.simpledialog.askinteger", lambda *a, **k: 0)
+    ed.on_wrap_repeat()
+    assert ed.items[0]["count"] == 0 and "무한 반복 포함" in ed.summary.cget("text")

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 import keys
-from profiles import Macro, block_pairs
+from profiles import Macro, blocks
 from vision import conditions_in
 
 
@@ -163,7 +163,8 @@ class Player:
         if not self._locate_window(macro):
             return False
         events = macro.events
-        ends = block_pairs(events)                       # 반복 시작 -> 끝
+        bl = blocks(events)
+        ends = bl.repeat                                 # 반복 시작 -> 끝
         starts = {end: start for start, end in ends.items()}
         first = next((e for e in events if "x" in e), None)
         self._roll_offset()
@@ -187,7 +188,8 @@ class Player:
             cum += dt
             if not self._wait_until(cum) or not self._wait_focus(macro):
                 return False
-            if ev["type"] == "wait_until":
+            typ = ev["type"]
+            if typ in ("wait_until", "click_image"):
                 result = self._wait_condition(ev, macro)
                 if result == "stopped":
                     return False
@@ -197,15 +199,33 @@ class Player:
                     return False
                 if result == "timeout":
                     self._log("조건 대기 시간 초과 — 계속 진행합니다")
+                elif typ == "click_image" and not self._click_found(ev):
+                    return False
                 self._origin = self._clock() - cum  # 대기한 만큼 이후 시간표를 뒤로 민다
+            elif typ in ("if_start", "break_if"):
+                self.last_match = self.vision.check(ev["cond"], self._win)
             elif not self._dispatch(ev):
                 return False
             self.event_index = i
-            if ev["type"] == "repeat_start":
-                remaining[ends[i]] = ev["count"] - 1
-            elif ev["type"] == "repeat_end" and remaining.get(i, 0) > 0:
-                remaining[i] -= 1
+            if typ == "repeat_start":
+                remaining[ends[i]] = ev["count"] - 1 if ev["count"] > 0 else -1  # -1 = 무한
+            elif typ == "repeat_end" and remaining.get(i, 0) != 0:
+                if remaining[i] > 0:
+                    remaining[i] -= 1
                 i = starts[i] + 1  # 구간 처음으로 (반복 시작 표시는 다시 실행하지 않음)
+                continue
+            elif typ == "if_start" and not self.last_match.matched:
+                i = (bl.if_else.get(i, bl.if_end[i])) + 1  # 아니면 구간(없으면 분기 끝 다음)으로
+                continue
+            elif typ == "else":
+                i = bl.else_end[i] + 1  # '만약' 구간을 실행하고 왔으면 '아니면' 구간은 건너뛴다
+                continue
+            elif typ == "break_if" and self.last_match.matched:
+                start = bl.parent_repeat.get(i)
+                if start is None:
+                    return True  # 반복 구간 밖이면 이번 회차 종료
+                remaining[ends[start]] = 0
+                i = ends[start] + 1
                 continue
             i += 1
         return True
@@ -238,6 +258,23 @@ class Player:
             step = interval if timeout <= 0 else min(interval, timeout - waited)
             if self._sleep(step):
                 return "stopped"
+
+    def _click_found(self, ev: dict) -> bool:
+        """click_image: 찾은 위치(+보정, +클릭 좌표 편차)를 클릭. 중단되면 False."""
+        dx, dy = ev.get("offset", [0, 0])
+        x, y = self.last_match.pos
+        x, y = int(round(x + dx)) + self._offset[0], int(round(y + dy)) + self._offset[1]
+        button = ev.get("button", "left")
+        self.backend.mouse_move_abs(x, y)
+        self._cursor = (x, y)
+        self._held_buttons.add(button)
+        self.backend.mouse_down(button)
+        if self._sleep(ev.get("hold", 0.06)):
+            return False  # 눌린 버튼은 run 의 finally 에서 해제
+        self.backend.mouse_up(button)
+        self._held_buttons.discard(button)
+        self._roll_offset()
+        return True
 
     # ---- 창 / 포커스 ----
     def _locate_window(self, macro: Macro) -> bool:
