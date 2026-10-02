@@ -116,3 +116,11 @@ def test_button_and_scroll_at_cursor():
         Macro.from_dict({"version": 1, "events": [{"t": 0, "type": "mdown", "x": 1, "button": "left"}]})
     with pytest.raises(Exception):
         Macro.from_dict({"version": 1, "events": [{"t": 0, "type": "move"}]})
+
+
+def test_validate_reserved_toggle_hotkey():
+    items = em.build_items("tap", key="a")
+    assert any("전체 실행 전환" in e for e in em.validate_for_save("x", "Ctrl+F12", items, {}, None,
+                                                                  reserved=("ctrl+f12",)))
+    both = em.build_items("tap", key="ctrl") + em.build_items("tap", key="f12")
+    assert any("ctrl+f12" in e for e in em.validate_for_save("x", None, both, {}, None, reserved=("ctrl+f12",)))

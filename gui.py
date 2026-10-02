@@ -19,6 +19,7 @@ from hotkeys import CONTROL_KEYS, HOTKEY_PLAY, HOTKEY_QUIT, HOTKEY_RECORD, Hotke
 from main import App
 from player import PlayOptions, options_from_dict, options_to_dict, set_option
 from profiles import BUTTONS, Macro
+from settings import SETTINGS_PATH, Settings
 
 # (옵션 이름, 라벨, 종류)  종류: entry | check | combo
 PLAY_FIELDS = [
@@ -32,7 +33,9 @@ PLAY_FIELDS = [
     ("approach", "루프 시작 시 부드럽게 이동", "check"),
     ("approach_duration", "이동 최대 시간(초)", "entry"),
     ("scale_coords", "창 크기에 맞춰 좌표 조정", "check"),
+    ("max_minutes", "최대 실행 시간(분, 0=무제한)", "entry"),
 ]
+UNDO_LIMIT = 100
 COLORS = {"idle": "#555555", "rec": "#c62828", "play": "#2e7d32", "wait": "#ef6c00"}
 NO_HOTKEY = "(없음)"
 COORD_LABELS = {"screen": "화면 기준", "window": "창 기준"}
@@ -41,24 +44,26 @@ COORD_LABELS = {"screen": "화면 기준", "window": "창 기준"}
 class Gui:
     """메인 화면: 매크로 목록과 재생."""
 
-    def __init__(self, root: tk.Tk, app: App) -> None:
+    def __init__(self, root: tk.Tk, app: App, settings: Settings | None = None) -> None:
         self.root, self.app = root, app
+        self.settings = settings or Settings(None)
         self._logs: queue.Queue[str] = queue.Queue()
         self._calls: queue.Queue = queue.Queue()  # 다른 스레드(핫키) -> Tk 스레드
         self._countdown_id = None
         self._countdown_owner: str | None = None  # "main" | "editor"
         self._countdown_left = 0
         self._countdown_what = ""
-        self.macros_enabled = True  # 전체 매크로 실행 가능 여부
+        self.macros_enabled = bool(self.settings["macros_enabled"])  # 전체 매크로 실행 가능 여부
         self._after_id = None
         self._closed = False
         self.play_started: float | None = None
         self.editor: EditorWindow | None = None
         self.hotkey_listener: HotkeyListener | None = None
         app.log = self._logs.put
-        self.delay = tk.StringVar(root, value="3")
+        self.delay = tk.StringVar(root, value=str(self.settings["start_delay"]))
         root.title("매크로 도구")
         root.minsize(760, 520)
+        restore_geometry(root, self.settings["main_geometry"])
         self._build()
         self.reload()
         root.protocol("WM_DELETE_WINDOW", self.close)
@@ -77,7 +82,8 @@ class Gui:
         self.btn_stop.pack(side="left")
         ttk.Label(top, text="버튼 시작 지연(초)").pack(side="left", padx=(16, 2))
         ttk.Spinbox(top, from_=0, to=30, width=4, textvariable=self.delay).pack(side="left")
-        self.btn_power = tk.Button(top, command=self.toggle_macros_enabled, width=18, pady=4,
+        ttk.Button(top, text="단축키 변경", command=self.change_toggle_hotkey).pack(side="right", padx=(4, 0))
+        self.btn_power = tk.Button(top, command=self.toggle_macros_enabled, width=26, pady=4,
                                    fg="white", relief="raised", font=("", 10, "bold"))
         self.btn_power.pack(side="right")
         self._update_power_button()
@@ -291,13 +297,47 @@ class Gui:
                 self.cancel_countdown()
             self.app.stop_play()
         self._update_power_button()
+        self.settings["macros_enabled"] = self.macros_enabled
+        self.settings.save()
         self.log(f"매크로 실행 {'가능' if self.macros_enabled else '불가'} 상태")
 
+    @property
+    def toggle_hotkey(self) -> str:
+        return self.settings["toggle_hotkey"]
+
     def _update_power_button(self) -> None:
+        key = self.toggle_hotkey.upper().replace("+", " + ")
         if self.macros_enabled:
-            self.btn_power.configure(text="● 매크로 실행 가능", bg="#2e7d32", activebackground="#388e3c")
+            self.btn_power.configure(text=f"● 매크로 실행 가능 ({key})", bg="#2e7d32", activebackground="#388e3c")
         else:
-            self.btn_power.configure(text="○ 매크로 실행 불가", bg="#757575", activebackground="#8a8a8a")
+            self.btn_power.configure(text=f"○ 매크로 실행 불가 ({key})", bg="#757575", activebackground="#8a8a8a")
+
+    def set_toggle_hotkey(self, text: str) -> str | None:
+        """전체 실행 전환 키 변경. 문제가 있으면 오류 메시지를 반환."""
+        try:
+            hotkey = keys.parse_hotkey(text)
+        except ValueError as e:
+            return str(e)
+        if hotkey is None:
+            return "키를 지정하세요"
+        if any(p in CONTROL_KEYS for p in keys.hotkey_parts(hotkey)):
+            return f"{', '.join(k.upper() for k in CONTROL_KEYS)} 는 제어 키라 쓸 수 없습니다"
+        for name, m in self.app.library.items():
+            if m.hotkey == hotkey:
+                return f"{hotkey.upper()} 는 '{name}' 매크로의 시작 핫키입니다"
+        self.settings["toggle_hotkey"] = hotkey
+        self.settings.save()
+        self._update_power_button()
+        self.sync_hotkeys()
+        self.log(f"전체 실행 전환 키: {hotkey.upper()}")
+        return None
+
+    def change_toggle_hotkey(self) -> None:
+        result = HotkeyCaptureDialog.ask(self.root)
+        if result:
+            error = self.set_toggle_hotkey(result)
+            if error:
+                messagebox.showerror("단축키 변경", error, parent=self.root)
 
     # ---- 핫키 (리스너 스레드에서 호출됨 -> 큐로 Tk 스레드에 전달) ----
     def hotkey_bindings(self) -> dict:
@@ -307,6 +347,7 @@ class Gui:
         for name, m in self.app.library.items():
             if m.hotkey and not any(p in CONTROL_KEYS for p in keys.hotkey_parts(m.hotkey)):
                 bindings[m.hotkey] = post(lambda n=name: self.toggle_macro(n))
+        bindings[self.toggle_hotkey] = post(self.toggle_macros_enabled)
         bindings[HOTKEY_RECORD] = post(self._hotkey_record)
         bindings[HOTKEY_PLAY] = post(lambda: self.on_play(True))
         bindings[HOTKEY_QUIT] = post(self.close)
@@ -314,15 +355,21 @@ class Gui:
 
     def hotkey_suppressed(self, name: str) -> bool:
         """재생 중인 매크로가 보내는 키가 다른 매크로 핫키를 건드리지 않게 한다."""
+        if name in keys.hotkey_parts(self.toggle_hotkey):
+            return False  # 전체 실행 전환 키는 항상 동작
         return self.app.playing and name in self.app.playing_keys
 
     def sync_hotkeys(self) -> None:
         if self.hotkey_listener is not None:
             self.hotkey_listener.dispatcher.bindings = self.hotkey_bindings()
 
-    def single_key_hotkeys(self) -> set[str]:
-        """녹화에서 제외할 단일 키 핫키 (조합 핫키의 키는 게임 입력일 수 있어 제외하지 않음)."""
-        return {m.hotkey for m in self.app.library.values() if m.hotkey and "+" not in m.hotkey}
+    def recording_ignore_keys(self, own_hotkey: str | None = None) -> set[str]:
+        """녹화에서 제외할 키: 제어 키, 단일 키 핫키, 전체 전환 키의 일반 키.
+        (조합 매크로 핫키의 키는 게임 입력일 수 있어 제외하지 않는다)"""
+        hotkeys = {m.hotkey for m in self.app.library.values() if m.hotkey} | {own_hotkey}
+        ignore = set(CONTROL_KEYS) | {h for h in hotkeys if h and "+" not in h}
+        ignore |= {p for p in keys.hotkey_parts(self.toggle_hotkey) if p not in keys.MODIFIERS}
+        return ignore
 
     def _hotkey_record(self) -> None:
         if self.editor is not None:
@@ -392,6 +439,12 @@ class Gui:
         if self.editor is not None and not self.editor.close():
             return  # 저장 여부에서 취소
         self._closed = True
+        try:
+            self.settings["start_delay"] = max(0, min(30, int(float(self.delay.get()))))
+        except ValueError:
+            pass
+        self.settings["main_geometry"] = self.root.geometry()
+        self.settings.save()
         if self._after_id is not None:
             try:
                 self.root.after_cancel(self._after_id)
@@ -415,6 +468,9 @@ class EditorWindow:
 
         self.top = tk.Toplevel(gui.root)
         self.top.minsize(900, 560)
+        restore_geometry(self.top, gui.settings["editor_geometry"])
+        self._undo: list[list[dict]] = []
+        self._redo: list[list[dict]] = []
         self.top.protocol("WM_DELETE_WINDOW", self.close)
         self.v_name = tk.StringVar(self.top, value=name or em.unique_name("새 매크로", self.app.library))
         self.v_hotkey = tk.StringVar(self.top, value=macro.hotkey if macro and macro.hotkey else NO_HOTKEY)
@@ -433,6 +489,7 @@ class EditorWindow:
             var.trace_add("write", lambda *a: self._mark_dirty())
         self.v_title.trace_add("write", lambda *a: self._auto_coord())
         self._update_title()
+        self.refresh()
 
     # ---- 화면 구성 ----
     def _build(self) -> None:
@@ -486,6 +543,12 @@ class EditorWindow:
         for text, cmd in (("수정", self.on_edit), ("삭제", self.on_delete),
                           ("▲ 위로", lambda: self.on_move(-1)), ("▼ 아래로", lambda: self.on_move(1))):
             ttk.Button(edit, text=text, command=cmd).pack(side="left", padx=(0, 4))
+        self.btn_undo = ttk.Button(edit, text="↶ 되돌리기", command=self.undo)
+        self.btn_redo = ttk.Button(edit, text="↷ 다시 실행", command=self.redo)
+        self.btn_undo.pack(side="left", padx=(8, 4))
+        self.btn_redo.pack(side="left")
+        for seq, fn in (("<Control-z>", self.undo), ("<Control-Z>", self.redo), ("<Control-y>", self.redo)):
+            self.top.bind(seq, lambda e, f=fn: self._shortcut(f))
         self.summary = ttk.Label(edit, foreground="#444")
         self.summary.pack(side="right")
 
@@ -547,6 +610,30 @@ class EditorWindow:
                                     f"{em.total_duration(self.items):.2f}초")
         self.coord_box.configure(state="disabled" if em.has_positional(self.items) else "readonly")
 
+    # ---- 되돌리기 (이벤트 목록 변경만 대상) ----
+    def _snapshot(self) -> None:
+        self._undo.append(copy.deepcopy(self.items))
+        del self._undo[:-UNDO_LIMIT]
+        self._redo.clear()
+
+    def undo(self) -> None:
+        if self._undo:
+            self._redo.append(copy.deepcopy(self.items))
+            self.items = self._undo.pop()
+            self._changed([])
+
+    def redo(self) -> None:
+        if self._redo:
+            self._undo.append(copy.deepcopy(self.items))
+            self.items = self._redo.pop()
+            self._changed([])
+
+    def _shortcut(self, fn) -> str | None:
+        if isinstance(self.top.focus_get(), (tk.Entry, ttk.Entry)):
+            return None  # 입력란에서의 Ctrl+Z 는 건드리지 않는다
+        fn()
+        return "break"
+
     def selected_indices(self) -> list[int]:
         return sorted(int(i) for i in self.tree.selection())
 
@@ -564,6 +651,7 @@ class EditorWindow:
         """선택한 이벤트 뒤(선택이 없으면 끝)에 삽입."""
         sel = self.selected_indices()
         at = sel[-1] + 1 if sel else len(self.items)
+        self._snapshot()
         self.items[at:at] = new
         self._changed(list(range(at, at + len(new))))
 
@@ -575,6 +663,7 @@ class EditorWindow:
         kinds = em.PATH_KINDS if self.items[i]["type"] == "path" else em.EDIT_KINDS
         result = EventDialog.ask(self.top, kinds, item=self.items[i], pick=self.pick_position)
         if result:
+            self._snapshot()
             self.items[i:i + 1] = result
             self._changed([i])
 
@@ -582,6 +671,7 @@ class EditorWindow:
         sel = self.selected_indices()
         if not sel:
             return
+        self._snapshot()
         for i in reversed(sel):
             del self.items[i]
         self._changed([min(sel[0], len(self.items) - 1)] if self.items else [])
@@ -593,6 +683,7 @@ class EditorWindow:
         i, j = sel[0], sel[0] + step
         if not 0 <= j < len(self.items):
             return
+        self._snapshot()
         self.items.insert(j, self.items.pop(i))
         self._changed([j])
 
@@ -621,14 +712,14 @@ class EditorWindow:
                 self.window = rec.window
             self.screen = rec.screen
             start = len(self.items)
+            self._snapshot()
             self.items.extend(em.to_items(rec.events))
             self._changed(list(range(start, len(self.items)))[-1:])
             return
         if self.app.playing:
             self.gui.log("재생 중에는 녹화할 수 없습니다")
             return
-        own = self._hotkey_value(strict=False)
-        ignore = set(CONTROL_KEYS) | self.gui.single_key_hotkeys() | ({own} if own and "+" not in own else set())
+        ignore = self.gui.recording_ignore_keys(self._hotkey_value(strict=False))
         title, coord = self.v_title.get().strip(), self.coord_space
         start = lambda: self.gui.guard(lambda: self.app.start_record(title, coord, ignore))
         start() if immediate else self.gui.start_after_delay(start, owner="editor", what="녹화")
@@ -705,7 +796,8 @@ class EditorWindow:
 
     def _save(self) -> bool:
         name = self.v_name.get().strip()
-        errors = em.validate_for_save(name, self._hotkey_value(), self.items, self.app.library, self.old_name)
+        errors = em.validate_for_save(name, self._hotkey_value(), self.items, self.app.library, self.old_name,
+                                      reserved=(self.gui.toggle_hotkey,))
         macro = None
         if not errors:
             try:
@@ -739,6 +831,8 @@ class EditorWindow:
     def _destroy(self) -> None:
         if self.gui.countdown_for("editor"):
             self.gui.cancel_countdown()
+        self.gui.settings["editor_geometry"] = self.top.geometry()
+        self.gui.settings.save()
         self.top.destroy()
         self.gui.editor = None
 
@@ -749,6 +843,8 @@ class EditorWindow:
         self.btn_rec.state(["disabled"] if playing else ["!disabled"])
         self.btn_test.configure(text="■ 테스트 중지" if playing else "▶ 테스트 재생")
         self.btn_test.state(["disabled"] if recording else ["!disabled"])
+        self.btn_undo.state(["!disabled"] if self._undo else ["disabled"])
+        self.btn_redo.state(["!disabled"] if self._redo else ["disabled"])
         cd = self.gui.countdown_for("editor")
         if cd:
             text, color = f"{cd[0]}초 후 {cd[1]} 시작 — 게임 창으로 전환하세요", "wait"
@@ -892,6 +988,20 @@ class EventDialog:
         return dlg.result
 
 
+def restore_geometry(window, geometry: str) -> None:
+    """저장된 'WxH+X+Y' 복원. 위치가 화면 밖이면(모니터 변경 등) 크기만 복원."""
+    import re
+    m = re.fullmatch(r"(\d+)x(\d+)([+-]-?\d+)([+-]-?\d+)", geometry or "")
+    if not m:
+        return
+    w, h, x, y = int(m[1]), int(m[2]), int(m[3]), int(m[4])
+    sw, sh = window.winfo_screenwidth(), window.winfo_screenheight()
+    if 0 <= x < sw - 50 and 0 <= y < sh - 50:
+        window.geometry(f"{w}x{h}+{x}+{y}")
+    else:
+        window.geometry(f"{w}x{h}")
+
+
 class HotkeyCaptureDialog:
     """누른 키(최대 2개 동시)를 핫키로 지정. result: 'ctrl+f1' 형식 (취소 시 None)."""
 
@@ -955,7 +1065,7 @@ class HotkeyCaptureDialog:
 
 def run_gui(app: App) -> int:
     root = tk.Tk()
-    gui = Gui(root, app)
+    gui = Gui(root, app, Settings(SETTINGS_PATH))
     gui.hotkey_listener = HotkeyListener(gui.hotkey_bindings(), gui.hotkey_suppressed)
     gui.hotkey_listener.start()
     gui.log("준비 완료. '+ 추가'로 새 매크로를 만들거나 목록에서 선택해 재생하세요.")

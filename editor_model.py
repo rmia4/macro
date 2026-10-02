@@ -208,7 +208,8 @@ def unique_name(base: str, existing) -> str:
 
 
 def validate_for_save(name: str, hotkey: str | None, items: list[dict],
-                      library: dict, old_name: str | None) -> list[str]:
+                      library: dict, old_name: str | None, reserved=()) -> list[str]:
+    """reserved: 매크로가 쓸 수 없는 다른 단축키 (예: 전체 실행 전환 키)."""
     errors = []
     try:
         macro_path(".", name)
@@ -229,6 +230,8 @@ def validate_for_save(name: str, hotkey: str | None, items: list[dict],
     if hotkey:
         if any(p in CONTROL_KEYS for p in parts):
             errors.append(f"핫키: {', '.join(k.upper() for k in CONTROL_KEYS)} 는 제어 키라 쓸 수 없습니다")
+        elif hotkey in reserved:
+            errors.append(f"핫키: {hotkey.upper()} 는 전체 실행 전환 키로 쓰이고 있습니다")
         else:
             for other, m in library.items():
                 if other != old_name and m.hotkey == hotkey:
@@ -237,8 +240,9 @@ def validate_for_save(name: str, hotkey: str | None, items: list[dict],
         errors.append("이벤트가 없습니다 (녹화하거나 추가하세요)")
     used_keys = {keys.hotkey_key(i["key"]) for i in items if "key" in i}
     bad = sorted(k for k in CONTROL_KEYS if k in used_keys)
-    if parts and all(p in used_keys for p in parts):
-        bad.append(hotkey)
+    for combo in ([hotkey] if parts else []) + [r for r in reserved if r]:
+        if all(p in used_keys for p in keys.hotkey_parts(combo)):
+            bad.append(combo)
     if bad:
         errors.append(f"이벤트에 핫키/제어 키가 들어 있습니다: {', '.join(bad)} (재생 시 충돌)")
     return errors

@@ -213,3 +213,19 @@ def test_buttons_without_coordinates_use_current_cursor():
     be.cursor = (333, 444)
     p.run(m)
     assert be.names() == [("mdown", "left"), ("mup", "left"), ("scroll", 0, -1)]  # 커서 이동 없음
+
+
+def test_max_minutes_stops_infinite_loop():
+    p, be, clock, m = build([key(0.5, "kdown"), key(1.0, "kup")], repeat=0, max_minutes=0.1)  # 6초
+    logs = []
+    p._log = logs.append
+    p.run(m)
+    assert 5.99 <= clock.t <= 6.0 + 1e-9
+    assert be.calls[-1][1] == "kup"  # 멈출 때 눌린 키 해제
+    assert any("최대 실행 시간" in s for s in logs)
+
+
+def test_max_minutes_zero_means_unlimited():
+    p, be, clock, m = build([key(30, "kdown"), key(60, "kup")], repeat=3, max_minutes=0)
+    p.run(m)
+    assert len([c for c in be.calls if c[1] == "kdown"]) == 3

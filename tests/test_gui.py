@@ -403,3 +403,125 @@ def test_hotkey_capture_dialog(gui):
     assert d.result == "a"
     d._ok()
     assert d.confirmed
+
+
+def test_toggle_hotkey_binding_and_change(gui):
+    b = gui.hotkey_bindings()
+    assert "ctrl+f12" in b and "CTRL + F12" in gui.btn_power.cget("text")
+    b["ctrl+f12"]()
+    pump(gui)
+    assert not gui.macros_enabled
+    assert not gui.hotkey_suppressed("f12")      # 재생 중에도 전환 키는 막지 않음
+    assert gui.set_toggle_hotkey("f6") is not None          # alpha 의 핫키
+    assert gui.set_toggle_hotkey("ctrl+f9") is not None     # 제어 키
+    assert gui.set_toggle_hotkey("Shift + F11") is None
+    assert "shift+f11" in gui.hotkey_bindings() and "ctrl+f12" not in gui.hotkey_bindings()
+    assert "SHIFT + F11" in gui.btn_power.cget("text")
+    assert "f11" in gui.recording_ignore_keys() and "shift" not in gui.recording_ignore_keys()
+
+
+def test_editor_rejects_toggle_hotkey(gui):
+    import editor_model as em
+    gui.on_add()
+    ed = gui.editor
+    ed.v_hotkey.set("ctrl+f12")
+    ed.insert_items(em.build_items("tap", key="e"))
+    assert not ed.on_save() and "전체 실행 전환" in gui.shown[-1][1]
+
+
+def test_editor_undo_redo(gui):
+    import editor_model as em
+    gui.on_add()
+    ed = gui.editor
+    assert ed.btn_undo.instate(["disabled"])
+    ed.insert_items(em.build_items("tap", key="q"))
+    ed.insert_items(em.build_items("wait", delay_ms=100))
+    ed.tree.selection_set("0")
+    ed.on_delete()
+    assert [i["type"] for i in ed.items] == ["kup", "wait"]
+    pump(gui)
+    assert ed.btn_undo.instate(["!disabled"])
+    ed.undo()
+    assert [i["type"] for i in ed.items] == ["kdown", "kup", "wait"]
+    ed.undo()
+    assert [i["type"] for i in ed.items] == ["kdown", "kup"]
+    ed.redo()
+    assert len(ed.items) == 3
+    ed.undo(); ed.undo(); ed.undo()   # 더 되돌릴 게 없으면 무시
+    assert ed.items == []
+    ed.redo()
+    ed.insert_items(em.build_items("wait", delay_ms=5))   # 새 변경은 redo 기록을 지운다
+    assert ed._redo == []
+    # 녹화 추가도 되돌리기 가능
+    gui.app.start_record()
+    ed.toggle_record()
+    n = len(ed.items)
+    ed.undo()
+    assert len(ed.items) == n - 3
+
+
+def test_editor_undo_shortcut_ignored_in_entry(gui):
+    import editor_model as em
+    gui.on_add()
+    ed = gui.editor
+    ed.insert_items(em.build_items("tap", key="q"))
+    entry = [w for w in ed.top.winfo_children()[0].winfo_children() if isinstance(w, tk.ttk.Entry)][0]
+    entry.focus_force()
+    gui.root.update()
+    assert ed._shortcut(ed.undo) is None and len(ed.items) == 2
+    ed.tree.focus_force()
+    gui.root.update()
+    assert ed._shortcut(ed.undo) == "break" and ed.items == []
+
+
+def test_max_minutes_field_saved(gui):
+    import editor_model as em
+    gui.on_add()
+    ed = gui.editor
+    ed.v_name.set("timed")
+    ed.v_opts["max_minutes"].set("30")
+    ed.insert_items(em.build_items("tap", key="e"))
+    assert ed.on_save()
+    assert gui.app.library["timed"].options["max_minutes"] == 30.0
+
+
+def test_settings_persist_across_restart(tmp_path):
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("디스플레이 없음")
+    import gui as gui_mod
+    from settings import Settings
+    path = tmp_path / "settings.json"
+    app = App(FakeBackend(), macros_dir=tmp_path / "m", recorder_factory=FakeRecorder, player_factory=FakePlayer)
+    g = gui_mod.Gui(root, app, Settings(path))
+    g.toggle_macros_enabled()
+    g.delay.set("7")
+    root.geometry("800x600+20+30")
+    root.update()
+    g.on_add()
+    g.editor.top.geometry("950x620+40+50")
+    root.update()
+    g.editor.close()
+    g.close()  # 창 닫기 -> 설정 저장
+    s = Settings(path)
+    assert s["macros_enabled"] is False and s["start_delay"] == 7
+    assert s["main_geometry"].startswith("800x600") and s["editor_geometry"].startswith("950x620")
+
+    root = tk.Tk()
+    app = App(FakeBackend(), macros_dir=tmp_path / "m", recorder_factory=FakeRecorder, player_factory=FakePlayer)
+    g = gui_mod.Gui(root, app, Settings(path))
+    root.update()
+    assert not g.macros_enabled and g.delay.get() == "7" and "실행 불가" in g.btn_power.cget("text")
+    assert root.geometry().startswith("800x600")
+    g.close()
+
+
+def test_restore_geometry_offscreen(gui):
+    from gui import restore_geometry
+    top = tk.Toplevel(gui.root)
+    restore_geometry(top, "500x400+99999+99999")   # 화면 밖 -> 크기만
+    top.update()
+    assert top.geometry().startswith("500x400") and not top.geometry().endswith("+99999+99999")
+    restore_geometry(top, "garbage")                 # 무시
+    top.destroy()

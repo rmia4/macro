@@ -26,11 +26,12 @@ class PlayOptions:
     window_title: str = ""        # 비우면 포커스 제한 없음
     mouse_mode: str = "absolute"  # absolute | relative
     scale_coords: bool = False    # 창 크기가 녹화 때와 다르면 좌표 비례 조정
+    max_minutes: float = 0.0      # 최대 실행 시간(분). 0 = 제한 없음
     focus_poll: float = 0.1
 
 
 _MIN = {"repeat": 0, "speed": 0.01, "loop_delay": 0, "time_jitter": 0, "pos_jitter": 0,
-        "approach_duration": 0, "min_key_hold": 0, "focus_poll": 0.01}
+        "approach_duration": 0, "min_key_hold": 0, "focus_poll": 0.01, "max_minutes": 0}
 _MAX = {"time_jitter": 100}
 _TRUE, _FALSE = {"on", "true", "1", "yes"}, {"off", "false", "0", "no"}
 
@@ -101,6 +102,7 @@ class Player:
         self._scale = (1.0, 1.0)
         self._cursor: tuple[int, int] | None = None
         self._last_rel: tuple[int, int] | None = None
+        self._deadline: float | None = None
         self.loop_index = 0     # 진행 중인 루프 (1부터), GUI 표시용
         self.event_index = -1   # 마지막으로 전송한 이벤트 인덱스
 
@@ -108,10 +110,22 @@ class Player:
         self._stop.set()
 
     def _sleep(self, seconds: float) -> bool:
-        """seconds 동안 대기. 중단 요청이 있으면 True."""
+        """seconds 동안 대기. 중단 요청이 있거나 최대 실행 시간에 도달하면 True."""
+        if self._deadline is not None:
+            left = self._deadline - self._clock()
+            if seconds >= left:  # 대기 도중 시간 초과: 남은 만큼만 기다리고 종료
+                if left > 0 and self._waiter(left):
+                    return True
+                self._expire()
+                return True
         if seconds > 0 and self._waiter(seconds):
             return True
         return self._stop.is_set()
+
+    def _expire(self) -> None:
+        if not self._stop.is_set():
+            self._log(f"최대 실행 시간({self.opt.max_minutes:g}분)이 지나 재생을 멈춥니다")
+        self._stop.set()
 
     # ---- 실행 ----
     def run(self, macro: Macro) -> None:
@@ -120,6 +134,7 @@ class Player:
                 raise ValueError(f"알 수 없는 키: {ev['key']}")
         self.opt = dataclasses.replace(self.options)
         self._stop.clear()
+        self._deadline = self._clock() + self.opt.max_minutes * 60 if self.opt.max_minutes > 0 else None
         n = 0
         try:
             while not self._stop.is_set() and (self.opt.repeat == 0 or n < self.opt.repeat):
@@ -166,6 +181,8 @@ class Player:
         while True:
             remaining = self._origin + cum - self._clock()
             if remaining <= 0:
+                if self._deadline is not None and self._clock() >= self._deadline:
+                    self._expire()
                 return not self._stop.is_set()
             if self._sleep(remaining):
                 return False
