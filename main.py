@@ -168,6 +168,15 @@ class App:
         self.log(f"저장: {name}")
         return name
 
+    def set_enabled(self, name: str, enabled: bool) -> None:
+        """재생 가능/안함 전환 (파일에도 저장). 재생 중인 매크로를 끄면 멈춘다."""
+        macro = self.library[name]
+        macro.enabled = enabled
+        save_macro(macro, macro_path(self.macros_dir, name))
+        if not enabled and self.playing and self.playing_name == name:
+            self.stop_play()
+        self.log(f"'{name}' 재생 {'켜짐' if enabled else '꺼짐'}")
+
     # ---- 저장 / 불러오기 / 삭제 (REPL, GUI 공용) ----
     def save(self, name: str) -> None:
         if self.macro is None:

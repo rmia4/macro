@@ -92,3 +92,16 @@ def test_cli_play_without_macro(tmp_path):
     app, out = make_app(tmp_path)
     app.handle("play")
     assert out[-1].startswith("오류: 재생할 매크로가 없습니다")
+
+
+def test_set_enabled_persists_and_stops_playing(tmp_path):
+    from profiles import load_macro
+    app, out = make_app(tmp_path)
+    m = Macro(events=[{"t": 0, "type": "kdown", "key": "a"}])
+    app.store("m", m)
+    app.start_play(m, PlayOptions(), "m")
+    app.set_enabled("m", False)
+    app._thread.join(1)
+    assert not app.playing and load_macro(tmp_path / "m.json").enabled is False
+    app.set_enabled("m", True)
+    assert load_macro(tmp_path / "m.json").enabled is True

@@ -46,7 +46,8 @@ def test_built_items_produce_valid_macro():
 
 def test_item_fields_and_describe():
     it = {"type": "mdown", "x": 3, "y": 4, "button": "left", "dt": 0.12}
-    assert em.item_fields(it) == {"kind": "mdown", "delay_ms": 120, "x": 3, "y": 4, "button": "left"}
+    assert em.item_fields(it) == {"kind": "mdown", "delay_ms": 120, "x": 3, "y": 4, "button": "left",
+                                  "at_cursor": False}
     assert em.describe(it) == "left (3, 4)"
     assert em.describe({"type": "wait", "dt": 1}) == ""
 
@@ -71,3 +72,38 @@ def test_validate_for_save():
     assert any("핫키/제어 키" in e for e in em.validate_for_save("x", "a", items, lib, None))
     assert any("이름" in e for e in em.validate_for_save("../x", None, items, lib, None))
     assert em.validate_for_save("OTHER2", None, items, lib, None) == []
+
+
+def test_consecutive_moves_grouped_into_path():
+    events = [{"t": 0.0, "type": "move", "x": 0, "y": 0}, {"t": 0.01, "type": "move", "x": 5, "y": 1},
+              {"t": 0.03, "type": "move", "x": 9, "y": 2}, {"t": 0.1, "type": "mdown", "x": 9, "y": 2, "button": "left"},
+              {"t": 0.2, "type": "move", "x": 20, "y": 2}, {"t": 0.3, "type": "kdown", "key": "a"}]
+    items = em.to_items(events)
+    assert [i["type"] for i in items] == ["path", "mdown", "move", "kdown"]  # 단독 이동은 그대로
+    assert items[0]["points"] == [[0.0, 0, 0], [0.01, 5, 1], [0.02, 9, 2]]
+    assert em.to_events(items) == events  # 재생용으로 원래 궤적 복원
+    assert em.event_count(items) == 6 and em.total_duration(items) == 0.3
+    assert em.describe(items[0]) == "(0, 0) → (9, 2) · 3개 지점 · 30ms"
+
+
+def test_path_edit_reshapes_end_and_duration():
+    item = {"type": "path", "dt": 0.1, "points": [[0.0, 0, 0], [0.01, 10, 0], [0.03, 20, 0]]}
+    f = em.item_fields(item)
+    assert (f["x"], f["y"], f["duration_ms"], f["delay_ms"]) == (20, 0, 40, 100)
+    new = em.build_items("path", delay_ms=50, x=40, y=10, duration_ms=80, points=item["points"])[0]
+    assert new["dt"] == 0.05
+    assert new["points"] == [[0.0, 0, 0], [0.02, 20, 5], [0.06, 40, 10]]  # 시작점 고정, 비례 분배
+
+
+def test_button_and_scroll_at_cursor():
+    click = em.build_items("click", x=5, y=5, at_cursor=True)
+    assert all("x" not in i for i in click) and em.describe(click[0]) == "left (현재 커서 위치)"
+    assert em.item_fields(click[0])["at_cursor"] is True
+    sc = em.build_items("scroll", dy=-1, at_cursor=True)[0]
+    assert "x" not in sc
+    assert not em.has_positional(click + [sc])
+    Macro.from_dict({"version": 1, "events": em.to_events(click + [sc])})
+    with pytest.raises(Exception):
+        Macro.from_dict({"version": 1, "events": [{"t": 0, "type": "mdown", "x": 1, "button": "left"}]})
+    with pytest.raises(Exception):
+        Macro.from_dict({"version": 1, "events": [{"t": 0, "type": "move"}]})

@@ -229,6 +229,11 @@ class Player:
             self.backend.mouse_move_abs(*p)
             self._cursor = p
 
+    def _goto_if_pos(self, ev: dict) -> None:
+        """좌표가 없는 버튼/스크롤 이벤트는 현재 커서 위치에서 입력한다."""
+        if "x" in ev:
+            self._goto(ev)
+
     def _approach(self, first: dict | None) -> bool:
         o = self.opt
         if not o.approach or o.approach_duration <= 0 or first is None:
@@ -256,17 +261,17 @@ class Player:
         if typ == "move":
             self._goto(ev)
         elif typ == "mdown":
-            self._goto(ev)
+            self._goto_if_pos(ev)
             self._held_buttons.add(ev["button"])  # 전송 전에 등록: 예외 시에도 해제 대상
             b.mouse_down(ev["button"])
         elif typ == "mup":
-            self._goto(ev)
+            self._goto_if_pos(ev)
             b.mouse_up(ev["button"])
             self._held_buttons.discard(ev["button"])
             if not self._held_buttons:
                 self._roll_offset()
         elif typ == "scroll":
-            self._goto(ev)
+            self._goto_if_pos(ev)
             b.scroll(ev["dx"], ev["dy"])
         elif typ == "kdown":
             self._held_keys[ev["key"]] = self._clock()

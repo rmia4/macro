@@ -83,10 +83,10 @@ class Gui:
         box.pack(fill="both", expand=True, padx=8, pady=8)
         frame = ttk.Frame(box)
         frame.pack(fill="both", expand=True)
-        cols = ("name", "hotkey", "repeat", "events", "duration", "window")
+        cols = ("enabled", "name", "hotkey", "repeat", "events", "duration", "window")
         self.tree = ttk.Treeview(frame, columns=cols, show="headings", height=10, selectmode="browse")
-        for col, text, width in zip(cols, ("이름", "시작 핫키", "반복", "이벤트", "길이(초)", "대상 창"),
-                                    (180, 80, 60, 70, 80, 180)):
+        for col, text, width in zip(cols, ("재생", "이름", "시작 핫키", "반복", "이벤트", "길이(초)", "대상 창"),
+                                    (70, 170, 80, 60, 70, 80, 160)):
             self.tree.heading(col, text=text)
             self.tree.column(col, width=width, anchor="w", stretch=col in ("name", "window"))
         sb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
@@ -96,11 +96,15 @@ class Gui:
         self.tree.bind("<Double-Button-1>", lambda e: self.on_edit())
         self.tree.bind("<Return>", lambda e: self.on_play())
         self.tree.bind("<Delete>", lambda e: self.on_delete())
+        self.tree.bind("<space>", lambda e: self.on_toggle_enabled())
+        self.tree.bind("<Button-1>", self._on_tree_click, add="+")
+        self.tree.tag_configure("disabled", foreground="#999999")
 
         row = ttk.Frame(box)
         row.pack(fill="x", pady=(6, 0))
         for text, cmd in (("+ 추가", self.on_add), ("편집", self.on_edit), ("복제", self.on_duplicate),
-                          ("삭제", self.on_delete), ("새로고침", self.reload)):
+                          ("삭제", self.on_delete), ("재생 켜기/끄기", self.on_toggle_enabled),
+                          ("새로고침", self.reload)):
             ttk.Button(row, text=text, command=cmd).pack(side="left", padx=(0, 4))
 
         ttk.Label(self.root, foreground="#666", padding=(8, 0), wraplength=740,
@@ -121,9 +125,10 @@ class Gui:
             m = self.app.library[name]
             opts = m.options or {}
             repeat = opts.get("repeat", 1)
-            self.tree.insert("", "end", iid=name, values=(
-                name, (m.hotkey or "-").upper(), "∞" if repeat == 0 else repeat, len(m.events),
-                f"{m.duration:.2f}", opts.get("window_title") or "-"))
+            self.tree.insert("", "end", iid=name, tags=() if m.enabled else ("disabled",), values=(
+                "● 켜짐" if m.enabled else "○ 꺼짐", name, (m.hotkey or "-").upper(),
+                "∞" if repeat == 0 else repeat, len(m.events), f"{m.duration:.2f}",
+                opts.get("window_title") or "-"))
         if keep in self.app.library:
             self.tree.selection_set(keep)
             self.tree.see(keep)
@@ -179,6 +184,9 @@ class Gui:
         if macro is None:
             self.log(f"매크로가 없습니다: {name}")
             return
+        if not macro.enabled:
+            self.log(f"'{name}' 은(는) 재생 꺼짐 상태입니다 (재생 켜기/끄기로 전환)")
+            return
         try:
             opts = options_from_dict(macro.options)
         except ValueError as e:
@@ -232,15 +240,12 @@ class Gui:
 
     def on_edit(self) -> None:
         name = self.selected()
-        if name is None:
-            messagebox.showinfo("편집", "편집할 매크로를 선택하세요", parent=self.root)
-            return
-        self.open_editor(name)
+        if name is not None:
+            self.open_editor(name)
 
     def on_duplicate(self) -> None:
         name = self.selected()
         if name is None:
-            messagebox.showinfo("복제", "복제할 매크로를 선택하세요", parent=self.root)
             return
         dup = Macro.from_dict(copy.deepcopy(self.app.library[name].to_dict()))
         dup.hotkey = None  # 핫키는 중복될 수 없다
@@ -251,7 +256,6 @@ class Gui:
     def on_delete(self) -> None:
         name = self.selected()
         if name is None:
-            messagebox.showinfo("삭제", "삭제할 매크로를 선택하세요", parent=self.root)
             return
         if self.app.playing and self.app.playing_name == name:
             messagebox.showinfo("삭제", "재생 중인 매크로는 삭제할 수 없습니다", parent=self.root)
@@ -264,13 +268,29 @@ class Gui:
             self.editor.old_name = None  # 편집 중인 내용은 새 매크로로 저장된다
         self.refresh_list()
 
+    def on_toggle_enabled(self, name: str | None = None) -> None:
+        name = name or self.selected()
+        if name is None or name not in self.app.library:
+            return
+        enabled = not self.app.library[name].enabled
+        if self.guard(lambda: self.app.set_enabled(name, enabled)):
+            self.refresh_list(select=name)
+
+    def _on_tree_click(self, event) -> None:
+        """'재생' 칸을 클릭하면 켜짐/꺼짐 전환."""
+        if self.tree.identify_region(event.x, event.y) != "cell" or self.tree.identify_column(event.x) != "#1":
+            return
+        row = self.tree.identify_row(event.y)
+        if row:
+            self.on_toggle_enabled(row)
+
     # ---- 핫키 (리스너 스레드에서 호출됨 -> 큐로 Tk 스레드에 전달) ----
     def hotkey_bindings(self) -> dict:
         def post(fn):
             return lambda: self._calls.put(fn)
         bindings = {}
         for name, m in self.app.library.items():
-            if m.hotkey and m.hotkey not in CONTROL_KEYS:
+            if m.enabled and m.hotkey and m.hotkey not in CONTROL_KEYS:
                 bindings[m.hotkey] = post(lambda n=name: self.toggle_macro(n))
         bindings[HOTKEY_RECORD] = post(self._hotkey_record)
         bindings[HOTKEY_PLAY] = post(lambda: self.on_play(True))
@@ -376,6 +396,7 @@ class EditorWindow:
         self.items: list[dict] = em.to_items(macro.events) if macro else []
         self.screen = dict(macro.screen) if macro else None
         self.window = dict(macro.window) if macro and macro.window else None
+        self.enabled = macro.enabled if macro else True
         opts = options_from_dict(macro.options) if macro else PlayOptions()
 
         self.top = tk.Toplevel(gui.root)
@@ -391,7 +412,6 @@ class EditorWindow:
             value = getattr(opts, fname)
             self.v_opts[fname] = (tk.BooleanVar(self.top, value=value) if kind == "check"
                                   else tk.StringVar(self.top, value=str(value)))
-        self.hide_moves = tk.BooleanVar(self.top, value=True)
         self.dirty = False
         self._build()
         self.refresh_tree()
@@ -425,14 +445,12 @@ class EditorWindow:
         self.btn_test.pack(side="left", padx=4)
         self.state_label = ttk.Label(bar, text="")
         self.state_label.pack(side="left", padx=8)
-        ttk.Checkbutton(bar, text="마우스 이동 숨기기", variable=self.hide_moves,
-                        command=self.refresh_tree).pack(side="right")
 
         frame = ttk.Frame(left)
         frame.pack(fill="both", expand=True, pady=4)
         cols = ("no", "delay", "type", "detail")
         self.tree = ttk.Treeview(frame, columns=cols, show="headings", height=16, selectmode="extended")
-        for col, text, width in zip(cols, ("#", "앞 지연(ms)", "종류", "내용"), (50, 90, 100, 200)):
+        for col, text, width in zip(cols, ("#", "앞 지연(ms)", "종류", "내용"), (50, 90, 125, 200)):
             self.tree.heading(col, text=text)
             self.tree.column(col, width=width, anchor="w", stretch=col == "detail")
         sb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
@@ -500,21 +518,17 @@ class EditorWindow:
         return "window" if self.v_coord.get() == COORD_LABELS["window"] else "screen"
 
     # ---- 이벤트 목록 ----
-    def visible_indices(self) -> list[int]:
-        hide = self.hide_moves.get()
-        return [i for i, it in enumerate(self.items) if not (hide and it["type"] == "move")]
-
     def refresh_tree(self, select: list[int] | None = None) -> None:
         self.tree.delete(*self.tree.get_children())
-        for i in self.visible_indices():
-            it = self.items[i]
+        for i, it in enumerate(self.items):
             self.tree.insert("", "end", iid=str(i), values=(
                 i + 1, round(it.get("dt", 0) * 1000), em.EVENT_LABELS[it["type"]], em.describe(it)))
         shown = [str(i) for i in (select or []) if self.tree.exists(str(i))]
         if shown:
             self.tree.selection_set(shown)
             self.tree.see(shown[-1])
-        self.summary.configure(text=f"이벤트 {len(self.items)}개 · {em.total_duration(self.items):.2f}초")
+        self.summary.configure(text=f"항목 {len(self.items)}개 (이벤트 {em.event_count(self.items)}개) · "
+                                    f"{em.total_duration(self.items):.2f}초")
         self.coord_box.configure(state="disabled" if em.has_positional(self.items) else "readonly")
 
     def selected_indices(self) -> list[int]:
@@ -540,10 +554,10 @@ class EditorWindow:
     def on_edit(self) -> None:
         sel = self.selected_indices()
         if len(sel) != 1:
-            messagebox.showinfo("수정", "수정할 이벤트를 하나만 선택하세요", parent=self.top)
             return
         i = sel[0]
-        result = EventDialog.ask(self.top, em.EDIT_KINDS, item=self.items[i], pick=self.pick_position)
+        kinds = em.PATH_KINDS if self.items[i]["type"] == "path" else em.EDIT_KINDS
+        result = EventDialog.ask(self.top, kinds, item=self.items[i], pick=self.pick_position)
         if result:
             self.items[i:i + 1] = result
             self._changed([i])
@@ -559,13 +573,10 @@ class EditorWindow:
     def on_move(self, step: int) -> None:
         sel = self.selected_indices()
         if len(sel) != 1:
-            messagebox.showinfo("이동", "이동할 이벤트를 하나만 선택하세요", parent=self.top)
             return
-        vis = self.visible_indices()
-        pos = vis.index(sel[0]) + step
-        if not 0 <= pos < len(vis):
+        i, j = sel[0], sel[0] + step
+        if not 0 <= j < len(self.items):
             return
-        i, j = sel[0], vis[pos]
         self.items.insert(j, self.items.pop(i))
         self._changed([j])
 
@@ -632,7 +643,8 @@ class EditorWindow:
             window["title"] = opts.window_title or window.get("title", "")
         data = {"version": 1, "screen": self.screen or {"width": 0, "height": 0},
                 "coord_space": self.coord_space, "window": window, "hotkey": self._hotkey_value(),
-                "options": options_to_dict(opts), "events": em.to_events(self.items)}
+                "options": options_to_dict(opts), "enabled": self.enabled,
+                "events": em.to_events(self.items)}
         return Macro.from_dict(data), opts
 
     def test_play(self) -> None:
@@ -713,6 +725,7 @@ class EventDialog:
                  kind: str = "tap", pick=None) -> None:
         self.kinds = kinds
         self.pick = pick
+        self.item = item
         self.result: list[dict] | None = None
         init = em.item_fields(item) if item else {}
         kind = init.get("kind", kind)
@@ -724,7 +737,8 @@ class EventDialog:
         self.v_kind = tk.StringVar(self.top, value=labels.get(kind, kinds[0][1]))
         self.v = {k: tk.StringVar(self.top, value=str(init.get(k, default))) for k, default in (
             ("delay_ms", 100), ("key", ""), ("button", "left"), ("x", 0), ("y", 0),
-            ("dx", 0), ("dy", -1), ("hold_ms", ""))}
+            ("dx", 0), ("dy", -1), ("hold_ms", ""), ("duration_ms", 0))}
+        self.v_cursor = tk.BooleanVar(self.top, value=init.get("at_cursor", False))
         if not item and pick is not None:
             try:  # 새 마우스 이벤트는 현재 커서 위치로 시작
                 x, y = pick()
@@ -763,17 +777,20 @@ class EventDialog:
         if self.pick is not None:
             self.pick_btn = ttk.Button(pos, text="3초 후 현재 위치", command=self._pick_later)
             self.pick_btn.pack(side="left")
-        row(4, "pos", "X, Y", pos)
+        row(4, "cursor", "위치", ttk.Checkbutton(f, text="좌표 없이 현재 커서 위치에서 입력",
+                                                  variable=self.v_cursor, command=self._on_kind))
+        row(5, "pos", "X, Y", pos)
         sc = ttk.Frame(f)
         ttk.Entry(sc, textvariable=self.v["dx"], width=7).pack(side="left")
         ttk.Entry(sc, textvariable=self.v["dy"], width=7).pack(side="left", padx=4)
         ttk.Label(sc, text="(가로, 세로 · 아래로 = 음수)").pack(side="left")
-        row(5, "scroll", "스크롤 칸 수", sc)
-        row(6, "hold", "누름 유지(ms)", ttk.Entry(f, textvariable=self.v["hold_ms"], width=10))
+        row(6, "scroll", "스크롤 칸 수", sc)
+        row(7, "hold", "누름 유지(ms)", ttk.Entry(f, textvariable=self.v["hold_ms"], width=10))
+        row(8, "duration", "이동 시간(ms)", ttk.Entry(f, textvariable=self.v["duration_ms"], width=10))
         self.error = ttk.Label(f, foreground="#c62828", wraplength=320)
-        self.error.grid(row=7, column=0, columnspan=2, sticky="w")
+        self.error.grid(row=9, column=0, columnspan=2, sticky="w")
         btns = ttk.Frame(f)
-        btns.grid(row=8, column=0, columnspan=2, pady=(8, 0))
+        btns.grid(row=10, column=0, columnspan=2, pady=(8, 0))
         ttk.Button(btns, text="확인", command=self._on_ok).pack(side="left", padx=4)
         ttk.Button(btns, text="취소", command=self.top.destroy).pack(side="left")
         self.top.bind("<Return>", lambda e: self._on_ok())
@@ -786,11 +803,14 @@ class EventDialog:
 
     def _on_kind(self) -> None:
         kind = self.kind
-        fields = em.KIND_FIELDS[kind]
+        fields = set(em.KIND_FIELDS[kind])
+        if "cursor" in fields and self.v_cursor.get():
+            fields.discard("pos")  # 현재 커서 위치 사용 시 좌표 입력 숨김
         for field, widgets in self.rows.items():
             for w in widgets:
                 w.grid() if field in fields else w.grid_remove()
         self.delay_label.configure(text="지연(ms)" if kind == "wait" else "앞 지연(ms)")
+        self.rows["pos"][0].configure(text="끝 위치 X, Y" if kind == "path" else "X, Y")
         if "hold" in fields and not self.v["hold_ms"].get():
             self.v["hold_ms"].set(str(em.DEFAULT_HOLD_MS[kind]))
 
@@ -813,7 +833,9 @@ class EventDialog:
         try:
             self.result = em.build_items(self.kind, delay_ms=v["delay_ms"], key=v["key"],
                                          button=v["button"], x=v["x"], y=v["y"], dx=v["dx"],
-                                         dy=v["dy"], hold_ms=v["hold_ms"])
+                                         dy=v["dy"], hold_ms=v["hold_ms"], at_cursor=self.v_cursor.get(),
+                                         duration_ms=v["duration_ms"],
+                                         points=self.item.get("points") if self.item else None)
         except ValueError as e:
             self.error.configure(text=str(e))
             return

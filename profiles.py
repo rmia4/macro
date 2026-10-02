@@ -28,6 +28,7 @@ class Macro:
     version: int = VERSION
     hotkey: str | None = None   # 이 매크로를 시작/중지하는 전역 핫키
     options: dict = field(default_factory=dict)  # 재생 옵션 (player.options_to_dict 형식)
+    enabled: bool = True        # False 면 재생하지 않음 (메인 화면에서 전환)
 
     @property
     def duration(self) -> float:
@@ -41,6 +42,7 @@ class Macro:
             "window": self.window,
             "hotkey": self.hotkey,
             "options": self.options,
+            "enabled": self.enabled,
             "events": self.events,
         }
 
@@ -68,8 +70,11 @@ class Macro:
         options = data.get("options") or {}
         if not isinstance(options, dict):
             raise MacroFormatError("options 는 객체여야 합니다")
-        return cls(events=events, screen=screen, coord_space=coord_space,
-                   window=window, version=version, hotkey=hotkey, options=options)
+        enabled = data.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise MacroFormatError("enabled 는 true/false 여야 합니다")
+        return cls(events=events, screen=screen, coord_space=coord_space, window=window,
+                   version=version, hotkey=hotkey, options=options, enabled=enabled)
 
 
 def _is_num(v) -> bool:
@@ -91,7 +96,9 @@ def _validate_events(events: list) -> None:
         if t < prev:
             raise MacroFormatError(f"{where}: t 가 감소합니다")
         prev = t
-        if typ in ("move", "mdown", "mup", "scroll"):
+        has_pos = "x" in ev or "y" in ev
+        if typ == "move" or (typ in ("mdown", "mup", "scroll") and has_pos):
+            # 버튼/스크롤은 좌표가 없으면 현재 커서 위치에서 입력한다
             if not _is_num(ev.get("x")) or not _is_num(ev.get("y")):
                 raise MacroFormatError(f"{where}: x, y 가 필요합니다")
         if typ in ("mdown", "mup") and ev.get("button") not in BUTTONS:

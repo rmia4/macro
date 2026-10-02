@@ -204,3 +204,12 @@ def test_progress_indices():
     p.run(m)
     assert (p.loop_index, p.event_index) == (3, 1)
     assert (2, -1) in seen and (1, 0) in seen
+
+
+def test_buttons_without_coordinates_use_current_cursor():
+    evs = [{"t": 0.1, "type": "mdown", "button": "left"}, {"t": 0.2, "type": "mup", "button": "left"},
+           {"t": 0.3, "type": "scroll", "dx": 0, "dy": -1}]
+    p, be, clock, m = build(evs, approach=True, pos_jitter=5)
+    be.cursor = (333, 444)
+    p.run(m)
+    assert be.names() == [("mdown", "left"), ("mup", "left"), ("scroll", 0, -1)]  # 커서 이동 없음

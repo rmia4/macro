@@ -56,7 +56,7 @@ def logs(g):
 # ---- 메인 화면 ----
 def test_list_shows_library(gui):
     assert gui.tree.get_children() == ("alpha", "beta")
-    assert gui.tree.item("alpha")["values"][1:4] == ["F6", "∞", 6]
+    assert gui.tree.item("alpha")["values"][:5] == ["● 켜짐", "alpha", "F6", "∞", 6]
 
 
 def test_play_selected_and_stop(gui):
@@ -160,21 +160,23 @@ def test_editor_insert_edit_delete_move(gui):
     ed.tree.selection_set(["1", "2"])
     ed.on_delete()
     assert [i["type"] for i in ed.items] == ["kdown", "wait", "kup"]
-    assert ed.summary.cget("text") == "이벤트 3개 · 0.55초"
+    assert ed.summary.cget("text") == "항목 3개 (이벤트 3개) · 0.55초"
 
 
-def test_editor_hide_moves_and_move_skips_hidden(gui):
+def test_editor_groups_moves_and_edits_path(gui):
     gui.tree.selection_set("beta")
     gui.on_edit()
     ed = gui.editor
     assert ed.v_name.get() == "beta" and not ed.dirty
-    assert len(ed.tree.get_children()) == 4  # 이동 2개 숨김
-    ed.tree.selection_set("3")  # mup -> 위로: 숨겨진 move 를 건너뛰고 mdown 앞으로
-    ed.on_move(-1)
-    assert [i["type"] for i in ed.items][:4] == ["move", "mup", "mdown", "move"]
-    ed.hide_moves.set(False)
-    ed.refresh_tree()
+    # move, mdown, move, mup, kdown, kup -> 이동이 연속되지 않으므로 그대로 6줄
     assert len(ed.tree.get_children()) == 6
+    ed.items = [{"type": "path", "dt": 0.0, "points": [[0.0, 0, 0], [0.01, 5, 5], [0.01, 9, 9]]}] + ed.items[1:]
+    ed.refresh_tree()
+    assert ed.tree.item("0")["values"][2] == "마우스 이동 경로"
+    assert ed.summary.cget("text").startswith("항목 6개 (이벤트 8개)")
+    ed.tree.selection_set("0")
+    ed.on_move(1)
+    assert ed.items[1]["type"] == "path" and ed.selected_indices() == [1]
 
 
 def test_editor_save_new_with_hotkey_and_options(gui, tmp_path):
@@ -192,7 +194,7 @@ def test_editor_save_new_with_hotkey_and_options(gui, tmp_path):
     assert m.hotkey == "f7" and m.options["repeat"] == 5 and m.options["window_title"] == "My Game"
     assert (tmp_path / "채집.json").exists() and not ed.dirty
     assert "f7" in gui.hotkey_bindings()
-    assert gui.tree.item("채집")["values"][1] == "F7"
+    assert gui.tree.item("채집")["values"][2] == "F7"
 
 
 def test_editor_save_validation_errors(gui):
@@ -295,3 +297,69 @@ def test_event_dialog_fields_follow_kind(gui):
     gui.root.update()
     assert d.rows["key"][0].winfo_ismapped() and not d.rows["pos"][0].winfo_ismapped()
     d.top.destroy()
+
+
+def test_no_selection_does_nothing(gui):
+    gui.tree.selection_remove(gui.tree.selection())
+    for fn in (gui.on_edit, gui.on_duplicate, gui.on_delete, gui.on_toggle_enabled):
+        fn()
+    assert gui.shown == [] and gui.editor is None
+    assert set(gui.app.library) == {"alpha", "beta"}
+    gui.on_add()
+    ed = gui.editor
+    import editor_model as em
+    ed.insert_items(em.build_items("tap", key="q"))
+    ed.tree.selection_remove(ed.tree.selection())
+    before = list(ed.items)
+    for fn in (ed.on_edit, ed.on_delete, lambda: ed.on_move(-1), lambda: ed.on_move(1)):
+        fn()
+    assert gui.shown == [] and ed.items == before
+
+
+def test_toggle_enabled(gui, tmp_path):
+    from profiles import load_macro
+    gui.tree.selection_set("alpha")
+    gui.on_toggle_enabled()
+    assert gui.app.library["alpha"].enabled is False
+    assert gui.tree.item("alpha")["values"][0] == "○ 꺼짐" and "disabled" in gui.tree.item("alpha")["tags"]
+    assert load_macro(tmp_path / "alpha.json").enabled is False
+    assert "f6" not in gui.hotkey_bindings()   # 꺼진 매크로는 핫키도 해제
+    gui.on_play(immediate=True)
+    pump(gui)
+    assert not gui.app.playing and "재생 꺼짐" in logs(gui)
+    gui.on_toggle_enabled()
+    assert gui.app.library["alpha"].enabled and "f6" in gui.hotkey_bindings()
+
+
+def test_editor_preserves_enabled_flag(gui):
+    gui.tree.selection_set("alpha")
+    gui.on_toggle_enabled()
+    gui.on_edit()
+    ed = gui.editor
+    ed.v_opts["repeat"].set("2")
+    assert ed.on_save()
+    assert gui.app.library["alpha"].enabled is False
+
+
+def test_event_dialog_cursor_option_and_path(gui):
+    import editor_model as em
+    from gui import EventDialog
+    d = EventDialog(gui.root, em.ADD_KINDS, kind="click")
+    d.v_cursor.set(True)
+    d._on_kind()
+    gui.root.update()
+    assert not d.rows["pos"][0].winfo_ismapped() and d.rows["cursor"][0].winfo_ismapped()
+    d._on_ok()
+    assert [("x" in i) for i in d.result] == [False, False]
+
+    item = {"type": "mup", "button": "left", "dt": 0.05}
+    d = EventDialog(gui.root, em.EDIT_KINDS, item=item)
+    assert d.v_cursor.get() is True
+
+    path = {"type": "path", "dt": 0.0, "points": [[0.0, 0, 0], [0.02, 10, 10]]}
+    d = EventDialog(gui.root, em.PATH_KINDS, item=path)
+    gui.root.update()
+    assert d.v["duration_ms"].get() == "20" and d.rows["pos"][0].cget("text") == "끝 위치 X, Y"
+    d.v["x"].set("30")
+    d._on_ok()
+    assert d.result[0]["points"][-1] == [0.02, 30, 10]
