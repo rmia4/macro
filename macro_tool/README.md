@@ -5,9 +5,20 @@ Steam 싱글 플레이 게임의 반복 작업(클릭·드래그·키·스크롤
 ## 설치 / 실행
 ```
 pip install -r requirements.txt
-python main.py        # Windows, Python 3.11+
+python main.py          # GUI (기본)
+python main.py --cli    # 콘솔 REPL
 ```
+Windows, Python 3.11+ (tkinter 포함 설치 필요).
 게임이 관리자 권한이면 이 도구도 관리자 권한으로 실행해야 한다 (시작 시 경고 표시).
+
+## GUI 사용법
+1. **대상 창 제목**에 게임 창 제목의 일부를 입력하고 `옵션 적용`을 누른다 (비우면 포커스 제한 없음).
+2. `● 녹화`(또는 F8) → 게임에서 동작 → F8로 종료. 버튼으로 시작하면 **시작 지연(기본 3초)** 동안 게임 창으로 전환할 수 있다.
+   녹화 종료는 버튼 클릭이 기록되므로 **F8 키**를 권장한다.
+3. 이름을 입력하고 `저장`. 목록에서 더블클릭(또는 `불러오기`)으로 로드.
+4. `▶ 재생`(또는 F9). 재생 중에는 F9 또는 `■ 중지`로 즉시 멈춘다.
+
+상태 표시줄(대기/녹화/재생/시작 대기)과 로그 창, 모든 재생 옵션 입력란이 있다. 재생·녹화 시작 시 옵션이 자동 적용되며, 잘못된 값은 오류 창으로 알려준다.
 
 ## 핫키 (`hotkeys.py` 상수로 변경)
 | 키 | 동작 |
@@ -18,7 +29,7 @@ python main.py        # Windows, Python 3.11+
 
 제어 키는 매크로에 기록되지 않는다.
 
-## REPL 명령
+## REPL 명령 (`--cli`)
 `record` · `play` · `stop` · `save <이름>` · `load <이름>` · `list` · `set <옵션> <값>` · `show` · `quit`
 
 | 옵션 | 기본 | 설명 |
@@ -49,7 +60,8 @@ python main.py        # Windows, Python 3.11+
 
 ## 구조
 `input_backend.py`만 Windows API(`SendInput`, 스캔코드/확장키)를 호출하고, 나머지(`recorder`/`player`/`hotkeys`/`profiles`)는
-백엔드·시계·대기 함수를 주입받아 Linux에서도 단위 테스트된다.
+백엔드·시계·대기 함수를 주입받아 Linux에서도 단위 테스트된다. GUI(`gui.py`, tkinter)는 `main.App` 로직에 위임하며,
+GUI 테스트는 tkinter+디스플레이가 있을 때만 실행된다(Linux: `xvfb-run python -m pytest tests`).
 ```
 pip install -r requirements-dev.txt && python -m pytest tests
 ```

@@ -1,4 +1,4 @@
-"""진입점: 핫키 + REPL. 사용법은 README.md 참고."""
+"""진입점: 기본은 GUI, `--cli` 로 REPL. 사용법은 README.md 참고."""
 from __future__ import annotations
 
 import dataclasses
@@ -97,6 +97,19 @@ class App:
         self.stop_all()
         input_backend.shutdown_process()
 
+    # ---- 저장 / 불러오기 (REPL, GUI 공용) ----
+    def save(self, name: str) -> None:
+        if self.macro is None:
+            raise ValueError("저장할 매크로가 없습니다")
+        self.log(f"저장: {save_macro(self.macro, macro_path(self.macros_dir, name))}")
+
+    def load(self, name: str) -> None:
+        self.macro = load_macro(macro_path(self.macros_dir, name))
+        self.log(f"불러옴: 이벤트 {len(self.macro.events)}개, {self.macro.duration:.2f}초")
+        if self.macro.window and not self.options.window_title:
+            self.log(f"힌트: 녹화 창 제목은 {self.macro.window.get('title')!r} "
+                     "(window_title 로 포커스 제한 설정)")
+
     # ---- REPL ----
     def handle(self, line: str) -> bool:
         """명령 한 줄 처리. 종료해야 하면 False."""
@@ -118,16 +131,10 @@ class App:
                     self.toggle_play()
             elif cmd == "save":
                 self._need(args, 1, "save <이름>")
-                if self.macro is None:
-                    raise ValueError("저장할 매크로가 없습니다")
-                self.log(f"저장: {save_macro(self.macro, macro_path(self.macros_dir, args[0]))}")
+                self.save(args[0])
             elif cmd == "load":
                 self._need(args, 1, "load <이름>")
-                self.macro = load_macro(macro_path(self.macros_dir, args[0]))
-                self.log(f"불러옴: 이벤트 {len(self.macro.events)}개, {self.macro.duration:.2f}초")
-                if self.macro.window and not self.options.window_title:
-                    self.log(f"힌트: 녹화 창 제목은 {self.macro.window.get('title')!r} "
-                             "(set window_title 로 포커스 제한 설정)")
+                self.load(args[0])
             elif cmd == "list":
                 names = list_macros(self.macros_dir)
                 self.log("\n".join(names) if names else "(저장된 매크로 없음)")
@@ -160,7 +167,8 @@ class App:
             self.log("매크로: (없음)")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
     if not input_backend.IS_WINDOWS:
         print("이 도구는 Windows 전용입니다.")
         return 1
@@ -168,6 +176,9 @@ def main() -> int:
     if not input_backend.is_admin():
         print("[경고] 관리자 권한이 아닙니다. 게임이 관리자 권한으로 실행 중이면 "
               "입력이 무시되므로 이 도구도 관리자 권한으로 실행하세요.")
+    if "--cli" not in argv:
+        from gui import run_gui
+        return run_gui(App(input_backend.WindowsBackend()))
     app = App(input_backend.WindowsBackend())
 
     def quit_now() -> None:
