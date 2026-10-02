@@ -59,6 +59,27 @@ def set_option(opts: PlayOptions, name: str, value: str) -> None:
     setattr(opts, name, parsed)
 
 
+OPTION_KEYS = [f.name for f in dataclasses.fields(PlayOptions) if f.name != "focus_poll"]
+
+
+def options_to_dict(opts: PlayOptions) -> dict:
+    return {k: getattr(opts, k) for k in OPTION_KEYS}
+
+
+def options_from_dict(data: dict | None) -> PlayOptions:
+    """매크로 파일의 options -> PlayOptions. 값은 set_option 으로 검증 (ValueError)."""
+    opts = PlayOptions()
+    for k, v in (data or {}).items():
+        if k not in OPTION_KEYS:
+            continue
+        if isinstance(v, bool):
+            v = "on" if v else "off"
+        elif v is None or v == "":
+            v = "none"
+        set_option(opts, k, str(v))
+    return opts
+
+
 class Player:
     def __init__(self, backend, options: PlayOptions | None = None, *,
                  clock: Callable[[], float] = time.perf_counter,
@@ -257,6 +278,7 @@ class Player:
                     return False
             b.key_up(ev["key"])
             self._held_keys.pop(ev["key"], None)
+        # "wait": 대기는 이미 타임라인에 반영됨
         return True
 
     def _release_all(self) -> None:

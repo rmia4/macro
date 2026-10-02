@@ -9,7 +9,7 @@ from pathlib import Path
 import keys
 
 VERSION = 1
-EVENT_TYPES = {"move", "mdown", "mup", "scroll", "kdown", "kup"}
+EVENT_TYPES = {"move", "mdown", "mup", "scroll", "kdown", "kup", "wait"}  # wait: 지연만 있는 이벤트
 BUTTONS = {"left", "right", "middle", "x1", "x2"}
 COORD_SPACES = {"screen", "window"}
 _NAME_RE = re.compile(r"^[\w\-. ]+$")
@@ -26,6 +26,8 @@ class Macro:
     coord_space: str = "screen"
     window: dict | None = None  # {"title", "width", "height"}
     version: int = VERSION
+    hotkey: str | None = None   # 이 매크로를 시작/중지하는 전역 핫키
+    options: dict = field(default_factory=dict)  # 재생 옵션 (player.options_to_dict 형식)
 
     @property
     def duration(self) -> float:
@@ -37,6 +39,8 @@ class Macro:
             "screen": self.screen,
             "coord_space": self.coord_space,
             "window": self.window,
+            "hotkey": self.hotkey,
+            "options": self.options,
             "events": self.events,
         }
 
@@ -58,8 +62,14 @@ class Macro:
         window = data.get("window")
         if window is not None and not isinstance(window, dict):
             raise MacroFormatError("window 는 객체여야 합니다")
+        hotkey = data.get("hotkey")
+        if hotkey is not None and not keys.is_known(hotkey):
+            raise MacroFormatError(f"알 수 없는 hotkey: {hotkey!r}")
+        options = data.get("options") or {}
+        if not isinstance(options, dict):
+            raise MacroFormatError("options 는 객체여야 합니다")
         return cls(events=events, screen=screen, coord_space=coord_space,
-                   window=window, version=version)
+                   window=window, version=version, hotkey=hotkey, options=options)
 
 
 def _is_num(v) -> bool:

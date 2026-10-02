@@ -45,3 +45,39 @@ class FakeBackend:
 
     def names(self):
         return [c[1:] for c in self.calls]
+
+
+class FakeRecorder:
+    """App 의 recorder_factory 대체. stop() 시 정해진 이벤트를 돌려준다."""
+    events = [{"t": 0.0, "type": "move", "x": 10, "y": 20},
+              {"t": 0.2, "type": "kdown", "key": "a"},
+              {"t": 0.3, "type": "kup", "key": "a"}]
+    last = None
+
+    def __init__(self, backend, window_title="", ignore_keys=(), coord_space=None):
+        self.window_title, self.ignore_keys, self.coord_space = window_title, ignore_keys, coord_space
+        FakeRecorder.last = self
+
+    def start(self):
+        if self.coord_space == "window" and not self.window_title:
+            raise ValueError("창 기준 좌표는 대상 창 제목이 필요합니다")
+        return self.coord_space or "screen"
+
+    def stop(self):
+        from profiles import Macro
+        return Macro(events=[dict(e) for e in self.events], screen={"width": 1920, "height": 1080})
+
+
+class FakePlayer:
+    """App 의 player_factory 대체. stop() 될 때까지(최대 5초) 재생 중 상태를 유지한다."""
+    def __init__(self, backend, options=None, log=None):
+        import threading
+        self.options = options
+        self.loop_index, self.event_index = 1, 0
+        self._stop = threading.Event()
+
+    def stop(self):
+        self._stop.set()
+
+    def run(self, macro):
+        self._stop.wait(5)

@@ -37,3 +37,58 @@ def test_hotkey_dispatch_ignores_autorepeat():
     d.release("f8"); d.press("f8")
     d.press("a")
     assert len(hits) == 2
+
+
+from fakes import FakePlayer, FakeRecorder  # noqa: E402
+from player import PlayOptions  # noqa: E402
+from profiles import save_macro, macro_path  # noqa: E402
+
+
+def make_app(tmp_path):
+    out = []
+    app = App(FakeBackend(), macros_dir=tmp_path, log=out.append,
+              recorder_factory=FakeRecorder, player_factory=FakePlayer)
+    return app, out
+
+
+def test_library_store_rename_and_reload(tmp_path):
+    app, out = make_app(tmp_path)
+    m = Macro(events=[{"t": 0, "type": "kdown", "key": "a"}], hotkey="f6", options={"repeat": 3})
+    assert app.store("one", m) == "one"
+    try:
+        app.store("one", m)
+        assert False, "중복 저장은 거부되어야 함"
+    except ValueError:
+        pass
+    app.store("two", m, old_name="one")
+    assert not (tmp_path / "one.json").exists() and (tmp_path / "two.json").exists()
+    (tmp_path / "broken.json").write_text("{", encoding="utf-8")
+    save_macro(Macro(options={"speed": -1}), macro_path(tmp_path, "badopt"))
+    app.reload_library()
+    assert list(app.library) == ["two"] and app.library["two"].hotkey == "f6"
+    assert sum("불러오기 실패" in line for line in out) == 2
+
+
+def test_record_and_play_flow(tmp_path):
+    app, out = make_app(tmp_path)
+    app.start_record("Game", "window", {"f8", "f6"})
+    assert app.recording and FakeRecorder.last.coord_space == "window"
+    m = app.stop_record()
+    assert len(m.events) == 3 and not app.recording
+    app.start_play(m, PlayOptions(), "demo")
+    assert app.playing and app.playing_name == "demo" and app.playing_keys == {"a"}
+    assert app.progress == (1, 0, PlayOptions().repeat)
+    try:
+        app.start_record()
+        assert False
+    except RuntimeError:
+        pass
+    app.stop_play()
+    app._thread.join(1)
+    assert not app.playing
+
+
+def test_cli_play_without_macro(tmp_path):
+    app, out = make_app(tmp_path)
+    app.handle("play")
+    assert out[-1].startswith("오류: 재생할 매크로가 없습니다")

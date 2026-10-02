@@ -115,8 +115,10 @@ class RecorderCore:
 
 class Recorder:
     def __init__(self, backend, window_title: str = "", ignore_keys=(),
-                 clock=time.perf_counter) -> None:
+                 clock=time.perf_counter, coord_space: str | None = None) -> None:
+        """coord_space: "window"(창 필수) / "screen" / None(창을 찾으면 window)."""
         self.backend = backend
+        self.coord_space = coord_space
         self.window_title = window_title
         self.ignore_keys = ignore_keys
         self._clock = clock
@@ -130,16 +132,20 @@ class Recorder:
 
     def start(self) -> str:
         """녹화 시작. 좌표계("window"/"screen")를 반환."""
-        from pynput import keyboard, mouse  # Windows 환경에서만 필요
-
         origin = (0, 0)
         self._window = None
-        if self.window_title:
+        if self.coord_space == "window" and not self.window_title:
+            raise ValueError("창 기준 좌표는 대상 창 제목이 필요합니다")
+        if self.window_title and self.coord_space != "screen":
             rect = self.backend.find_window_rect(self.window_title)
+            if rect is None and self.coord_space == "window":
+                raise ValueError(f"대상 창을 찾을 수 없습니다: {self.window_title!r}")
             if rect:
                 origin = (rect[0], rect[1])
                 self._window = {"title": self.window_title,
                                 "width": rect[2] - rect[0], "height": rect[3] - rect[1]}
+        from pynput import keyboard, mouse  # Windows 환경에서만 필요
+
         self._core = core = RecorderCore(self.ignore_keys, origin=origin)
         core.start(self._clock(), self.backend.cursor_pos())
         clock = self._clock
