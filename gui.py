@@ -14,12 +14,13 @@ import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 
 import editor_model as em
+import input_backend
 import keys
 from hotkeys import CONTROL_KEYS, HOTKEY_PLAY, HOTKEY_QUIT, HOTKEY_RECORD, HotkeyListener
 from main import App
 from player import PlayOptions, options_from_dict, options_to_dict, set_option
 from profiles import BUTTONS, Macro
-from settings import SETTINGS_PATH, Settings
+from settings import OVERLAY_POSITIONS, SETTINGS_PATH, Settings
 
 # (옵션 이름, 라벨, 종류)  종류: entry | check | combo
 PLAY_FIELDS = [
@@ -36,6 +37,10 @@ PLAY_FIELDS = [
     ("max_minutes", "최대 실행 시간(분, 0=무제한)", "entry"),
 ]
 UNDO_LIMIT = 100
+OVERLAY_LABELS = {"off": "끄기", "nw": "↖ 왼쪽 위", "n": "↑ 위 가운데", "ne": "↗ 오른쪽 위",
+                  "w": "← 왼쪽 가운데", "e": "→ 오른쪽 가운데", "sw": "↙ 왼쪽 아래",
+                  "s": "↓ 아래 가운데", "se": "↘ 오른쪽 아래"}
+FLASH_SECONDS = 2.0
 COLORS = {"idle": "#555555", "rec": "#c62828", "play": "#2e7d32", "wait": "#ef6c00"}
 NO_HOTKEY = "(없음)"
 COORD_LABELS = {"screen": "화면 기준", "window": "창 기준"}
@@ -54,6 +59,7 @@ class Gui:
         self._countdown_left = 0
         self._countdown_what = ""
         self.macros_enabled = bool(self.settings["macros_enabled"])  # 전체 매크로 실행 가능 여부
+        self._flash_until = 0.0  # 전체 실행 전환 직후 오버레이에 잠깐 상태 표시
         self._after_id = None
         self._closed = False
         self.play_started: float | None = None
@@ -64,6 +70,7 @@ class Gui:
         root.title("매크로 도구")
         root.minsize(760, 520)
         restore_geometry(root, self.settings["main_geometry"])
+        self.overlay = Overlay(root, self.settings["overlay_position"])
         self._build()
         self.reload()
         root.protocol("WM_DELETE_WINDOW", self.close)
@@ -82,11 +89,20 @@ class Gui:
         self.btn_stop.pack(side="left")
         ttk.Label(top, text="버튼 시작 지연(초)").pack(side="left", padx=(16, 2))
         ttk.Spinbox(top, from_=0, to=30, width=4, textvariable=self.delay).pack(side="left")
-        ttk.Button(top, text="단축키 변경", command=self.change_toggle_hotkey).pack(side="right", padx=(4, 0))
-        self.btn_power = tk.Button(top, command=self.toggle_macros_enabled, width=26, pady=4,
+
+        opts = ttk.Frame(self.root, padding=(8, 0, 8, 6))
+        opts.pack(fill="x")
+        self.btn_power = tk.Button(opts, command=self.toggle_macros_enabled, width=28, pady=3,
                                    fg="white", relief="raised", font=("", 10, "bold"))
-        self.btn_power.pack(side="right")
+        self.btn_power.pack(side="left")
         self._update_power_button()
+        ttk.Button(opts, text="단축키 변경", command=self.change_toggle_hotkey).pack(side="left", padx=4)
+        self.v_overlay = tk.StringVar(self.root, value=OVERLAY_LABELS[self.settings["overlay_position"]])
+        overlay_box = ttk.Combobox(opts, textvariable=self.v_overlay, state="readonly", width=14,
+                                   values=[OVERLAY_LABELS[p] for p in OVERLAY_POSITIONS])
+        overlay_box.pack(side="right")
+        overlay_box.bind("<<ComboboxSelected>>", lambda e: self.set_overlay_position(self._overlay_key()))
+        ttk.Label(opts, text="상태 오버레이 위치").pack(side="right", padx=4)
 
         prog = ttk.Frame(self.root, padding=(8, 0))
         prog.pack(fill="x")
@@ -297,9 +313,45 @@ class Gui:
                 self.cancel_countdown()
             self.app.stop_play()
         self._update_power_button()
+        self._flash_until = time.monotonic() + FLASH_SECONDS
         self.settings["macros_enabled"] = self.macros_enabled
         self.settings.save()
         self.log(f"매크로 실행 {'가능' if self.macros_enabled else '불가'} 상태")
+
+    def _overlay_key(self) -> str:
+        label = self.v_overlay.get()
+        return next(k for k, v in OVERLAY_LABELS.items() if v == label)
+
+    def set_overlay_position(self, position: str) -> None:
+        self.overlay.set_position(position)
+        self.v_overlay.set(OVERLAY_LABELS[position])
+        self.settings["overlay_position"] = position
+        self.settings.save()
+        if position != "off":
+            self._flash_until = time.monotonic() + FLASH_SECONDS  # 위치 확인용으로 잠깐 표시
+
+    def overlay_state(self) -> tuple[str, str] | None:
+        """오버레이에 보여줄 (문구, 색상). 보여줄 게 없으면 None."""
+        cd = self.countdown_for("main") or self.countdown_for("editor")
+        if cd:
+            return f"{cd[0]}초 후 {cd[1]}", COLORS["wait"]
+        if self.app.recording:
+            return f"● 녹화 중 ({HOTKEY_RECORD.upper()} 종료)", COLORS["rec"]
+        if self.app.playing:
+            return f"▶ {self.progress_text() or self.app.playing_name or '재생 중'}", COLORS["play"]
+        if time.monotonic() < self._flash_until:
+            if self.macros_enabled:
+                return "● 매크로 실행 가능", COLORS["play"]
+            return "○ 매크로 실행 불가", COLORS["idle"]
+        return None
+
+    def progress_text(self) -> str:
+        prog, macro = self.app.progress, self.app.playing_macro
+        if prog is None or macro is None or not macro.events or self.play_started is None:
+            return ""
+        loop, idx, repeat = prog
+        return (f"{self.app.playing_name or ''} · 루프 {loop}/{repeat or '∞'} · "
+                f"이벤트 {idx + 1}/{len(macro.events)} · {time.monotonic() - self.play_started:.1f}초")
 
     @property
     def toggle_hotkey(self) -> str:
@@ -419,19 +471,19 @@ class Gui:
         self.btn_play.state(["!disabled"] if can_play or playing else ["disabled"])
         self.btn_stop.state(["!disabled"] if playing or cd else ["disabled"])
 
-        prog = self.app.progress
-        macro = self.app.playing_macro
-        if prog is None or macro is None or not macro.events:
+        state = self.overlay_state()
+        if state:
+            self.overlay.show(*state)
+        else:
+            self.overlay.hide()
+        text = self.progress_text()
+        if not text:
             self.progress["value"] = 0
             self.progress_label.configure(text="재생 대기")
             return
-        loop, idx, repeat = prog
-        total = len(macro.events)
-        elapsed = time.monotonic() - self.play_started
-        self.progress["value"] = (idx + 1) / total * 100
-        self.progress_label.configure(
-            text=f"{self.app.playing_name or ''} · 루프 {loop}/{repeat or '∞'} · "
-                 f"이벤트 {idx + 1}/{total} · {elapsed:.1f}초")
+        _, idx, _ = self.app.progress
+        self.progress["value"] = (idx + 1) / len(self.app.playing_macro.events) * 100
+        self.progress_label.configure(text=text)
 
     def close(self) -> None:
         if self._closed:
@@ -445,6 +497,7 @@ class Gui:
             pass
         self.settings["main_geometry"] = self.root.geometry()
         self.settings.save()
+        self.overlay.destroy()
         if self._after_id is not None:
             try:
                 self.root.after_cancel(self._after_id)
@@ -573,6 +626,7 @@ class EditorWindow:
             w.grid(row=i, column=1, sticky="w", padx=6)
         ttk.Label(right, foreground="#666", wraplength=260, justify="left",
                   text="대상 창 제목을 넣으면 그 창이 앞에 있을 때만 입력을 보내고, 좌표를 창 기준으로 저장합니다. "
+                       "마우스 모드를 relative 로 두면 3D 시점 회전용으로 실제 마우스 이동량(Raw Input)을 녹화합니다. "
                        f"녹화 종료는 {HOTKEY_RECORD.upper()} 키를 권장합니다 (버튼 클릭이 기록됨).").grid(
             row=len(PLAY_FIELDS) + 2, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
@@ -591,6 +645,11 @@ class EditorWindow:
     def _auto_coord(self) -> None:
         if not em.has_positional(self.items):
             self.v_coord.set(COORD_LABELS["window" if self.v_title.get().strip() else "screen"])
+
+    @property
+    def relative_mode(self) -> bool:
+        """마우스 모드가 relative 면 Raw Input 이동량으로 녹화한다."""
+        return self.v_opts["mouse_mode"].get() == "relative"
 
     @property
     def coord_space(self) -> str:
@@ -660,7 +719,7 @@ class EditorWindow:
         if len(sel) != 1:
             return
         i = sel[0]
-        kinds = em.PATH_KINDS if self.items[i]["type"] == "path" else em.EDIT_KINDS
+        kinds = {"path": em.PATH_KINDS, "relpath": em.RELPATH_KINDS}.get(self.items[i]["type"], em.EDIT_KINDS)
         result = EventDialog.ask(self.top, kinds, item=self.items[i], pick=self.pick_position)
         if result:
             self._snapshot()
@@ -721,7 +780,8 @@ class EditorWindow:
             return
         ignore = self.gui.recording_ignore_keys(self._hotkey_value(strict=False))
         title, coord = self.v_title.get().strip(), self.coord_space
-        start = lambda: self.gui.guard(lambda: self.app.start_record(title, coord, ignore))
+        relative = self.relative_mode
+        start = lambda: self.gui.guard(lambda: self.app.start_record(title, coord, ignore, relative))
         start() if immediate else self.gui.start_after_delay(start, owner="editor", what="녹화")
 
     def collect_options(self) -> PlayOptions:
@@ -849,7 +909,8 @@ class EditorWindow:
         if cd:
             text, color = f"{cd[0]}초 후 {cd[1]} 시작 — 게임 창으로 전환하세요", "wait"
         elif recording:
-            text, color = f"● 녹화 중 — {HOTKEY_RECORD.upper()}로 종료 (목록 끝에 추가됨)", "rec"
+            mode = " · 상대 이동(Raw Input)" if self.app.recording_relative else ""
+            text, color = f"● 녹화 중{mode} — {HOTKEY_RECORD.upper()}로 종료 (목록 끝에 추가됨)", "rec"
         elif playing:
             text, color = f"▶ 재생 중 — {self.app.playing_name or ''}", "play"
         else:
@@ -876,7 +937,7 @@ class EventDialog:
         self.v_kind = tk.StringVar(self.top, value=labels.get(kind, kinds[0][1]))
         self.v = {k: tk.StringVar(self.top, value=str(init.get(k, default))) for k, default in (
             ("delay_ms", 100), ("key", ""), ("button", "left"), ("x", 0), ("y", 0),
-            ("dx", 0), ("dy", -1), ("hold_ms", ""), ("duration_ms", 0))}
+            ("dx", 0), ("dy", -1), ("hold_ms", ""), ("duration_ms", 0), ("scale_pct", 100))}
         self.v_cursor = tk.BooleanVar(self.top, value=init.get("at_cursor", False))
         if not item and pick is not None:
             try:  # 새 마우스 이벤트는 현재 커서 위치로 시작
@@ -924,12 +985,18 @@ class EventDialog:
         ttk.Entry(sc, textvariable=self.v["dy"], width=7).pack(side="left", padx=4)
         ttk.Label(sc, text="(가로, 세로 · 아래로 = 음수)").pack(side="left")
         row(6, "scroll", "스크롤 칸 수", sc)
-        row(7, "hold", "누름 유지(ms)", ttk.Entry(f, textvariable=self.v["hold_ms"], width=10))
-        row(8, "duration", "이동 시간(ms)", ttk.Entry(f, textvariable=self.v["duration_ms"], width=10))
+        delta = ttk.Frame(f)
+        ttk.Entry(delta, textvariable=self.v["dx"], width=7).pack(side="left")
+        ttk.Entry(delta, textvariable=self.v["dy"], width=7).pack(side="left", padx=4)
+        ttk.Label(delta, text="(오른쪽/아래 = 양수)").pack(side="left")
+        row(7, "delta", "이동량 X, Y", delta)
+        row(8, "hold", "누름 유지(ms)", ttk.Entry(f, textvariable=self.v["hold_ms"], width=10))
+        row(9, "duration", "이동 시간(ms)", ttk.Entry(f, textvariable=self.v["duration_ms"], width=10))
+        row(10, "scale", "이동량 배율(%)", ttk.Entry(f, textvariable=self.v["scale_pct"], width=10))
         self.error = ttk.Label(f, foreground="#c62828", wraplength=320)
-        self.error.grid(row=9, column=0, columnspan=2, sticky="w")
+        self.error.grid(row=11, column=0, columnspan=2, sticky="w")
         btns = ttk.Frame(f)
-        btns.grid(row=10, column=0, columnspan=2, pady=(8, 0))
+        btns.grid(row=12, column=0, columnspan=2, pady=(8, 0))
         ttk.Button(btns, text="확인", command=self._on_ok).pack(side="left", padx=4)
         ttk.Button(btns, text="취소", command=self.top.destroy).pack(side="left")
         self.top.bind("<Return>", lambda e: self._on_ok())
@@ -973,7 +1040,7 @@ class EventDialog:
             self.result = em.build_items(self.kind, delay_ms=v["delay_ms"], key=v["key"],
                                          button=v["button"], x=v["x"], y=v["y"], dx=v["dx"],
                                          dy=v["dy"], hold_ms=v["hold_ms"], at_cursor=self.v_cursor.get(),
-                                         duration_ms=v["duration_ms"],
+                                         duration_ms=v["duration_ms"], scale_pct=v["scale_pct"],
                                          points=self.item.get("points") if self.item else None)
         except ValueError as e:
             self.error.configure(text=str(e))
@@ -986,6 +1053,77 @@ class EventDialog:
         dlg.top.grab_set()
         dlg.top.wait_window()
         return dlg.result
+
+
+def overlay_xy(position: str, screen_w: int, screen_h: int, w: int, h: int, margin: int = 12) -> tuple[int, int]:
+    """8방향 위치 -> 오버레이 좌상단 좌표 (주 모니터 기준)."""
+    x = margin if "w" in position else screen_w - w - margin if "e" in position else (screen_w - w) // 2
+    y = margin if "n" in position else screen_h - h - margin if "s" in position else (screen_h - h) // 2
+    return x, y
+
+
+class Overlay:
+    """화면 가장자리에 뜨는 반투명 상태 표시. 항상 위, 테두리 없음, 클릭은 아래 창(게임)으로 통과한다."""
+
+    def __init__(self, root, position: str = "off") -> None:
+        self.root = root
+        self.position = position
+        self.top: tk.Toplevel | None = None
+        self._shown: tuple | None = None
+        self.visible = False
+
+    def _create(self) -> None:
+        top = self.top = tk.Toplevel(self.root)
+        top.withdraw()
+        top.overrideredirect(True)
+        top.attributes("-topmost", True)
+        try:
+            top.attributes("-alpha", 0.85)
+        except tk.TclError:
+            pass
+        self.label = tk.Label(top, fg="white", font=("", 11, "bold"), padx=12, pady=5)
+        self.label.pack()
+        top.update_idletasks()
+        try:
+            input_backend.make_click_through(int(top.wm_frame(), 16))
+        except Exception:
+            pass
+
+    def set_position(self, position: str) -> None:
+        self.position = position
+        self._shown = None
+        if position == "off":
+            self.hide()
+
+    def show(self, text: str, color: str) -> None:
+        if self.position == "off":
+            self.hide()
+            return
+        if self.top is None:
+            self._create()
+        if self._shown != (text, color):
+            self._shown = (text, color)
+            self.label.configure(text=text, bg=color)
+            self.top.configure(bg=color)
+            self.top.update_idletasks()
+            x, y = overlay_xy(self.position, self.top.winfo_screenwidth(), self.top.winfo_screenheight(),
+                              self.top.winfo_reqwidth(), self.top.winfo_reqheight())
+            self.top.geometry(f"+{x}+{y}")
+        if not self.visible:
+            self.top.deiconify()
+            self.top.attributes("-topmost", True)
+            self.visible = True
+
+    def hide(self) -> None:
+        if self.top is not None and self.visible:
+            self.top.withdraw()
+        self.visible = False
+
+    def destroy(self) -> None:
+        if self.top is not None:
+            self.top.destroy()
+            self.top = None
+        self.visible = False
 
 
 def restore_geometry(window, geometry: str) -> None:

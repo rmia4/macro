@@ -54,14 +54,15 @@ class FakeRecorder:
               {"t": 0.3, "type": "kup", "key": "a"}]
     last = None
 
-    def __init__(self, backend, window_title="", ignore_keys=(), coord_space=None):
+    def __init__(self, backend, window_title="", ignore_keys=(), coord_space=None, relative=False):
         self.window_title, self.ignore_keys, self.coord_space = window_title, ignore_keys, coord_space
+        self.relative = relative
         FakeRecorder.last = self
 
     def start(self):
         if self.coord_space == "window" and not self.window_title:
             raise ValueError("창 기준 좌표는 대상 창 제목이 필요합니다")
-        return self.coord_space or "screen"
+        return "relative" if self.relative else (self.coord_space or "screen")
 
     def stop(self):
         from profiles import Macro

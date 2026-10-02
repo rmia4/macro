@@ -9,7 +9,7 @@ from pathlib import Path
 import keys
 
 VERSION = 1
-EVENT_TYPES = {"move", "mdown", "mup", "scroll", "kdown", "kup", "wait"}  # wait: 지연만 있는 이벤트
+EVENT_TYPES = {"move", "rmove", "mdown", "mup", "scroll", "kdown", "kup", "wait"}  # rmove: 상대 이동, wait: 지연만
 BUTTONS = {"left", "right", "middle", "x1", "x2"}
 COORD_SPACES = {"screen", "window"}
 _NAME_RE = re.compile(r"^[\w\-. ]+$")
@@ -99,7 +99,7 @@ def _validate_events(events: list) -> None:
                 raise MacroFormatError(f"{where}: x, y 가 필요합니다")
         if typ in ("mdown", "mup") and ev.get("button") not in BUTTONS:
             raise MacroFormatError(f"{where}: 잘못된 button {ev.get('button')!r}")
-        if typ == "scroll" and not (_is_num(ev.get("dx")) and _is_num(ev.get("dy"))):
+        if typ in ("scroll", "rmove") and not (_is_num(ev.get("dx")) and _is_num(ev.get("dy"))):
             raise MacroFormatError(f"{where}: dx, dy 가 필요합니다")
         if typ in ("kdown", "kup") and not keys.is_known(ev.get("key", "")):
             raise MacroFormatError(f"{where}: 알 수 없는 key {ev.get('key')!r}")

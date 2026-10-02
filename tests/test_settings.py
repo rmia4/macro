@@ -31,3 +31,11 @@ def test_broken_or_invalid_values_fall_back(tmp_path):
     assert s["toggle_hotkey"] == DEFAULTS["toggle_hotkey"] and s["main_geometry"] == ""
     path.write_text(json.dumps({"start_delay": True}), encoding="utf-8")  # bool 은 숫자로 취급 안 함
     assert Settings(path)["start_delay"] == DEFAULTS["start_delay"]
+
+
+def test_overlay_position_validated(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"overlay_position": "sw"}), encoding="utf-8")
+    assert Settings(path)["overlay_position"] == "sw"
+    path.write_text(json.dumps({"overlay_position": "middle"}), encoding="utf-8")
+    assert Settings(path)["overlay_position"] == DEFAULTS["overlay_position"]

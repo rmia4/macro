@@ -124,3 +124,29 @@ def test_validate_reserved_toggle_hotkey():
                                                                   reserved=("ctrl+f12",)))
     both = em.build_items("tap", key="ctrl") + em.build_items("tap", key="f12")
     assert any("ctrl+f12" in e for e in em.validate_for_save("x", None, both, {}, None, reserved=("ctrl+f12",)))
+
+
+def test_relative_moves_grouped_and_rescaled():
+    events = [{"t": 0.0, "type": "rmove", "dx": 3, "dy": 1}, {"t": 0.01, "type": "rmove", "dx": 3, "dy": 1},
+              {"t": 0.03, "type": "rmove", "dx": 4, "dy": -1}, {"t": 0.05, "type": "mdown", "button": "left"}]
+    items = em.to_items(events)
+    assert [i["type"] for i in items] == ["relpath", "mdown"]
+    assert em.describe(items[0]) == "총 이동 (10, 1) · 3회 · 30ms"
+    assert em.to_events(items) == events
+    assert not em.has_positional(items)
+    f = em.item_fields(items[0])
+    assert (f["duration_ms"], f["scale_pct"]) == (30, 100)
+    new = em.build_items("relpath", delay_ms=0, duration_ms=60, scale_pct=150, points=items[0]["points"])[0]
+    assert [p[0] for p in new["points"]] == [0.0, 0.02, 0.04]
+    assert sum(p[1] for p in new["points"]) == 15 and sum(p[2] for p in new["points"]) == 2  # 총량 보존 반올림
+    with pytest.raises(ValueError):
+        em.build_items("relpath", scale_pct=0, duration_ms=10, points=items[0]["points"])
+
+
+def test_build_rmove():
+    assert em.build_items("rmove", delay_ms=10, dx="-30", dy="5") == [{"type": "rmove", "dx": -30, "dy": 5, "dt": 0.01}]
+    with pytest.raises(ValueError):
+        em.build_items("rmove", dx=0, dy=0)
+    Macro.from_dict({"version": 1, "events": em.to_events(em.build_items("rmove", dx=1, dy=0))})
+    with pytest.raises(Exception):
+        Macro.from_dict({"version": 1, "events": [{"t": 0, "type": "rmove", "dx": 1}]})

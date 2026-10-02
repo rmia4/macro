@@ -48,6 +48,11 @@ class App:
         return self._recorder is not None
 
     @property
+    def recording_relative(self) -> bool:
+        """현재 녹화가 Raw Input 상대 이동 녹화인지."""
+        return self._recorder is not None and getattr(self._recorder, "relative", False)
+
+    @property
     def playing(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
@@ -61,14 +66,14 @@ class App:
 
     # ---- 녹화 ----
     def start_record(self, window_title: str = "", coord_space: str | None = None,
-                     ignore_keys=CONTROL_KEYS) -> str:
+                     ignore_keys=CONTROL_KEYS, relative: bool = False) -> str:
         with self._lock:
             if self.playing:
                 raise RuntimeError("재생 중에는 녹화할 수 없습니다")
             if self._recorder is not None:
                 raise RuntimeError("이미 녹화 중입니다")
             rec = self._recorder_factory(self.backend, window_title, tuple(ignore_keys),
-                                         coord_space=coord_space)
+                                         coord_space=coord_space, relative=relative)
             space = rec.start()
             self._recorder = rec
         self.log(f"● 녹화 시작 (좌표계: {space})")
@@ -89,7 +94,7 @@ class App:
             self.macro = self.stop_record()
             self.macro_name = None
         else:
-            self.start_record(self.options.window_title)
+            self.start_record(self.options.window_title, relative=self.options.mouse_mode == "relative")
 
     # ---- 재생 ----
     def start_play(self, macro: Macro, options: PlayOptions, name: str | None = None) -> None:

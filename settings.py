@@ -9,10 +9,13 @@ import keys
 
 SETTINGS_PATH = Path(__file__).resolve().parent / "settings.json"
 
+OVERLAY_POSITIONS = ("off", "nw", "n", "ne", "w", "e", "sw", "s", "se")
+
 DEFAULTS = {
     "macros_enabled": True,        # 전체 매크로 실행 가능 여부
     "start_delay": 3,              # 버튼으로 시작할 때 지연(초)
     "toggle_hotkey": "ctrl+f12",   # 전체 실행 가능/불가 전환 단축키
+    "overlay_position": "ne",      # 상태 오버레이 위치 (OVERLAY_POSITIONS) 또는 "off"
     "main_geometry": "",           # 창 크기/위치 ("760x520+100+80")
     "editor_geometry": "",
 }
@@ -50,6 +53,8 @@ class Settings:
         except ValueError:
             self.data["toggle_hotkey"] = DEFAULTS["toggle_hotkey"]
         self.data["start_delay"] = min(max(self.data["start_delay"], 0), 30)
+        if self.data["overlay_position"] not in OVERLAY_POSITIONS:
+            self.data["overlay_position"] = DEFAULTS["overlay_position"]
 
     def save(self) -> bool:
         if not self.path:

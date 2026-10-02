@@ -229,3 +229,13 @@ def test_max_minutes_zero_means_unlimited():
     p, be, clock, m = build([key(30, "kdown"), key(60, "kup")], repeat=3, max_minutes=0)
     p.run(m)
     assert len([c for c in be.calls if c[1] == "kdown"]) == 3
+
+
+def test_rmove_sends_relative_deltas_in_any_mode():
+    evs = [mv(0, 100, 100), {"t": 0.1, "type": "rmove", "dx": 5, "dy": -3},
+           {"t": 0.2, "type": "rmove", "dx": 0, "dy": 0}, mv(0.3, 100, 100)]
+    p, be, clock, m = build(evs)
+    be.cursor = (100, 100)
+    p.run(m)
+    # rmove 뒤에는 커서 위치를 모르므로 같은 좌표라도 절대 이동을 다시 보낸다
+    assert be.names() == [("rel", 5, -3), ("abs", 100, 100)]

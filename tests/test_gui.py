@@ -525,3 +525,86 @@ def test_restore_geometry_offscreen(gui):
     assert top.geometry().startswith("500x400") and not top.geometry().endswith("+99999+99999")
     restore_geometry(top, "garbage")                 # 무시
     top.destroy()
+
+
+def test_overlay_xy_eight_directions():
+    from gui import overlay_xy
+    sw, sh, w, h, m = 1920, 1080, 200, 30, 12
+    expect = {"nw": (12, 12), "n": (860, 12), "ne": (1708, 12), "w": (12, 525), "e": (1708, 525),
+              "sw": (12, 1038), "s": (860, 1038), "se": (1708, 1038)}
+    for pos, xy in expect.items():
+        assert overlay_xy(pos, sw, sh, w, h, m) == xy, pos
+
+
+def test_overlay_shows_flash_and_playback(gui):
+    ov = gui.overlay
+    pump(gui)
+    assert not ov.visible                       # 평소에는 숨김
+    gui.toggle_macros_enabled()                 # 전환하면 잠깐 표시
+    pump(gui)
+    assert ov.visible and ov.label.cget("text") == "○ 매크로 실행 불가"
+    gui._flash_until = 0
+    pump(gui)
+    assert not ov.visible
+    gui.toggle_macros_enabled()
+    gui._flash_until = 0
+    gui.tree.selection_set("beta")
+    gui.on_play(immediate=True)
+    pump(gui)
+    assert ov.visible and ov.label.cget("text").startswith("▶ beta · 루프 1/1")
+    assert ov.top.overrideredirect() and ov.top.attributes("-topmost")
+    gui.app.stop_play()
+    gui.app._thread.join(1)
+    pump(gui)
+    assert not ov.visible
+
+
+def test_overlay_position_change_and_off(gui):
+    gui.v_overlay.set("↙ 왼쪽 아래")
+    gui.set_overlay_position(gui._overlay_key())
+    assert gui.settings["overlay_position"] == "sw"
+    pump(gui)
+    ov = gui.overlay
+    assert ov.visible                           # 위치 확인용으로 잠깐 표시
+    gui.root.update()
+    assert ov.top.winfo_x() == 12 and ov.top.winfo_y() > gui.root.winfo_screenheight() // 2
+    gui.set_overlay_position("off")
+    gui._flash_until = 10 ** 9
+    pump(gui)
+    assert not ov.visible
+
+
+def test_overlay_shows_editor_recording(gui):
+    gui.on_add()
+    gui.editor.toggle_record(immediate=True)
+    pump(gui)
+    assert gui.overlay.visible and gui.overlay.label.cget("text").startswith("● 녹화 중")
+
+
+def test_editor_relative_recording_flag(gui):
+    gui.on_add()
+    ed = gui.editor
+    ed.v_opts["mouse_mode"].set("relative")
+    ed.toggle_record(immediate=True)
+    pump(gui)
+    assert FakeRecorder.last.relative and gui.app.recording_relative
+    assert "상대 이동(Raw Input)" in ed.banner.cget("text")
+    ed.toggle_record()
+
+
+def test_event_dialog_rmove_and_relpath(gui):
+    import editor_model as em
+    from gui import EventDialog
+    d = EventDialog(gui.root, em.ADD_KINDS, kind="rmove")
+    gui.root.update()
+    assert d.rows["delta"][0].winfo_ismapped() and not d.rows["scroll"][0].winfo_ismapped()
+    d.v["dx"].set("40"); d.v["dy"].set("0")
+    d._on_ok()
+    assert d.result == [{"type": "rmove", "dx": 40, "dy": 0, "dt": 0.1}]
+    item = {"type": "relpath", "dt": 0.0, "points": [[0.0, 10, 0], [0.01, 10, 0]]}
+    d = EventDialog(gui.root, em.RELPATH_KINDS, item=item)
+    gui.root.update()
+    assert d.rows["scale"][0].winfo_ismapped() and not d.rows["pos"][0].winfo_ismapped()
+    d.v["scale_pct"].set("50")
+    d._on_ok()
+    assert [p[1] for p in d.result[0]["points"]] == [5, 5]

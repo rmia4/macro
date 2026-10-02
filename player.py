@@ -290,6 +290,10 @@ class Player:
         elif typ == "scroll":
             self._goto_if_pos(ev)
             b.scroll(ev["dx"], ev["dy"])
+        elif typ == "rmove":  # Raw Input 으로 녹화한 상대 이동량
+            if ev["dx"] or ev["dy"]:
+                b.mouse_move_rel(int(ev["dx"]), int(ev["dy"]))
+            self._cursor = None  # 커서 위치를 알 수 없게 되었으므로 다음 절대 이동은 반드시 전송
         elif typ == "kdown":
             self._held_keys[ev["key"]] = self._clock()
             b.key_down(ev["key"])

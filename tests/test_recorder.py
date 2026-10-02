@@ -75,3 +75,22 @@ def test_scroll_and_window_origin():
     ev = c.finish(10.2)
     assert ev[0]["x"] == 400 and ev[0]["y"] == 350
     assert ev[1] == {"t": 0.1, "type": "scroll", "x": 500, "y": 400, "dx": 0, "dy": -1}
+
+
+def test_relative_mode_records_raw_deltas_and_buttons_without_coords():
+    c = RecorderCore(relative=True)
+    c.start(10.0, (500, 400))
+    c.on_move(600, 400, 10.05)              # 커서 좌표 이동은 무시
+    c.on_raw_move(5, -2, 10.100)            # 첫 이동은 즉시 기록
+    c.on_raw_move(3, 1, 10.103)             # 10ms 안: 합산 대기
+    c.on_raw_move(2, 1, 10.105)
+    c.on_click(0, 0, "left", True, 10.106)  # 대기 중 이동량 먼저 기록
+    c.on_raw_move(0, 0, 10.107)             # 0 이동은 무시
+    c.on_scroll(0, 0, 0, -1, 10.2)
+    c.on_raw_move(7, 7, 10.3)
+    ev = c.finish(10.4)                     # 눌린 버튼은 좌표 없이 해제
+    types = [(e["type"], e.get("dx"), e.get("dy")) for e in ev]
+    assert types == [("rmove", 5, -2), ("rmove", 5, 2), ("mdown", None, None), ("scroll", 0, -1),
+                     ("rmove", 7, 7), ("mup", None, None)]
+    assert all("x" not in e for e in ev)
+    assert ev[0]["t"] == 0.1  # 첫 입력이 정규화 기준(0.2초)보다 빠르면 그대로

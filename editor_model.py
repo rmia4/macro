@@ -3,6 +3,7 @@
 편집 항목(item)은 이벤트에서 절대 시각 "t" 대신 "dt"(직전 이벤트로부터의 지연, 초)를 가진다.
 연속된 마우스 이동은 하나의 "path" 항목으로 묶는다: {"type": "path", "dt", "points": [[dt, x, y], ...]}
 (points[0] 의 dt 는 0, 항목의 dt 가 첫 점 앞의 지연). 이벤트로 바꿀 때 다시 move 들로 풀린다.
+연속된 상대 이동(rmove)도 같은 방식으로 "relpath" 항목이 된다 (points: [[dt, dx, dy], ...]).
 """
 from __future__ import annotations
 
@@ -14,22 +15,24 @@ from profiles import BUTTONS, macro_path
 
 EVENT_LABELS = {"move": "마우스 이동", "mdown": "마우스 누름", "mup": "마우스 뗌",
                 "scroll": "스크롤", "kdown": "키 누름", "kup": "키 뗌", "wait": "지연",
-                "path": "마우스 이동 경로"}
+                "path": "마우스 이동 경로", "rmove": "마우스 상대 이동", "relpath": "상대 이동 경로"}
 
 # 추가 가능한 종류 (tap/click 은 누름+뗌 두 개의 이벤트를 만든다)
 ADD_KINDS = [("tap", "키 입력 (누르고 떼기)"), ("kdown", "키 누름"), ("kup", "키 뗌"),
              ("click", "마우스 클릭"), ("mdown", "마우스 누름"), ("mup", "마우스 뗌"),
-             ("move", "마우스 이동"), ("scroll", "스크롤"), ("wait", "지연")]
+             ("move", "마우스 이동"), ("rmove", "마우스 상대 이동"), ("scroll", "스크롤"), ("wait", "지연")]
 EDIT_KINDS = [k for k in ADD_KINDS if k[0] not in ("tap", "click")]
 PATH_KINDS = [("path", "마우스 이동 경로")]  # 경로 항목 수정 전용
+RELPATH_KINDS = [("relpath", "상대 이동 경로")]
 
 # 종류별 입력 필드 (cursor: 좌표 대신 현재 커서 위치에서 입력 가능)
 KIND_FIELDS = {
     "tap": {"key", "hold"}, "kdown": {"key"}, "kup": {"key"},
     "click": {"button", "pos", "cursor", "hold"}, "mdown": {"button", "pos", "cursor"},
     "mup": {"button", "pos", "cursor"}, "move": {"pos"}, "scroll": {"pos", "cursor", "scroll"},
-    "wait": set(), "path": {"pos", "duration"},
+    "wait": set(), "path": {"pos", "duration"}, "rmove": {"delta"}, "relpath": {"duration", "scale"},
 }
+GROUPED = {"move": "path", "rmove": "relpath"}  # 연속되면 묶이는 이벤트 -> 묶음 항목 종류
 DEFAULT_HOLD_MS = {"tap": 50, "click": 60}
 POSITIONAL = {"move", "mdown", "mup", "scroll", "path"}
 
@@ -51,11 +54,13 @@ def to_items(events: list[dict]) -> list[dict]:
         dt = round(max(0.0, ev["t"] - prev), 4)
         prev = ev["t"]
         last = items[-1] if items else None
-        if ev["type"] == "move" and last is not None and last["type"] in ("move", "path"):
-            if last["type"] == "move":  # 두 번째 연속 이동부터 경로로 묶는다
-                last = items[-1] = {"type": "path", "dt": last["dt"],
-                                    "points": [[0.0, last["x"], last["y"]]]}
-            last["points"].append([dt, ev["x"], ev["y"]])
+        typ = ev["type"]
+        if typ in GROUPED and last is not None and last["type"] in (typ, GROUPED[typ]):
+            a, b = ("x", "y") if typ == "move" else ("dx", "dy")
+            if last["type"] == typ:  # 두 번째 연속 이동부터 경로로 묶는다
+                last = items[-1] = {"type": GROUPED[typ], "dt": last["dt"],
+                                    "points": [[0.0, last[a], last[b]]]}
+            last["points"].append([dt, ev[a], ev[b]])
             continue
         item = {k: v for k, v in ev.items() if k != "t"}
         item["dt"] = dt
@@ -66,10 +71,11 @@ def to_items(events: list[dict]) -> list[dict]:
 def to_events(items: list[dict]) -> list[dict]:
     events, t = [], 0.0
     for item in items:
-        if item["type"] == "path":
-            for i, (pdt, x, y) in enumerate(item["points"]):
+        if item["type"] in ("path", "relpath"):
+            typ, a, b = ("move", "x", "y") if item["type"] == "path" else ("rmove", "dx", "dy")
+            for i, (pdt, u, v) in enumerate(item["points"]):
                 t = round(t + max(0.0, item.get("dt", 0.0) if i == 0 else pdt), 4)
-                events.append({"t": t, "type": "move", "x": x, "y": y})
+                events.append({"t": t, "type": typ, a: u, b: v})
             continue
         t = round(t + max(0.0, item.get("dt", 0.0)), 4)
         ev = {"t": t}
@@ -83,12 +89,12 @@ def path_duration(item: dict) -> float:
 
 
 def total_duration(items: list[dict]) -> float:
-    return round(sum(max(0.0, i.get("dt", 0.0)) + (path_duration(i) if i["type"] == "path" else 0)
+    return round(sum(max(0.0, i.get("dt", 0.0)) + (path_duration(i) if "points" in i else 0)
                      for i in items), 4)
 
 
 def event_count(items: list[dict]) -> int:
-    return sum(len(i["points"]) if i["type"] == "path" else 1 for i in items)
+    return sum(len(i["points"]) if "points" in i else 1 for i in items)
 
 
 def describe(item: dict) -> str:
@@ -101,6 +107,12 @@ def describe(item: dict) -> str:
         pts = item["points"]
         return (f"({pts[0][1]}, {pts[0][2]}) → ({pts[-1][1]}, {pts[-1][2]}) · "
                 f"{len(pts)}개 지점 · {round(path_duration(item) * 1000)}ms")
+    if typ == "relpath":
+        pts = item["points"]
+        return (f"총 이동 ({sum(p[1] for p in pts)}, {sum(p[2] for p in pts)}) · "
+                f"{len(pts)}회 · {round(path_duration(item) * 1000)}ms")
+    if typ == "rmove":
+        return f"이동량 ({item['dx']}, {item['dy']})"
     pos = f"({item['x']}, {item['y']})" if "x" in item else "(현재 커서 위치)"
     if typ in ("mdown", "mup"):
         return f"{item['button']} {pos}"
@@ -121,11 +133,12 @@ def _int(value, label: str, minimum: int | None = None) -> int:
 
 def build_items(kind: str, *, delay_ms="0", key: str = "", button: str = "left",
                 x="0", y="0", dx="0", dy="0", hold_ms=None, at_cursor: bool = False,
-                duration_ms=None, points: list | None = None) -> list[dict]:
+                duration_ms=None, points: list | None = None, scale_pct="100") -> list[dict]:
     """입력값으로 편집 항목을 만든다. 잘못된 값은 ValueError.
 
     at_cursor: 버튼/스크롤을 좌표 없이 현재 커서 위치에서 입력.
     kind == "path": points(원래 경로)를 끝 위치 (x, y)·이동 시간 duration_ms 에 맞게 보정한다.
+    kind == "relpath": points 의 시간 간격을 duration_ms 에, 이동량을 scale_pct(%) 배율에 맞춘다.
     """
     if kind not in KIND_FIELDS:
         raise ValueError(f"알 수 없는 종류: {kind}")
@@ -137,6 +150,12 @@ def build_items(kind: str, *, delay_ms="0", key: str = "", button: str = "left",
         return [{"type": "path", "dt": dt,
                  "points": reshape_path(points, _int(x, "X"), _int(y, "Y"),
                                         _int(duration_ms, "이동 시간(ms)", 0) / 1000)}]
+    if kind == "relpath":
+        if not points:
+            raise ValueError("경로 정보가 없습니다")
+        scale = _int(scale_pct, "이동량 배율(%)", 1) / 100
+        return [{"type": "relpath", "dt": dt,
+                 "points": rescale_relpath(points, _int(duration_ms, "이동 시간(ms)", 0) / 1000, scale)}]
     base: dict = {}
     if "key" in fields:
         key = key.strip().lower()
@@ -153,6 +172,10 @@ def build_items(kind: str, *, delay_ms="0", key: str = "", button: str = "left",
         base["dx"], base["dy"] = _int(dx, "가로 스크롤"), _int(dy, "세로 스크롤")
         if base["dx"] == 0 and base["dy"] == 0:
             raise ValueError("스크롤 양이 0 입니다")
+    if "delta" in fields:
+        base["dx"], base["dy"] = _int(dx, "이동량 X"), _int(dy, "이동량 Y")
+        if base["dx"] == 0 and base["dy"] == 0:
+            raise ValueError("이동량이 0 입니다")
     if "hold" in fields:
         hold = _int(DEFAULT_HOLD_MS[kind] if hold_ms in (None, "") else hold_ms, "누름 유지(ms)", 0) / 1000
         down, up = ("kdown", "kup") if kind == "tap" else ("mdown", "mup")
@@ -178,12 +201,37 @@ def reshape_path(points: list, end_x: int, end_y: int, duration: float) -> list:
     return out
 
 
+def rescale_relpath(points: list, duration: float, scale: float) -> list:
+    """상대 이동 경로의 시간 간격과 이동량을 비례 조정. 반올림 오차는 누적해서 총 이동량을 보존한다."""
+    n = len(points)
+    old = sum(max(0.0, p[0]) for p in points[1:])
+    out, acc, sent = [], [0.0, 0.0], [0, 0]
+    for i, (pdt, dx, dy) in enumerate(points):
+        if i == 0:
+            new_dt = 0.0
+        elif old > 0:
+            new_dt = round(max(0.0, pdt) * duration / old, 4)
+        else:
+            new_dt = round(duration / (n - 1), 4)
+        acc[0] += dx * scale
+        acc[1] += dy * scale
+        ndx, ndy = round(acc[0]) - sent[0], round(acc[1]) - sent[1]
+        sent[0] += ndx
+        sent[1] += ndy
+        out.append([new_dt, ndx, ndy])
+    return out
+
+
 def item_fields(item: dict) -> dict:
     """편집 대화상자 초기값."""
     out = {"kind": item["type"], "delay_ms": round(item.get("dt", 0.0) * 1000)}
     if item["type"] == "path":
         out["x"], out["y"] = item["points"][-1][1], item["points"][-1][2]
         out["duration_ms"] = round(path_duration(item) * 1000)
+        return out
+    if item["type"] == "relpath":
+        out["duration_ms"] = round(path_duration(item) * 1000)
+        out["scale_pct"] = 100
         return out
     for k in ("key", "button", "x", "y", "dx", "dy"):
         if k in item:
