@@ -89,7 +89,7 @@ class Player:
                  rng: random.Random | None = None,
                  log: Callable[[str], None] | None = None,
                  vision=None) -> None:
-        """vision: (실험적) 화면 조건 판정기 (vision.Vision). 조건 이벤트가 있는 매크로에 필요."""
+        """vision: 화면 조건 판정기 (vision.Vision). 조건 이벤트가 있는 매크로에 필요."""
         self.backend = backend
         self.options = options or PlayOptions()
         self._stop = threading.Event()
@@ -240,7 +240,7 @@ class Player:
             if self._sleep(remaining):
                 return False
 
-    # ---- (실험적) 화면 조건 ----
+    # ---- 화면 조건 ----
     def _wait_condition(self, ev: dict, macro: Macro) -> str:
         """조건이 맞을 때까지 대기. "ok" | "timeout" | "stopped"."""
         timeout = ev.get("timeout", 10)

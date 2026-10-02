@@ -1,9 +1,12 @@
-"""(실험적) 화면 인식: 조건(이미지 / 픽셀 색) 검증과 판정.
+"""화면 인식: 조건(이미지 / 색) 검증과 판정.
 
 조건 형식 (매크로 JSON 의 이벤트 안에 들어간다):
   이미지: {"kind": "image", "template": "확인버튼.png", "region": [x, y, w, h] | null,
            "threshold": 0.85, "negate": false}
-  픽셀:   {"kind": "pixel", "x": 100, "y": 200, "color": "#ff0000", "tolerance": 20, "negate": false}
+  색:     {"kind": "pixel", "x": 100, "y": 200, "w": 30, "h": 10, "color": "#ff0000", "tolerance": 20,
+           "ratio": 0.5, "negate": false}
+          범위 [x, y, w, h] 안에서 color(채널별 ±tolerance)인 픽셀의 비율이 ratio 이상이면 충족.
+          w, h 를 생략하면 (x, y) 한 점만 본다.
 
 좌표는 매크로의 좌표 기준(화면/창)을 따르며, 판정할 때 origin(창 좌상단)을 더해 화면 좌표로 바꾼다.
 template 은 매크로별 이미지 폴더(assets_dir) 안의 파일 이름이다. 주 모니터만 대상으로 한다.
@@ -17,6 +20,7 @@ from pathlib import Path
 COND_KINDS = ("image", "pixel")
 DEFAULT_THRESHOLD = 0.85
 DEFAULT_TOLERANCE = 20
+DEFAULT_RATIO = 0.5
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _TEMPLATE_RE = re.compile(r"^[\w\-. ]+\.png$")
 
@@ -48,7 +52,15 @@ def validate_condition(cond) -> None:
             raise ValueError("threshold 는 0 초과 1 이하여야 합니다")
     else:
         if not (_num(cond.get("x")) and _num(cond.get("y"))):
-            raise ValueError("픽셀 조건에는 x, y 가 필요합니다")
+            raise ValueError("색 조건에는 x, y 가 필요합니다")
+        if ("w" in cond) != ("h" in cond):
+            raise ValueError("색 범위는 너비(w)와 높이(h)를 함께 지정해야 합니다")
+        if "w" in cond and not all(isinstance(cond[k], int) and not isinstance(cond[k], bool) and cond[k] >= 1
+                                   for k in ("w", "h")):
+            raise ValueError("색 범위의 너비·높이는 1 이상의 정수여야 합니다")
+        ratio = cond.get("ratio", DEFAULT_RATIO)
+        if not _num(ratio) or not 0 < ratio <= 1:
+            raise ValueError("ratio(색 비율)는 0 초과 1 이하여야 합니다")
         if not isinstance(cond.get("color"), str) or not _COLOR_RE.match(cond["color"]):
             raise ValueError("color 는 '#rrggbb' 형식이어야 합니다")
         tol = cond.get("tolerance", DEFAULT_TOLERANCE)
@@ -67,14 +79,17 @@ def describe_condition(cond: dict) -> str:
         th = round(cond.get("threshold", DEFAULT_THRESHOLD) * 100)
         where = " 영역 [{}, {}, {}, {}]".format(*cond["region"]) if cond.get("region") else " 화면 전체"
         return f"이미지 '{cond.get('template')}' ≥{th}%{where}{neg}"
-    return (f"픽셀 ({cond.get('x')}, {cond.get('y')}) = {cond.get('color')} "
-            f"±{cond.get('tolerance', DEFAULT_TOLERANCE)}{neg}")
+    color = f"{cond.get('color')} ±{cond.get('tolerance', DEFAULT_TOLERANCE)}"
+    if "w" in cond:
+        ratio = round(cond.get("ratio", DEFAULT_RATIO) * 100)
+        return f"색 범위 [{cond.get('x')}, {cond.get('y')}, {cond['w']}, {cond['h']}] {color} ≥{ratio}%{neg}"
+    return f"색 ({cond.get('x')}, {cond.get('y')}) = {color}{neg}"
 
 
 @dataclass
 class Match:
     matched: bool                         # negate 까지 반영한 최종 결과
-    score: float                          # 이미지: 일치도 0~1, 픽셀: 1 - 차이/255
+    score: float                          # 이미지: 일치도 0~1, 색: 범위 안 목표 색 비율 (한 점이면 1 - 차이/255)
     pos: tuple[int, int] | None = None    # 이미지: 찾은 위치의 중앙 (화면 좌표)
 
 
@@ -143,11 +158,23 @@ class Vision:
         return m
 
     def _check_pixel(self, cond: dict, origin) -> Match:
+        import numpy as np
         x, y = int(round(cond["x"])) + origin[0], int(round(cond["y"])) + origin[1]
-        b, g, r = (int(v) for v in self.grabber.grab(x, y, 1, 1)[0, 0])
         tr, tg, tb = parse_color(cond["color"])
-        diff = max(abs(r - tr), abs(g - tg), abs(b - tb))
-        return Match(diff <= cond.get("tolerance", DEFAULT_TOLERANCE), round(1 - diff / 255, 4))
+        tol = cond.get("tolerance", DEFAULT_TOLERANCE)
+        if "w" not in cond:  # 한 점
+            b, g, r = (int(v) for v in self.grabber.grab(x, y, 1, 1)[0, 0])
+            diff = max(abs(r - tr), abs(g - tg), abs(b - tb))
+            return Match(diff <= tol, round(1 - diff / 255, 4))
+        sw, sh = self.grabber.screen_size()
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(sw, x + cond["w"]), min(sh, y + cond["h"])
+        if x1 <= x0 or y1 <= y0:
+            return Match(False, 0.0)
+        area = self.grabber.grab(x0, y0, x1 - x0, y1 - y0).astype(np.int16)
+        diff = np.abs(area - np.array([tb, tg, tr], dtype=np.int16)).max(axis=2)
+        share = float((diff <= tol).mean())
+        return Match(share >= cond.get("ratio", DEFAULT_RATIO), round(share, 4))
 
     def _check_image(self, cond: dict, origin) -> Match:
         import cv2
@@ -170,6 +197,21 @@ class Vision:
         score = float(max(0.0, min(1.0, score)))
         pos = (x0 + loc[0] + tw // 2, y0 + loc[1] + th // 2)
         return Match(score >= cond.get("threshold", DEFAULT_THRESHOLD), round(score, 4), pos)
+
+
+def dominant_color(img, tolerance: int = DEFAULT_TOLERANCE) -> tuple[str, float]:
+    """범위에서 가장 많이 차지하는 색 ('#rrggbb', 그 색이 허용 오차 안에서 차지하는 비율).
+
+    색을 채널당 16단계로 묶어 가장 많은 묶음을 고르고, 그 묶음 픽셀들의 중앙값을 대표 색으로 쓴다.
+    """
+    import numpy as np
+    px = img.reshape(-1, 3).astype(np.int16)
+    q = px >> 4
+    keys = (q[:, 0] << 8) | (q[:, 1] << 4) | q[:, 2]
+    top = np.bincount(keys).argmax()
+    b, g, r = (int(v) for v in np.median(px[keys == top], axis=0))
+    share = float((np.abs(px - np.array([b, g, r])).max(axis=1) <= tolerance).mean())
+    return f"#{r:02x}{g:02x}{b:02x}", round(share, 4)
 
 
 def save_png(img, path: str | Path) -> None:

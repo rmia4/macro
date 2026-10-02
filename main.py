@@ -101,7 +101,7 @@ class App:
 
     # ---- 재생 ----
     def assets_dir(self, name: str | None) -> Path | None:
-        """(실험적) 매크로별 조건 이미지 폴더: macros/<이름>/"""
+        """매크로별 조건 이미지 폴더: macros/<이름>/"""
         return self.macros_dir / name if name in self.library else None
 
     def start_play(self, macro: Macro, options: PlayOptions, name: str | None = None,
@@ -172,7 +172,7 @@ class App:
               assets: dict[str, Path] | None = None) -> str:
         """라이브러리에 저장. 이름이 바뀌면 이전 파일(과 이미지 폴더)을 지운다. 저장된 이름을 반환.
 
-        assets: (실험적) 조건 이미지 {파일 이름: 원본 경로}. 주면 macros/<이름>/ 을 이것으로 교체하고,
+        assets: 조건 이미지 {파일 이름: 원본 경로}. 주면 macros/<이름>/ 을 이것으로 교체하고,
         None 이면 이미지 폴더는 그대로 둔다 (이름이 바뀌면 폴더만 옮긴다).
         """
         path = macro_path(self.macros_dir, name)
@@ -205,7 +205,7 @@ class App:
         return name
 
     def asset_files(self, name: str) -> dict[str, Path]:
-        """(실험적) 매크로 이미지 폴더의 PNG 파일들."""
+        """매크로 이미지 폴더의 PNG 파일들."""
         d = self.macros_dir / name
         return {p.name: p for p in d.glob("*.png")} if d.is_dir() else {}
 

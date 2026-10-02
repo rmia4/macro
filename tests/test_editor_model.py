@@ -243,7 +243,7 @@ def test_wrap_if_with_else_and_members():
     assert [i["type"] for i in new] == ["if_start", "kdown", "kup", "else", "if_end", "kdown", "kup"]
     assert sel == [0, 4] and new[0]["dt"] == 0.1 and new[1]["dt"] == 0.0
     assert em.depths(new) == [0, 1, 1, 0, 0, 0, 0]
-    assert em.describe(new[0]) == "픽셀 (1, 1) = #000000 ±20 이면"
+    assert em.describe(new[0]) == "색 (1, 1) = #000000 ±20 이면"
     assert em.block_members(new, 0) == {0, 3, 4} and em.block_members(new, 4) == {0, 3, 4}
     assert em.block_members(new, 3) == {3}                     # '아니면'만 지우기
     assert em.block_error(new) is None
@@ -271,3 +271,15 @@ def test_build_check_and_click_image():
     events = em.to_events([it, ck] + _keys("q"))
     Macro.from_dict({"version": 1, "events": events})
     assert "x.png" in vision.templates_in(events)
+
+
+def test_build_condition_color_range():
+    c = em.build_condition(kind="pixel", x="1", y="2", w="30", h="10", color="#ABCDEF", ratio_pct="60")
+    assert c == {"kind": "pixel", "x": 1, "y": 2, "w": 30, "h": 10, "color": "#abcdef", "tolerance": 20,
+                 "ratio": 0.6}
+    assert "w" not in em.build_condition(kind="pixel", x=1, y=1)       # w, h 없으면 한 점
+    with pytest.raises(ValueError):
+        em.build_condition(kind="pixel", w="0", h="3")
+    with pytest.raises(ValueError):
+        em.build_condition(kind="pixel", w="3", h="3", ratio_pct="0")
+    assert all("실험" not in label for label in em.EVENT_LABELS.values())

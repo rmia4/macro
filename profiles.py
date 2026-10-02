@@ -12,10 +12,10 @@ import vision
 VERSION = 1
 EVENT_TYPES = {"move", "rmove", "mdown", "mup", "scroll", "kdown", "kup", "wait",  # rmove: 상대 이동, wait: 지연만
                "repeat_start", "repeat_end",  # 반복 구간: 사이의 이벤트를 count 번 반복 (0 = 무한, 중첩 가능)
-               "wait_until",                  # (실험적) 화면 조건이 맞을 때까지 대기
-               "if_start", "else", "if_end",  # (실험적) 조건 분기
-               "break_if",                    # (실험적) 조건이 맞으면 가장 안쪽 반복 구간 종료
-               "click_image"}                 # (실험적) 이미지를 찾아 그 위치를 클릭
+               "wait_until",                  # 화면 조건이 맞을 때까지 대기
+               "if_start", "else", "if_end",  # 조건 분기
+               "break_if",                    # 조건이 맞으면 가장 안쪽 반복 구간 종료
+               "click_image"}                 # 이미지를 찾아 그 위치를 클릭
 COND_EVENTS = {"wait_until", "if_start", "break_if", "click_image"}
 ON_TIMEOUT = ("stop", "continue")
 MAX_REPEAT = 100000

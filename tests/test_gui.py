@@ -733,6 +733,7 @@ def _open_condition(gui):
 
 def test_condition_dialog_crop_find_and_save(gui, tmp_path):
     ed, d = _open_condition(gui)
+    assert d.top.title() == "조건 대기 추가"                            # 실험 표시 없음
     d._on_ok()
     assert d.result is None and "잘라내기" in d.error.cget("text")      # 이미지 없이 확인 불가
     d.on_crop()                                                          # 지연 0: 바로 캡처 + 선택 화면
@@ -755,7 +756,7 @@ def test_condition_dialog_crop_find_and_save(gui, tmp_path):
     item = d.result
     assert item["cond"]["template"] == "이미지1.png" and item["timeout"] == 5.0
     ed.insert_items([item])
-    assert ed.tree.item("0")["values"][2] == "🔍 조건 대기(실험)"
+    assert ed.tree.item("0")["values"][2] == "🔍 조건 대기"
     ed.v_name.set("반응형")
     assert ed.on_save()
     assert (tmp_path / "반응형" / "이미지1.png").is_file()
@@ -775,20 +776,30 @@ def test_condition_dialog_select_cancel_and_tiny_drag(gui):
     assert [v.get() for v in d.v_region] == ["100", "50", "200", "200"] and ed.available_templates() == set()
 
 
-def test_condition_dialog_pixel_pick_and_window_coords(gui):
+def test_condition_dialog_color_range_pick_and_window_coords(gui):
     ed, d = _open_condition(gui)
     d.v_kind.set("pixel"); d._on_kind()
-    gui.app.backend.cursor = (20, 10)
-    d.on_pick_color()
-    assert (d.v_px.get(), d.v_py.get(), d.v_color.get()) == ("20", "10", "#c83c1e")
+    d.on_pick_color()                                   # 범위 드래그 -> 가장 많은 색
+    d.selector.on_press(Ev(425, 305)); d.selector.on_release(Ev(475, 325))
+    gui.root.update()
+    assert [v.get() for v in (d.v_px, d.v_py, d.v_pw, d.v_ph)] == ["425", "305", "50", "20"]
+    assert d.v_color.get() == "#e62828" and "범위의 9" in d.color_info.cget("text")
     d.on_test()
-    assert d.test_label.cget("text").startswith("✔ 충족")
-    ed.v_title.set("Game")            # 창 기준 (FakeBackend 창 좌상단 = (100, 50))
-    gui.app.backend.cursor = (120, 60)
+    assert d.test_label.cget("text").startswith("✔ 충족 · 색 비율 9")
+    d.v_color.set("#00ff00")
+    d.on_test()
+    assert d.test_label.cget("text").startswith("✘ 불충족")
+    ed.v_title.set("Game")                              # 창 기준 (창 좌상단 = (100, 50))
     d.on_pick_color()
-    assert (d.v_px.get(), d.v_py.get()) == ("20", "10")
+    d.selector.on_press(Ev(425, 305)); d.selector.on_release(Ev(475, 325))
+    assert (d.v_px.get(), d.v_py.get()) == ("325", "255")
+    d.v_ratio.set("70")
     d._on_ok()
-    assert d.result["cond"] == {"kind": "pixel", "x": 20, "y": 10, "color": d.v_color.get(), "tolerance": 20}
+    assert d.result["cond"] == {"kind": "pixel", "x": 325, "y": 255, "w": 50, "h": 20, "color": "#e62828",
+                                "tolerance": 20, "ratio": 0.7}
+    d2 = __import__("gui").ConditionDialog(ed, {"type": "wait_until", "dt": 0,
+                                                "cond": {"kind": "pixel", "x": 1, "y": 2, "color": "#123456"}})
+    assert (d2.v_pw.get(), d2.v_ph.get(), d2.v_ratio.get()) == ("1", "1", "50")   # 예전 한 점 조건
 
 
 def test_editor_condition_edit_and_assets_lifecycle(gui, tmp_path):

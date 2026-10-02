@@ -18,8 +18,8 @@ EVENT_LABELS = {"move": "마우스 이동", "mdown": "마우스 누름", "mup": 
                 "scroll": "스크롤", "kdown": "키 누름", "kup": "키 뗌", "wait": "지연",
                 "path": "마우스 이동 경로", "rmove": "마우스 상대 이동", "relpath": "상대 이동 경로",
                 "repeat_start": "🔁 반복 시작", "repeat_end": "🔁 반복 끝",
-                "wait_until": "🔍 조건 대기(실험)", "if_start": "❓ 만약(실험)", "else": "↪ 아니면",
-                "if_end": "❓ 분기 끝", "break_if": "⏹ 반복 탈출(실험)", "click_image": "🖱 이미지 클릭(실험)"}
+                "wait_until": "🔍 조건 대기", "if_start": "❓ 만약", "else": "↪ 아니면",
+                "if_end": "❓ 분기 끝", "break_if": "⏹ 반복 탈출", "click_image": "🖱 이미지 클릭"}
 BLOCK_MARKERS = ("repeat_start", "repeat_end", "if_start", "else", "if_end")
 
 # 추가 가능한 종류 (tap/click 은 누름+뗌 두 개의 이벤트를 만든다)
@@ -180,7 +180,7 @@ def wrap_repeat(items: list[dict], selected: list[int], count: int) -> tuple[lis
 
 
 def wrap_if(items: list[dict], selected: list[int], cond: dict, with_else: bool = False) -> tuple[list[dict], list[int]]:
-    """(실험적) 선택 범위를 '만약 [조건]' ~ ('아니면') ~ '분기 끝'으로 감싼다."""
+    """선택 범위를 '만약 [조건]' ~ ('아니면') ~ '분기 끝'으로 감싼다."""
     vision.validate_condition(cond)
     tail = ([{"type": "else", "dt": 0.0}] if with_else else []) + [{"type": "if_end", "dt": 0.0}]
     return _wrap(items, selected, {"type": "if_start", "cond": cond, "dt": 0.0}, tail)
@@ -359,8 +359,10 @@ def rescale_relpath(points: list, duration: float, scale: float) -> list:
 
 
 def build_condition(*, kind="image", template="", region=None, threshold_pct="85",
-                    x="0", y="0", color="#000000", tolerance="20", negate=False) -> dict:
-    """(실험적) 조건. region: None(화면 전체) 또는 [x, y, w, h] (문자열 허용). 잘못되면 ValueError."""
+                    x="0", y="0", w=None, h=None, color="#000000", tolerance="20", ratio_pct="50",
+                    negate=False) -> dict:
+    """조건. 이미지 region: None(화면 전체) 또는 [x, y, w, h]. 색: (x, y)에서 w x h 범위
+    (w, h 가 None 이면 한 점). 값은 문자열도 허용. 잘못되면 ValueError."""
     if kind == "image":
         cond = {"kind": "image", "template": str(template).strip(),
                 "threshold": _int(threshold_pct, "일치도 기준(%)", 1) / 100}
@@ -370,6 +372,9 @@ def build_condition(*, kind="image", template="", region=None, threshold_pct="85
     else:
         cond = {"kind": "pixel", "x": _int(x, "X"), "y": _int(y, "Y"),
                 "color": str(color).strip().lower(), "tolerance": _int(tolerance, "허용 오차", 0)}
+        if w is not None or h is not None:
+            cond["w"], cond["h"] = _int(w, "범위 너비", 1), _int(h, "범위 높이", 1)
+            cond["ratio"] = _int(ratio_pct, "색 비율(%)", 1) / 100
     if negate:
         cond["negate"] = True
     vision.validate_condition(cond)
@@ -389,14 +394,14 @@ def _wait_fields(timeout_s, on_timeout, interval_ms) -> dict:
 
 
 def build_wait_until(*, delay_ms="0", timeout_s="10", on_timeout="stop", interval_ms="100", **cond_kw) -> dict:
-    """(실험적) 조건 대기 항목."""
+    """조건 대기 항목."""
     cond = build_condition(**cond_kw)
     return {"type": "wait_until", "dt": _int(delay_ms, "앞 지연(ms)", 0) / 1000, "cond": cond,
             **_wait_fields(timeout_s, on_timeout, interval_ms)}
 
 
 def build_check(kind_event: str, *, delay_ms="0", **cond_kw) -> dict:
-    """(실험적) 판정 한 번 하는 항목: 'if_start'(만약) 또는 'break_if'(반복 탈출)."""
+    """판정 한 번 하는 항목: 'if_start'(만약) 또는 'break_if'(반복 탈출)."""
     if kind_event not in ("if_start", "break_if"):
         raise ValueError(f"알 수 없는 종류: {kind_event}")
     return {"type": kind_event, "dt": _int(delay_ms, "앞 지연(ms)", 0) / 1000, "cond": build_condition(**cond_kw)}
@@ -404,7 +409,7 @@ def build_check(kind_event: str, *, delay_ms="0", **cond_kw) -> dict:
 
 def build_click_image(*, delay_ms="0", button="left", offset_x="0", offset_y="0", hold_ms="60",
                       timeout_s="10", on_timeout="stop", interval_ms="100", **cond_kw) -> dict:
-    """(실험적) 이미지 클릭 항목: 이미지가 보일 때까지 기다렸다가 찾은 위치(+보정)를 클릭."""
+    """이미지 클릭 항목: 이미지가 보일 때까지 기다렸다가 찾은 위치(+보정)를 클릭."""
     cond = build_condition(**dict(cond_kw, negate=False))
     if cond["kind"] != "image":
         raise ValueError("이미지 클릭은 이미지 조건만 쓸 수 있습니다")

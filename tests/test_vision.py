@@ -112,4 +112,42 @@ def test_describe_condition():
     assert vision.describe_condition({"kind": "image", "template": "a.png", "region": [1, 2, 3, 4]}) == \
         "이미지 'a.png' ≥85% 영역 [1, 2, 3, 4]"
     assert vision.describe_condition({"kind": "pixel", "x": 1, "y": 2, "color": "#00ff00", "negate": True}) == \
-        "픽셀 (1, 2) = #00ff00 ±20 아님"
+        "색 (1, 2) = #00ff00 ±20 아님"
+
+
+
+def test_color_range_condition(setup):
+    v, g = setup
+    # 버튼(30x50): 내부 빨강(0,0,220) 대부분 + 흰 테두리 + 초록 대각선
+    cond = {"kind": "pixel", "x": 300, "y": 200, "w": 50, "h": 30, "color": "#dc0000", "tolerance": 10}
+    m = v.check(cond)
+    assert m.matched and 0.6 < m.score < 0.9 and g.calls[-1] == (300, 200, 50, 30)
+    assert not v.check(dict(cond, ratio=0.95)).matched
+    assert not v.check(dict(cond, color="#00ff00")).matched
+    assert v.check(dict(cond, x=390, w=50)).score < 1          # 화면 밖은 잘라냄
+    assert g.calls[-1] == (390, 200, 10, 30)
+    assert not v.check(dict(cond, x=500)).matched              # 완전히 화면 밖
+
+
+def test_dominant_color():
+    _, btn = make_screen()
+    color, share = vision.dominant_color(btn)
+    assert color == "#dc0000" and 0.6 < share < 0.9
+    noisy = np.full((10, 10, 3), (30, 30, 200), dtype=np.uint8)
+    noisy[::3, ::3] = (31, 29, 203)                               # 잡음은 같은 색으로 묶임
+    assert vision.dominant_color(noisy, 5) == ("#c81e1e", 1.0)
+
+
+@pytest.mark.parametrize("cond", [
+    {"kind": "pixel", "x": 1, "y": 1, "color": "#000000", "w": 5},
+    {"kind": "pixel", "x": 1, "y": 1, "color": "#000000", "w": 0, "h": 5},
+    {"kind": "pixel", "x": 1, "y": 1, "color": "#000000", "w": 2, "h": 2, "ratio": 0},
+])
+def test_color_range_validation(cond):
+    with pytest.raises(ValueError):
+        validate_condition(cond)
+
+
+def test_describe_color_range():
+    assert vision.describe_condition({"kind": "pixel", "x": 1, "y": 2, "w": 3, "h": 4, "color": "#00ff00",
+                                      "ratio": 0.7}) == "색 범위 [1, 2, 3, 4] #00ff00 ±20 ≥70%"

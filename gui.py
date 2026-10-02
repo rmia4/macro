@@ -65,7 +65,7 @@ class Gui:
         self.macros_enabled = bool(self.settings["macros_enabled"])  # 전체 매크로 실행 가능 여부
         self._flash_until = 0.0  # 전체 실행 전환 직후 오버레이에 잠깐 상태 표시
         self._notice: tuple[str, float] | None = None  # 오버레이 안내 (문구, 만료 시각)
-        self.grabber = None  # (실험적) 화면 캡처. None 이면 처음 쓸 때 MssGrabber 생성 (테스트에서 주입)
+        self.grabber = None  # 화면 캡처. None 이면 처음 쓸 때 MssGrabber 생성 (테스트에서 주입)
         self._after_id = None
         self._closed = False
         self.play_started: float | None = None
@@ -370,7 +370,7 @@ class Gui:
         return (f"{self.app.playing_name or ''} · 루프 {loop}/{repeat or '∞'} · "
                 f"이벤트 {idx + 1}/{len(macro.events)} · {time.monotonic() - self.play_started:.1f}초")
 
-    # ---- (실험적) 화면 작업: 창을 숨기고 카운트다운 후 실행 ----
+    # ---- 화면 작업: 창을 숨기고 카운트다운 후 실행 ----
     def get_grabber(self):
         if self.grabber is None:
             self.grabber = vision.MssGrabber()
@@ -581,7 +581,7 @@ class EditorWindow:
         self.screen = dict(macro.screen) if macro else None
         self.window = dict(macro.window) if macro and macro.window else None
         opts = options_from_dict(macro.options) if macro else PlayOptions()
-        # (실험적) 조건 이미지 작업 폴더: 저장할 때 macros/<이름>/ 에 반영, 닫으면 삭제
+        # 조건 이미지 작업 폴더: 저장할 때 macros/<이름>/ 에 반영, 닫으면 삭제
         self.assets_dir = Path(tempfile.mkdtemp(prefix="macro_assets_"))
         if self.old_name:
             for fname, src in self.app.asset_files(self.old_name).items():
@@ -670,7 +670,7 @@ class EditorWindow:
         ttk.Button(flow, text="🔁 반복 구간", command=self.on_wrap_repeat).pack(side="left", padx=2)
         screen = ttk.Frame(left)
         screen.pack(fill="x", pady=(4, 0))
-        ttk.Label(screen, text="화면(실험):").pack(side="left")
+        ttk.Label(screen, text="화면:").pack(side="left")
         for text, cmd in (("🔍 조건 대기", self.on_add_condition), ("❓ 조건 분기", self.on_add_branch),
                           ("🖱 이미지 클릭", self.on_add_click), ("⏹ 반복 탈출", self.on_add_break)):
             ttk.Button(screen, text=text, command=cmd).pack(side="left", padx=2)
@@ -892,7 +892,7 @@ class EditorWindow:
         ox, oy = self.coord_origin()
         return x - ox, y - oy
 
-    # ---- (실험적) 조건 대기 ----
+    # ---- 조건 대기 ----
     def new_template_name(self) -> str:
         n = 1
         while (self.assets_dir / f"이미지{n}.png").exists():
@@ -1240,7 +1240,7 @@ class EventDialog:
 
 
 class RegionSelector:
-    """(실험적) 캡처한 화면을 전체 화면으로 띄우고 드래그로 사각형을 고른다.
+    """캡처한 화면을 전체 화면으로 띄우고 드래그로 사각형을 고른다.
     on_done((x, y, w, h)) — 화면 좌표. Esc / 오른쪽 클릭이면 on_done(None)."""
 
     def __init__(self, root, image, on_done, hint: str = "드래그해서 영역을 고르세요 · Esc 취소") -> None:
@@ -1300,7 +1300,7 @@ def search_region_around(rect, screen_w: int, screen_h: int) -> tuple[int, int, 
 
 
 class ConditionDialog:
-    """(실험적) 조건 대기 추가/수정. result: 편집 항목 (취소 시 None)."""
+    """조건 대기 추가/수정. result: 편집 항목 (취소 시 None)."""
 
     TITLES = {"wait": "조건 대기", "if": "조건 분기 (만약)", "break": "반복 탈출", "click": "이미지 클릭"}
 
@@ -1315,7 +1315,7 @@ class ConditionDialog:
         region = cond.get("region")
         self.top = tk.Toplevel(editor.top)
         self.top.withdraw()
-        self.top.title(f"{self.TITLES[mode]} {'수정' if item else '추가'} (실험)")
+        self.top.title(f"{self.TITLES[mode]} {'수정' if item else '추가'}")
         self.top.transient(editor.top)
         self.top.resizable(False, False)
 
@@ -1333,8 +1333,10 @@ class ConditionDialog:
         self.v_region = [var(v) for v in (region or [0, 0, 0, 0])]
         self.v_threshold = var(round(cond.get("threshold", vision.DEFAULT_THRESHOLD) * 100))
         self.v_px, self.v_py = var(cond.get("x", 0)), var(cond.get("y", 0))
+        self.v_pw, self.v_ph = var(cond.get("w", 1)), var(cond.get("h", 1))  # 한 점 조건은 1x1 범위로
         self.v_color = var(cond.get("color", "#000000"))
         self.v_tol = var(cond.get("tolerance", vision.DEFAULT_TOLERANCE))
+        self.v_ratio = var(round(cond.get("ratio", vision.DEFAULT_RATIO) * 100))
         self.v_button = tk.StringVar(self.top, value=(item or {}).get("button", "left"))
         offset = (item or {}).get("offset", [0, 0])
         self.v_off_x, self.v_off_y = var(offset[0]), var(offset[1])
@@ -1349,8 +1351,8 @@ class ConditionDialog:
     def _build(self) -> None:
         f = ttk.Frame(self.top, padding=10)
         f.pack(fill="both")
-        ttk.Label(f, text="⚠ 실험적 기능입니다. 독점 전체 화면 게임에서는 화면을 읽지 못할 수 있습니다.",
-                  foreground="#b26a00").pack(anchor="w", pady=(0, 6))
+        ttk.Label(f, text="독점 전체 화면 게임에서는 화면을 읽지 못할 수 있습니다 (창 모드 권장).",
+                  foreground="#777777").pack(anchor="w", pady=(0, 6))
         intro = {"wait": "조건이 맞을 때까지 기다린 뒤 다음 이벤트로 진행합니다.",
                  "if": "조건이 맞으면 '만약' 구간을, 아니면 '아니면' 구간(있을 때)을 실행합니다. 선택한 이벤트를 감쌉니다.",
                  "break": "조건이 맞으면 가장 안쪽 반복 구간을 끝냅니다 (구간 밖이면 이번 회차를 끝냄).",
@@ -1360,7 +1362,7 @@ class ConditionDialog:
             row = ttk.Frame(f)
             row.pack(fill="x")
             ttk.Label(row, text="조건").pack(side="left")
-            for val, text in (("image", "이미지가 보일 때"), ("pixel", "픽셀 색이 맞을 때")):
+            for val, text in (("image", "이미지가 보일 때"), ("pixel", "범위의 색이 맞을 때")):
                 ttk.Radiobutton(row, text=text, value=val, variable=self.v_kind,
                                 command=self._on_kind).pack(side="left", padx=4)
             neg = {"wait": "반대로 (조건이 '아닐' 때까지 대기)", "if": "반대로 (조건이 '아닐' 때 실행)",
@@ -1394,23 +1396,29 @@ class ConditionDialog:
         ttk.Label(th, text="일치도 기준(%)").pack(side="left")
         ttk.Entry(th, textvariable=self.v_threshold, width=6).pack(side="left", padx=4)
 
-        # 픽셀
-        self.f_pixel = ttk.LabelFrame(f, text="픽셀 색", padding=6)
+        # 범위 색
+        self.f_pixel = ttk.LabelFrame(f, text="범위 색", padding=6)
         prow = ttk.Frame(self.f_pixel)
         prow.pack(fill="x")
-        for label, v in (("X", self.v_px), ("Y", self.v_py)):
-            ttk.Label(prow, text=label).pack(side="left", padx=(0, 2))
-            ttk.Entry(prow, textvariable=v, width=7).pack(side="left", padx=(0, 6))
-        ttk.Label(prow, text="색").pack(side="left")
-        ttk.Entry(prow, textvariable=self.v_color, width=9).pack(side="left", padx=2)
-        self.swatch = tk.Label(prow, width=3, relief="sunken")
-        self.swatch.pack(side="left", padx=4)
+        ttk.Button(prow, text="🎨 범위를 드래그해 색 선택", command=self.on_pick_color).pack(side="left")
+        self.color_info = ttk.Label(prow, text="", foreground="#555")
+        self.color_info.pack(side="left", padx=8)
+        reg = ttk.Frame(self.f_pixel)
+        reg.pack(fill="x", pady=(6, 0))
+        for label, v in (("X", self.v_px), ("Y", self.v_py), ("너비", self.v_pw), ("높이", self.v_ph)):
+            ttk.Label(reg, text=label).pack(side="left", padx=(0, 1))
+            ttk.Entry(reg, textvariable=v, width=6).pack(side="left", padx=(0, 6))
+        crow = ttk.Frame(self.f_pixel)
+        crow.pack(fill="x", pady=(6, 0))
+        ttk.Label(crow, text="색").pack(side="left")
+        ttk.Entry(crow, textvariable=self.v_color, width=9).pack(side="left", padx=2)
+        self.swatch = tk.Label(crow, width=3, relief="sunken")
+        self.swatch.pack(side="left", padx=(2, 10))
         self.v_color.trace_add("write", lambda *a: self._update_swatch())
-        prow2 = ttk.Frame(self.f_pixel)
-        prow2.pack(fill="x", pady=(6, 0))
-        ttk.Button(prow2, text="🎯 커서 위치의 색 가져오기", command=self.on_pick_color).pack(side="left")
-        ttk.Label(prow2, text="허용 오차(0~255)").pack(side="left", padx=(10, 2))
-        ttk.Entry(prow2, textvariable=self.v_tol, width=5).pack(side="left")
+        ttk.Label(crow, text="허용 오차").pack(side="left")
+        ttk.Entry(crow, textvariable=self.v_tol, width=4).pack(side="left", padx=(2, 10))
+        ttk.Label(crow, text="이 색의 비율 ≥ (%)").pack(side="left")
+        ttk.Entry(crow, textvariable=self.v_ratio, width=4).pack(side="left", padx=2)
 
         # 이미지 클릭 설정
         self.f_click = ttk.LabelFrame(f, text="클릭", padding=6)
@@ -1537,19 +1545,33 @@ class ConditionDialog:
         self._on_kind()
 
     def on_pick_color(self) -> None:
+        """범위를 드래그하면 그 범위에서 가장 많은 색을 목표 색으로 정한다."""
         def action(restore):
-            try:
-                sx, sy = self.editor.app.backend.cursor_pos()
-                b, g, r = (int(v) for v in self.gui.get_grabber().grab(sx, sy, 1, 1)[0, 0])
-                ox, oy = self.editor.coord_origin()
-                self.v_px.set(str(sx - ox))
-                self.v_py.set(str(sy - oy))
-                self.v_color.set(f"#{r:02x}{g:02x}{b:02x}")
-                self.error.configure(text="")
-            except Exception as e:
-                self.error.configure(text=str(e))
-            restore()
-        self.gui.run_screen_action([], "커서 위치 색 가져오기", action)
+            grabber = self.gui.get_grabber()
+            sw, sh = grabber.screen_size()
+            shot = grabber.grab(0, 0, sw, sh)
+            self.selector = RegionSelector(self.gui.root, shot, lambda rect: self._on_color_region(rect, shot, restore),
+                                           "색을 확인할 범위를 드래그하세요 · Esc 취소")
+        self.gui.run_screen_action(self._screen_windows(), "화면 캡처", action)
+
+    def _on_color_region(self, rect, shot, restore) -> None:
+        restore()
+        self._regrab()
+        if rect is None:
+            return
+        try:
+            ox, oy = self.editor.coord_origin()
+            tol = int(self.v_tol.get())
+        except ValueError as e:
+            self.error.configure(text=str(e) if "창" in str(e) else "허용 오차를 숫자로 입력하세요")
+            return
+        x, y, w, h = rect
+        color, share = vision.dominant_color(shot[y:y + h, x:x + w], tol)
+        for v, value in zip((self.v_px, self.v_py, self.v_pw, self.v_ph), (x - ox, y - oy, w, h)):
+            v.set(str(value))
+        self.v_color.set(color)
+        self.color_info.configure(text=f"가장 많은 색 {color} · 범위의 {share * 100:.0f}%")
+        self.error.configure(text="")
 
     def on_test(self) -> None:
         try:
@@ -1563,7 +1585,8 @@ class ConditionDialog:
         def action(restore):
             try:
                 m = vision.Vision(self.editor.assets_dir, self.gui.get_grabber()).check(item["cond"], origin)
-                text = f"{'✔ 충족' if m.matched else '✘ 불충족'} · 일치도 {m.score * 100:.0f}%"
+                measure = "색 비율" if item["cond"]["kind"] == "pixel" else "일치도"
+                text = f"{'✔ 충족' if m.matched else '✘ 불충족'} · {measure} {m.score * 100:.0f}%"
                 if m.pos:
                     text += f" · 찾은 위치 ({m.pos[0] - origin[0]}, {m.pos[1] - origin[1]})"
                 self.test_label.configure(text=text, foreground="#2e7d32" if m.matched else "#c62828")
@@ -1587,6 +1610,7 @@ class ConditionDialog:
         region = None if self.v_full.get() else [v.get() for v in self.v_region]
         cond_kw = dict(kind=self.v_kind.get(), template=self.v_template.get(), region=region,
                        threshold_pct=self.v_threshold.get(), x=self.v_px.get(), y=self.v_py.get(),
+                       w=self.v_pw.get(), h=self.v_ph.get(), ratio_pct=self.v_ratio.get(),
                        color=self.v_color.get(), tolerance=self.v_tol.get(), negate=self.v_negate.get())
         wait_kw = dict(timeout_s=self.v_timeout.get(), on_timeout=self.v_on_timeout.get(),
                        interval_ms=self.v_interval.get())
