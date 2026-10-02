@@ -121,3 +121,28 @@ def test_start_play_creates_vision_for_condition_macros(tmp_path):
     app.start_play(cond, PlayOptions(), "cond")
     assert made == [tmp_path / "cond"] and app._player.vision == ("vision", tmp_path / "cond")
     app.stop_play(); app._thread.join(1)
+
+
+
+def test_store_assets_replace_rename_delete(tmp_path):
+    app, out = make_app(tmp_path)
+    src = tmp_path / "staging"
+    src.mkdir()
+    (src / "a.png").write_bytes(b"A")
+    (src / "unused.png").write_bytes(b"U")
+    m = Macro(events=[{"t": 0, "type": "kdown", "key": "a"}])
+    app.store("m1", m, assets={"a.png": src / "a.png"})
+    assert sorted(p.name for p in (tmp_path / "m1").iterdir()) == ["a.png"]
+    assert app.asset_files("m1") == {"a.png": tmp_path / "m1" / "a.png"}
+    app.store("m2", m, old_name="m1")                       # assets=None: 폴더만 옮김
+    assert not (tmp_path / "m1").exists() and (tmp_path / "m2" / "a.png").read_bytes() == b"A"
+    (src / "b.png").write_bytes(b"B")
+    app.store("m2", m, old_name="m2", assets={"b.png": src / "b.png"})   # 교체
+    assert sorted(p.name for p in (tmp_path / "m2").iterdir()) == ["b.png"]
+    app.store("m2", m, old_name="m2", assets={})            # 이미지 없음 -> 폴더 삭제
+    assert not (tmp_path / "m2").exists()
+    app.store("m3", m, assets={"b.png": src / "b.png"})
+    app.delete("m3")
+    assert not (tmp_path / "m3").exists() and not (tmp_path / "m3.json").exists()
+    app.reload_library()
+    assert "m3" not in app.library and set(app.library) == {"m2"}   # 이미지 폴더는 목록에 안 나옴

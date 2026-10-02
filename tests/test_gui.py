@@ -695,3 +695,155 @@ def test_editor_wrap_overlapping_selection_shows_error(gui):
     ed.tree.selection_set(["0", "1"])  # 반복 시작 + 안쪽 일부
     ed.wrap_repeat(3)
     assert "겹칩니다" in gui.shown[-1][1]
+
+
+
+class ScreenGrabber:
+    """GUI 테스트용 가짜 화면: 배경 잡음 + 버튼 하나."""
+    def __init__(self):
+        import numpy as np
+        rng = np.random.default_rng(1)
+        self.screen = rng.integers(0, 60, size=(400, 600, 3), dtype=np.uint8)
+        self.screen[300:330, 420:480] = (40, 40, 230)
+        self.screen[300:303, 420:480] = 255
+        for i in range(30):
+            self.screen[300 + i, 420 + i] = (0, 255, 0)
+        self.screen[10, 20] = (30, 60, 200)   # BGR -> #c83c1e
+
+    def screen_size(self):
+        return 600, 400
+
+    def grab(self, x, y, w, h):
+        return self.screen[y:y + h, x:x + w].copy()
+
+
+class Ev:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+
+def _open_condition(gui):
+    pytest.importorskip("cv2")
+    from gui import ConditionDialog
+    gui.grabber = ScreenGrabber()
+    gui.delay.set("0")
+    gui.on_add()
+    return gui.editor, ConditionDialog(gui.editor)
+
+
+def test_condition_dialog_crop_find_and_save(gui, tmp_path):
+    ed, d = _open_condition(gui)
+    d._on_ok()
+    assert d.result is None and "잘라내기" in d.error.cget("text")      # 이미지 없이 확인 불가
+    d.on_crop()                                                          # 지연 0: 바로 캡처 + 선택 화면
+    sel = d.selector
+    assert sel.top.winfo_exists() and not ed.top.winfo_viewable()       # 편집 창은 숨김
+    sel.on_press(Ev(420, 300)); sel.on_drag(Ev(450, 315)); sel.on_release(Ev(480, 330))
+    gui.root.update()
+    assert d.v_template.get() == "이미지1.png" and (ed.assets_dir / "이미지1.png").is_file()
+    assert [v.get() for v in d.v_region] == ["380", "260", "140", "110"]   # 주변 여유 40px
+    assert ed.top.winfo_viewable() and not d.v_full.get()
+    d.on_test()
+    assert d.test_label.cget("text").startswith("✔ 충족 · 일치도 100%")
+    assert "찾은 위치 (450, 315)" in d.test_label.cget("text")
+    d.v_negate.set(True)
+    d.on_test()
+    assert d.test_label.cget("text").startswith("✘ 불충족")
+    d.v_negate.set(False)
+    d.v_timeout.set("5")
+    d._on_ok()
+    item = d.result
+    assert item["cond"]["template"] == "이미지1.png" and item["timeout"] == 5.0
+    ed.insert_items([item])
+    assert ed.tree.item("0")["values"][2] == "🔍 조건 대기(실험)"
+    ed.v_name.set("반응형")
+    assert ed.on_save()
+    assert (tmp_path / "반응형" / "이미지1.png").is_file()
+    assert gui.app.library["반응형"].events[0]["type"] == "wait_until"
+
+
+def test_condition_dialog_select_cancel_and_tiny_drag(gui):
+    ed, d = _open_condition(gui)
+    d.on_crop()
+    d.selector.on_press(Ev(10, 10)); d.selector.on_release(Ev(12, 11))   # 너무 작음: 무시
+    assert d.selector.top.winfo_exists()
+    d.selector.finish(None)                                               # Esc
+    gui.root.update()
+    assert d.v_template.get() == "" and ed.top.winfo_viewable()
+    d.on_pick_region()                                                    # 영역만 지정 (이미지 저장 없음)
+    d.selector.on_press(Ev(100, 50)); d.selector.on_release(Ev(300, 250))
+    assert [v.get() for v in d.v_region] == ["100", "50", "200", "200"] and ed.available_templates() == set()
+
+
+def test_condition_dialog_pixel_pick_and_window_coords(gui):
+    ed, d = _open_condition(gui)
+    d.v_kind.set("pixel"); d._on_kind()
+    gui.app.backend.cursor = (20, 10)
+    d.on_pick_color()
+    assert (d.v_px.get(), d.v_py.get(), d.v_color.get()) == ("20", "10", "#c83c1e")
+    d.on_test()
+    assert d.test_label.cget("text").startswith("✔ 충족")
+    ed.v_title.set("Game")            # 창 기준 (FakeBackend 창 좌상단 = (100, 50))
+    gui.app.backend.cursor = (120, 60)
+    d.on_pick_color()
+    assert (d.v_px.get(), d.v_py.get()) == ("20", "10")
+    d._on_ok()
+    assert d.result["cond"] == {"kind": "pixel", "x": 20, "y": 10, "color": d.v_color.get(), "tolerance": 20}
+
+
+def test_editor_condition_edit_and_assets_lifecycle(gui, tmp_path):
+    import shutil
+    ed, d = _open_condition(gui)
+    d.on_crop()
+    d.selector.on_press(Ev(420, 300)); d.selector.on_release(Ev(480, 330))
+    d._on_ok()
+    ed.insert_items([d.result])
+    ed.v_name.set("원본")
+    assert ed.on_save()
+    staging = ed.assets_dir
+    assert not staging.exists()                                           # 닫으면 작업 폴더 삭제
+    gui.tree.selection_set("원본")
+    gui.on_duplicate()
+    assert (tmp_path / "원본 복사" / "이미지1.png").is_file()                # 복제 시 이미지도 복사
+    gui.tree.selection_set("원본")
+    gui.on_edit()
+    ed = gui.editor
+    assert (ed.assets_dir / "이미지1.png").is_file()                        # 기존 이미지를 작업 폴더로
+    from gui import ConditionDialog
+    d = ConditionDialog(ed, ed.items[0])
+    assert d.v_template.get() == "이미지1.png" and d.v_timeout.get() == "10" and d._thumb is not None
+    d.top.destroy()
+    ed.v_name.set("이름변경")
+    assert ed.on_save()
+    assert not (tmp_path / "원본").exists() and (tmp_path / "이름변경" / "이미지1.png").is_file()
+    # 이미지 파일이 없으면 저장 거부
+    gui.tree.selection_set("이름변경")
+    gui.on_edit()
+    ed = gui.editor
+    shutil.rmtree(ed.assets_dir); ed.assets_dir.mkdir()
+    assert not ed.on_save() and "조건 이미지가 없습니다" in gui.shown[-1][1]
+
+
+def test_editor_test_play_uses_staging_assets(gui, monkeypatch):
+    ed, d = _open_condition(gui)
+    d.on_crop()
+    d.selector.on_press(Ev(420, 300)); d.selector.on_release(Ev(480, 330))
+    d._on_ok()
+    ed.insert_items([d.result])
+    calls = []
+    monkeypatch.setattr(gui.app, "start_play", lambda *a: calls.append(a))
+    ed.test_play()
+    assert calls and calls[0][3] == ed.assets_dir
+
+
+def test_run_screen_action_countdown_hides_and_restores(gui):
+    ed, _ = _open_condition(gui)
+    gui.delay.set("1")
+    ran = []
+    gui.run_screen_action([ed.top], "화면 캡처", lambda restore: (ran.append(1), restore()))
+    gui.root.update()
+    assert not ran and not ed.top.winfo_viewable()
+    assert gui.overlay_state()[0] == "1초 후 화면 캡처"
+    for _ in range(14):
+        time.sleep(0.1); gui.root.update()
+    assert ran == [1] and ed.top.winfo_viewable()

@@ -203,3 +203,28 @@ def test_wait_until_item_description():
     assert em.EVENT_LABELS["wait_until"].startswith("🔍")
     assert em.describe(item) == "이미지 'ok.png' ≥90% 화면 전체 · 무제한 · 초과 시 계속"
     assert em.has_positional([item])
+
+
+def test_build_wait_until():
+    it = em.build_wait_until(delay_ms="200", kind="image", template="이미지1.png", region=["10", "20", "30", "40"],
+                             threshold_pct="90", timeout_s="2.5", on_timeout="continue", interval_ms="50")
+    assert it == {"type": "wait_until", "dt": 0.2, "timeout": 2.5, "on_timeout": "continue", "interval": 0.05,
+                  "cond": {"kind": "image", "template": "이미지1.png", "threshold": 0.9, "region": [10, 20, 30, 40]}}
+    px = em.build_wait_until(kind="pixel", x=5, y=6, color="#AABBCC", tolerance="3", negate=True, timeout_s="0")
+    assert px["cond"] == {"kind": "pixel", "x": 5, "y": 6, "color": "#aabbcc", "tolerance": 3, "negate": True}
+    assert px["timeout"] == 0
+    Macro.from_dict({"version": 1, "events": em.to_events([it, px])})
+    for kw in ({"kind": "image", "template": ""}, {"kind": "image", "template": "a.png", "threshold_pct": "0"},
+               {"kind": "image", "template": "a.png", "region": [0, 0, 0, 5]},
+               {"kind": "pixel", "color": "red"}, {"kind": "pixel", "timeout_s": "-1"},
+               {"kind": "pixel", "timeout_s": "abc"}, {"kind": "pixel", "interval_ms": "5"}):
+        with pytest.raises(ValueError):
+            em.build_wait_until(**kw)
+
+
+def test_validate_missing_templates():
+    it = em.build_wait_until(kind="image", template="a.png")
+    items = [it] + em.build_items("tap", key="q")
+    assert any("조건 이미지가 없습니다: a.png" in e for e in em.validate_for_save("x", None, items, {}, None,
+                                                                          available_templates=set()))
+    assert em.validate_for_save("x", None, items, {}, None, available_templates={"a.png"}) == []

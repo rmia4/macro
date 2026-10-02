@@ -314,6 +314,34 @@ def rescale_relpath(points: list, duration: float, scale: float) -> list:
     return out
 
 
+def build_wait_until(*, delay_ms="0", kind="image", template="", region=None, threshold_pct="85",
+                     x="0", y="0", color="#000000", tolerance="20", negate=False,
+                     timeout_s="10", on_timeout="stop", interval_ms="100") -> dict:
+    """(실험적) 조건 대기 항목. region: None(화면 전체) 또는 [x, y, w, h] (문자열 허용). 잘못되면 ValueError."""
+    if kind == "image":
+        cond = {"kind": "image", "template": str(template).strip(),
+                "threshold": _int(threshold_pct, "일치도 기준(%)", 1) / 100}
+        if region is not None:
+            cond["region"] = [_int(region[0], "영역 X"), _int(region[1], "영역 Y"),
+                              _int(region[2], "영역 너비", 1), _int(region[3], "영역 높이", 1)]
+    else:
+        cond = {"kind": "pixel", "x": _int(x, "X"), "y": _int(y, "Y"),
+                "color": str(color).strip().lower(), "tolerance": _int(tolerance, "허용 오차", 0)}
+    if negate:
+        cond["negate"] = True
+    vision.validate_condition(cond)
+    try:
+        timeout = float(str(timeout_s).strip())
+    except ValueError:
+        raise ValueError("최대 대기(초): 숫자를 입력하세요") from None
+    if timeout < 0:
+        raise ValueError("최대 대기(초): 0 이상이어야 합니다 (0 = 무제한)")
+    if on_timeout not in ("stop", "continue"):
+        raise ValueError("시간 초과 시 동작이 잘못되었습니다")
+    return {"type": "wait_until", "dt": _int(delay_ms, "앞 지연(ms)", 0) / 1000, "cond": cond,
+            "timeout": timeout, "on_timeout": on_timeout, "interval": _int(interval_ms, "확인 간격(ms)", 10) / 1000}
+
+
 def item_fields(item: dict) -> dict:
     """편집 대화상자 초기값."""
     out = {"kind": item["type"], "delay_ms": round(item.get("dt", 0.0) * 1000)}
@@ -348,8 +376,10 @@ def unique_name(base: str, existing) -> str:
 
 
 def validate_for_save(name: str, hotkey: str | None, items: list[dict],
-                      library: dict, old_name: str | None, reserved=()) -> list[str]:
-    """reserved: 매크로가 쓸 수 없는 다른 단축키 (예: 전체 실행 전환 키)."""
+                      library: dict, old_name: str | None, reserved=(),
+                      available_templates: set[str] | None = None) -> list[str]:
+    """reserved: 매크로가 쓸 수 없는 다른 단축키 (예: 전체 실행 전환 키).
+    available_templates: 사용 가능한 조건 이미지 이름 (None 이면 검사하지 않음)."""
     errors = []
     try:
         macro_path(".", name)
@@ -381,6 +411,10 @@ def validate_for_save(name: str, hotkey: str | None, items: list[dict],
     err = block_error(items)
     if err:
         errors.append(f"반복 구간: {err}")
+    if available_templates is not None:
+        missing = sorted(vision.templates_in(items) - available_templates)
+        if missing:
+            errors.append(f"조건 이미지가 없습니다: {', '.join(missing)}")
     used_keys = {keys.hotkey_key(i["key"]) for i in items if "key" in i}
     bad = sorted(k for k in CONTROL_KEYS if k in used_keys)
     for combo in ([hotkey] if parts else []) + [r for r in reserved if r]:

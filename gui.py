@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import copy
 import queue
+import shutil
 import sys
+import tempfile
 import time
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, simpledialog, ttk
@@ -21,6 +23,8 @@ from main import App
 from player import PlayOptions, options_from_dict, options_to_dict, set_option
 from profiles import BUTTONS, Macro
 from settings import OVERLAY_POSITIONS, SETTINGS_PATH, Settings
+import vision
+from pathlib import Path
 
 # (옵션 이름, 라벨, 종류)  종류: entry | check | combo
 PLAY_FIELDS = [
@@ -60,6 +64,8 @@ class Gui:
         self._countdown_what = ""
         self.macros_enabled = bool(self.settings["macros_enabled"])  # 전체 매크로 실행 가능 여부
         self._flash_until = 0.0  # 전체 실행 전환 직후 오버레이에 잠깐 상태 표시
+        self._notice: tuple[str, float] | None = None  # 오버레이 안내 (문구, 만료 시각)
+        self.grabber = None  # (실험적) 화면 캡처. None 이면 처음 쓸 때 MssGrabber 생성 (테스트에서 주입)
         self._after_id = None
         self._closed = False
         self.play_started: float | None = None
@@ -287,7 +293,7 @@ class Gui:
         dup = Macro.from_dict(copy.deepcopy(self.app.library[name].to_dict()))
         dup.hotkey = None  # 핫키는 중복될 수 없다
         new = em.unique_name(f"{name} 복사", self.app.library)
-        if self.guard(lambda: self.app.store(new, dup)):
+        if self.guard(lambda: self.app.store(new, dup, assets=self.app.asset_files(name))):
             self.refresh_list(select=new)
 
     def on_delete(self) -> None:
@@ -332,6 +338,8 @@ class Gui:
 
     def overlay_state(self) -> tuple[str, str] | None:
         """오버레이에 보여줄 (문구, 색상). 보여줄 게 없으면 None."""
+        if self._notice and time.monotonic() < self._notice[1]:
+            return self._notice[0], COLORS["wait"]
         cd = self.countdown_for("main") or self.countdown_for("editor")
         if cd:
             return f"{cd[0]}초 후 {cd[1]}", COLORS["wait"]
@@ -361,6 +369,52 @@ class Gui:
         loop, idx, repeat = prog
         return (f"{self.app.playing_name or ''} · 루프 {loop}/{repeat or '∞'} · "
                 f"이벤트 {idx + 1}/{len(macro.events)} · {time.monotonic() - self.play_started:.1f}초")
+
+    # ---- (실험적) 화면 작업: 창을 숨기고 카운트다운 후 실행 ----
+    def get_grabber(self):
+        if self.grabber is None:
+            self.grabber = vision.MssGrabber()
+        return self.grabber
+
+    def notice(self, text: str, seconds: float = 1.2) -> None:
+        self._notice = (text, time.monotonic() + seconds)
+        self.log(text)
+
+    def run_screen_action(self, windows, label: str, action) -> None:
+        """windows 를 숨기고 '버튼 시작 지연' 동안 카운트다운한 뒤 action(restore) 실행.
+        action 은 작업이 끝나면 restore() 를 호출해 창을 되돌려야 한다."""
+        try:
+            delay = max(0, int(float(self.delay.get())))
+        except ValueError:
+            delay = 3
+        hidden = []
+        for w in windows:
+            if w is not None and w.winfo_exists() and w.winfo_viewable():
+                if w.grab_current() is w:
+                    w.grab_release()
+                w.withdraw()
+                hidden.append(w)
+
+        def restore() -> None:
+            for w in reversed(hidden):
+                if w.winfo_exists():
+                    w.deiconify()
+                    w.lift()
+
+        def tick(n: int) -> None:
+            if n > 0:
+                self.notice(f"{n}초 후 {label}", 1.2)
+                self.root.after(1000, tick, n - 1)
+                return
+            self._notice = None
+            self.root.update()  # 숨긴 창이 실제로 사라진 뒤 화면을 읽는다
+            try:
+                action(restore)
+            except Exception as e:
+                restore()
+                self.log(f"오류: {e}")
+
+        tick(delay)
 
     @property
     def toggle_hotkey(self) -> str:
@@ -527,6 +581,11 @@ class EditorWindow:
         self.screen = dict(macro.screen) if macro else None
         self.window = dict(macro.window) if macro and macro.window else None
         opts = options_from_dict(macro.options) if macro else PlayOptions()
+        # (실험적) 조건 이미지 작업 폴더: 저장할 때 macros/<이름>/ 에 반영, 닫으면 삭제
+        self.assets_dir = Path(tempfile.mkdtemp(prefix="macro_assets_"))
+        if self.old_name:
+            for fname, src in self.app.asset_files(self.old_name).items():
+                shutil.copyfile(src, self.assets_dir / fname)
 
         self.top = tk.Toplevel(gui.root)
         self.top.minsize(900, 560)
@@ -589,7 +648,7 @@ class EditorWindow:
         frame = ttk.Frame(left)
         frame.pack(fill="both", expand=True, pady=4)
         cols = ("no", "delay", "type", "detail")
-        self.tree = ttk.Treeview(frame, columns=cols, show="headings", height=16, selectmode="extended")
+        self.tree = ttk.Treeview(frame, columns=cols, show="headings", height=10, selectmode="extended")
         for col, text, width in zip(cols, ("#", "앞 지연(ms)", "종류", "내용"), (50, 90, 125, 200)):
             self.tree.heading(col, text=text)
             self.tree.column(col, width=width, anchor="w", stretch=col == "detail")
@@ -605,7 +664,11 @@ class EditorWindow:
         ttk.Label(add, text="추가:").pack(side="left")
         for text, kind in (("키 입력", "tap"), ("마우스 클릭", "click"), ("지연", "wait"), ("기타…", None)):
             ttk.Button(add, text=text, width=9, command=lambda k=kind: self.on_add(k)).pack(side="left", padx=2)
-        ttk.Button(add, text="🔁 반복 구간", command=self.on_wrap_repeat).pack(side="left", padx=(10, 2))
+        flow = ttk.Frame(left)
+        flow.pack(fill="x", pady=(4, 0))
+        ttk.Label(flow, text="흐름:").pack(side="left")
+        ttk.Button(flow, text="🔁 반복 구간", command=self.on_wrap_repeat).pack(side="left", padx=2)
+        ttk.Button(flow, text="🔍 조건 대기(실험)", command=self.on_add_condition).pack(side="left", padx=2)
         edit = ttk.Frame(left)
         edit.pack(fill="x", pady=(4, 0))
         for text, cmd in (("수정", self.on_edit), ("삭제", self.on_delete),
@@ -738,8 +801,15 @@ class EditorWindow:
         if len(sel) != 1:
             return
         i = sel[0]
+        if self.items[i]["type"] == "wait_until":
+            result = ConditionDialog.ask(self, self.items[i])
+            if result:
+                self._snapshot()
+                self.items[i] = result
+                self._changed([i])
+            return
         if self.items[i]["type"] not in em.KIND_FIELDS:
-            return  # (실험적) 조건 대기 편집 화면은 다음 단계에서 추가
+            return
         kinds = {"path": em.PATH_KINDS, "relpath": em.RELPATH_KINDS, "repeat_start": em.REPEAT_START_KINDS,
                  "repeat_end": em.REPEAT_END_KINDS}.get(self.items[i]["type"], em.EDIT_KINDS)
         result = EventDialog.ask(self.top, kinds, item=self.items[i], pick=self.pick_position)
@@ -795,16 +865,36 @@ class EditorWindow:
         self.items = items
         self._changed(select)
 
+    def coord_origin(self) -> tuple[int, int]:
+        """이 매크로 좌표의 원점(화면 좌표). 창 기준이면 대상 창의 좌상단."""
+        if self.coord_space != "window":
+            return 0, 0
+        title = self.v_title.get().strip()
+        rect = self.app.backend.find_window_rect(title) if title else None
+        if rect is None:
+            raise ValueError("창 기준 좌표: 대상 창을 찾을 수 없습니다")
+        return rect[0], rect[1]
+
     def pick_position(self) -> tuple[int, int]:
         """현재 커서 위치를 이 매크로의 좌표 기준으로 반환."""
         x, y = self.app.backend.cursor_pos()
-        if self.coord_space == "window":
-            title = self.v_title.get().strip()
-            rect = self.app.backend.find_window_rect(title) if title else None
-            if rect is None:
-                raise ValueError("창 기준 좌표: 대상 창을 찾을 수 없습니다")
-            x, y = x - rect[0], y - rect[1]
-        return x, y
+        ox, oy = self.coord_origin()
+        return x - ox, y - oy
+
+    # ---- (실험적) 조건 대기 ----
+    def new_template_name(self) -> str:
+        n = 1
+        while (self.assets_dir / f"이미지{n}.png").exists():
+            n += 1
+        return f"이미지{n}.png"
+
+    def available_templates(self) -> set[str]:
+        return {p.name for p in self.assets_dir.glob("*.png")}
+
+    def on_add_condition(self) -> None:
+        result = ConditionDialog.ask(self)
+        if result:
+            self.insert_items([result])
 
     # ---- 녹화 / 테스트 재생 ----
     def toggle_record(self, immediate: bool = False) -> None:
@@ -890,7 +980,8 @@ class EditorWindow:
             messagebox.showinfo("테스트 재생", "이벤트가 없습니다", parent=self.top)
             return
         label = f"(편집 중) {self.v_name.get().strip()}"
-        self.gui.start_after_delay(lambda: self.gui.guard(lambda: self.app.start_play(macro, opts, label)),
+        assets = self.assets_dir
+        self.gui.start_after_delay(lambda: self.gui.guard(lambda: self.app.start_play(macro, opts, label, assets)),
                                    owner="editor", what="테스트 재생")
 
     # ---- 저장 / 닫기 ----
@@ -906,7 +997,8 @@ class EditorWindow:
     def _save(self) -> bool:
         name = self.v_name.get().strip()
         errors = em.validate_for_save(name, self._hotkey_value(), self.items, self.app.library, self.old_name,
-                                      reserved=(self.gui.toggle_hotkey,))
+                                      reserved=(self.gui.toggle_hotkey,),
+                                      available_templates=self.available_templates())
         macro = None
         if not errors:
             try:
@@ -917,7 +1009,8 @@ class EditorWindow:
             messagebox.showerror("저장할 수 없습니다", "\n".join(errors), parent=self.top)
             return False
         try:
-            saved = self.app.store(name, macro, self.old_name)
+            assets = {t: self.assets_dir / t for t in vision.templates_in(self.items)}
+            saved = self.app.store(name, macro, self.old_name, assets=assets)
         except (ValueError, OSError) as e:
             messagebox.showerror("저장 실패", str(e), parent=self.top)
             return False
@@ -942,6 +1035,7 @@ class EditorWindow:
             self.gui.cancel_countdown()
         self.gui.settings["editor_geometry"] = self.top.geometry()
         self.gui.settings.save()
+        shutil.rmtree(self.assets_dir, ignore_errors=True)
         self.top.destroy()
         self.gui.editor = None
 
@@ -1104,6 +1198,333 @@ class EventDialog:
     @classmethod
     def ask(cls, parent, kinds, **kw) -> list[dict] | None:
         dlg = cls(parent, kinds, **kw)
+        dlg.top.grab_set()
+        dlg.top.wait_window()
+        return dlg.result
+
+
+class RegionSelector:
+    """(실험적) 캡처한 화면을 전체 화면으로 띄우고 드래그로 사각형을 고른다.
+    on_done((x, y, w, h)) — 화면 좌표. Esc / 오른쪽 클릭이면 on_done(None)."""
+
+    def __init__(self, root, image, on_done, hint: str = "드래그해서 영역을 고르세요 · Esc 취소") -> None:
+        self.on_done = on_done
+        self._start: tuple[int, int] | None = None
+        h, w = image.shape[:2]
+        self.top = tk.Toplevel(root)
+        self.top.overrideredirect(True)
+        self.top.attributes("-topmost", True)
+        self.top.geometry(f"{w}x{h}+0+0")
+        self.canvas = tk.Canvas(self.top, width=w, height=h, highlightthickness=0, cursor="crosshair")
+        self.canvas.pack()
+        self._photo = tk.PhotoImage(master=self.top, data=vision.png_base64(image))
+        self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
+        self.canvas.create_rectangle(0, 0, w, 30, fill="#000000", outline="", stipple="gray50")
+        self.canvas.create_text(w // 2, 15, text=hint, fill="white", font=("", 12, "bold"))
+        self.rect = self.canvas.create_rectangle(0, 0, 0, 0, outline="#ff3030", width=2)
+        self.canvas.bind("<ButtonPress-1>", self.on_press)
+        self.canvas.bind("<B1-Motion>", self.on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_release)
+        self.canvas.bind("<Button-3>", lambda e: self.finish(None))
+        self.top.bind("<Escape>", lambda e: self.finish(None))
+        self.top.focus_force()
+
+    def on_press(self, e) -> None:
+        self._start = (e.x, e.y)
+        self.canvas.coords(self.rect, e.x, e.y, e.x, e.y)
+
+    def on_drag(self, e) -> None:
+        if self._start:
+            self.canvas.coords(self.rect, *self._start, e.x, e.y)
+
+    def on_release(self, e) -> None:
+        if not self._start:
+            return
+        (x0, y0), (x1, y1) = self._start, (e.x, e.y)
+        self._start = None
+        x, y, w, h = min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0)
+        if w < 4 or h < 4:
+            self.canvas.coords(self.rect, 0, 0, 0, 0)  # 너무 작으면 다시 고르게 한다
+            return
+        self.finish((x, y, w, h))
+
+    def finish(self, rect) -> None:
+        if self.top.winfo_exists():
+            self.top.destroy()
+        self.on_done(rect)
+
+
+def search_region_around(rect, screen_w: int, screen_h: int) -> tuple[int, int, int, int]:
+    """잘라낸 이미지 주변으로 여유를 둔 검색 영역 (화면 안으로 제한)."""
+    x, y, w, h = rect
+    mx, my = max(40, w // 2), max(40, h // 2)
+    x0, y0 = max(0, x - mx), max(0, y - my)
+    x1, y1 = min(screen_w, x + w + mx), min(screen_h, y + h + my)
+    return x0, y0, x1 - x0, y1 - y0
+
+
+class ConditionDialog:
+    """(실험적) 조건 대기 추가/수정. result: 편집 항목 (취소 시 None)."""
+
+    def __init__(self, editor: "EditorWindow", item: dict | None = None) -> None:
+        self.editor, self.gui = editor, editor.gui
+        self.result: dict | None = None
+        self._modal = False
+        cond = (item or {}).get("cond", {"kind": "image"})
+        region = cond.get("region")
+        self.top = tk.Toplevel(editor.top)
+        self.top.withdraw()
+        self.top.title("조건 대기 수정 (실험)" if item else "조건 대기 추가 (실험)")
+        self.top.transient(editor.top)
+        self.top.resizable(False, False)
+
+        def var(value) -> tk.StringVar:
+            return tk.StringVar(self.top, value=str(value))
+
+        self.v_kind = tk.StringVar(self.top, value=cond.get("kind", "image"))
+        self.v_negate = tk.BooleanVar(self.top, value=bool(cond.get("negate")))
+        self.v_delay = var(round((item or {}).get("dt", 0) * 1000))
+        self.v_timeout = var(f"{(item or {}).get('timeout', 10):g}")
+        self.v_on_timeout = tk.StringVar(self.top, value=(item or {}).get("on_timeout", "stop"))
+        self.v_interval = var(round((item or {}).get("interval", 0.1) * 1000))
+        self.v_template = tk.StringVar(self.top, value=cond.get("template", ""))
+        self.v_full = tk.BooleanVar(self.top, value=item is not None and cond.get("kind") == "image" and not region)
+        self.v_region = [var(v) for v in (region or [0, 0, 0, 0])]
+        self.v_threshold = var(round(cond.get("threshold", vision.DEFAULT_THRESHOLD) * 100))
+        self.v_px, self.v_py = var(cond.get("x", 0)), var(cond.get("y", 0))
+        self.v_color = var(cond.get("color", "#000000"))
+        self.v_tol = var(cond.get("tolerance", vision.DEFAULT_TOLERANCE))
+        self._thumb = None
+        self._build()
+        self._on_kind()
+        self._update_thumb()
+        center_on_parent(self.top, editor.top)
+
+    def _build(self) -> None:
+        f = ttk.Frame(self.top, padding=10)
+        f.pack(fill="both")
+        ttk.Label(f, text="⚠ 실험적 기능입니다. 독점 전체 화면 게임에서는 화면을 읽지 못할 수 있습니다.",
+                  foreground="#b26a00").pack(anchor="w", pady=(0, 6))
+        row = ttk.Frame(f)
+        row.pack(fill="x")
+        ttk.Label(row, text="조건").pack(side="left")
+        for val, text in (("image", "이미지가 보일 때"), ("pixel", "픽셀 색이 맞을 때")):
+            ttk.Radiobutton(row, text=text, value=val, variable=self.v_kind,
+                            command=self._on_kind).pack(side="left", padx=4)
+        ttk.Checkbutton(f, text="반대로 (조건이 '아닐' 때까지 대기)", variable=self.v_negate).pack(anchor="w", pady=2)
+
+        # 이미지
+        self.f_image = ttk.LabelFrame(f, text="이미지", padding=6)
+        top = ttk.Frame(self.f_image)
+        top.pack(fill="x")
+        self.thumb = tk.Label(top, text="(이미지 없음)", width=24, height=4, relief="sunken", bg="#eeeeee")
+        self.thumb.pack(side="left")
+        btns = ttk.Frame(top)
+        btns.pack(side="left", padx=8)
+        ttk.Button(btns, text="📷 화면에서 잘라내기", command=self.on_crop).pack(fill="x")
+        ttk.Button(btns, text="검색 영역만 다시 지정", command=self.on_pick_region).pack(fill="x", pady=4)
+        ttk.Label(btns, textvariable=self.v_template, foreground="#555").pack(anchor="w")
+        reg = ttk.Frame(self.f_image)
+        reg.pack(fill="x", pady=(6, 0))
+        ttk.Checkbutton(reg, text="화면 전체에서 찾기", variable=self.v_full, command=self._on_kind).pack(side="left")
+        self.region_entries = []
+        for label, v in zip(("X", "Y", "너비", "높이"), self.v_region):
+            ttk.Label(reg, text=label).pack(side="left", padx=(6, 1))
+            e = ttk.Entry(reg, textvariable=v, width=6)
+            e.pack(side="left")
+            self.region_entries.append(e)
+        th = ttk.Frame(self.f_image)
+        th.pack(fill="x", pady=(6, 0))
+        ttk.Label(th, text="일치도 기준(%)").pack(side="left")
+        ttk.Entry(th, textvariable=self.v_threshold, width=6).pack(side="left", padx=4)
+
+        # 픽셀
+        self.f_pixel = ttk.LabelFrame(f, text="픽셀 색", padding=6)
+        prow = ttk.Frame(self.f_pixel)
+        prow.pack(fill="x")
+        for label, v in (("X", self.v_px), ("Y", self.v_py)):
+            ttk.Label(prow, text=label).pack(side="left", padx=(0, 2))
+            ttk.Entry(prow, textvariable=v, width=7).pack(side="left", padx=(0, 6))
+        ttk.Label(prow, text="색").pack(side="left")
+        ttk.Entry(prow, textvariable=self.v_color, width=9).pack(side="left", padx=2)
+        self.swatch = tk.Label(prow, width=3, relief="sunken")
+        self.swatch.pack(side="left", padx=4)
+        self.v_color.trace_add("write", lambda *a: self._update_swatch())
+        prow2 = ttk.Frame(self.f_pixel)
+        prow2.pack(fill="x", pady=(6, 0))
+        ttk.Button(prow2, text="🎯 커서 위치의 색 가져오기", command=self.on_pick_color).pack(side="left")
+        ttk.Label(prow2, text="허용 오차(0~255)").pack(side="left", padx=(10, 2))
+        ttk.Entry(prow2, textvariable=self.v_tol, width=5).pack(side="left")
+
+        # 공통
+        self.f_common = ttk.LabelFrame(f, text="대기", padding=6)
+        for r, (label, v) in enumerate((("앞 지연(ms)", self.v_delay), ("최대 대기(초, 0=무제한)", self.v_timeout),
+                                         ("확인 간격(ms)", self.v_interval))):
+            ttk.Label(self.f_common, text=label).grid(row=r, column=0, sticky="w", pady=2)
+            ttk.Entry(self.f_common, textvariable=v, width=8).grid(row=r, column=1, sticky="w", padx=6)
+        ttk.Label(self.f_common, text="시간 초과 시").grid(row=3, column=0, sticky="w", pady=2)
+        ot = ttk.Frame(self.f_common)
+        ot.grid(row=3, column=1, sticky="w", padx=6)
+        ttk.Radiobutton(ot, text="재생 중지", value="stop", variable=self.v_on_timeout).pack(side="left")
+        ttk.Radiobutton(ot, text="계속 진행", value="continue", variable=self.v_on_timeout).pack(side="left", padx=6)
+
+        self.f_test = ttk.Frame(f)
+        ttk.Button(self.f_test, text="🔍 지금 찾아보기", command=self.on_test).pack(side="left")
+        self.test_label = ttk.Label(self.f_test, text="", wraplength=330)
+        self.test_label.pack(side="left", padx=8)
+        self.error = ttk.Label(f, foreground="#c62828", wraplength=420)
+        self.f_buttons = ttk.Frame(f)
+        ttk.Button(self.f_buttons, text="확인", command=self._on_ok).pack(side="left", padx=4)
+        ttk.Button(self.f_buttons, text="취소", command=self.top.destroy).pack(side="left")
+        self.top.bind("<Escape>", lambda e: self.top.destroy())
+
+    def _on_kind(self) -> None:
+        image = self.v_kind.get() == "image"
+        for w in (self.f_image, self.f_pixel, self.f_common, self.f_test, self.error, self.f_buttons):
+            w.pack_forget()
+        (self.f_image if image else self.f_pixel).pack(fill="x", pady=4)
+        self.f_common.pack(fill="x", pady=4)
+        self.f_test.pack(fill="x", pady=4)
+        self.error.pack(anchor="w")
+        self.f_buttons.pack(pady=(8, 0))
+        state = ["disabled"] if self.v_full.get() else ["!disabled"]
+        for e in self.region_entries:
+            e.state(state)
+        self._update_swatch()
+
+    def _update_thumb(self) -> None:
+        name = self.v_template.get()
+        path = self.editor.assets_dir / name if name else None
+        if not path or not path.is_file():
+            self.thumb.configure(image="", text="(이미지 없음)" if not name else f"(파일 없음: {name})")
+            self._thumb = None
+            return
+        try:
+            img = tk.PhotoImage(master=self.top, file=str(path))
+            factor = max(1, -(-img.width() // 170), -(-img.height() // 64))
+            self._thumb = img.subsample(factor) if factor > 1 else img
+            self.thumb.configure(image=self._thumb, text="", width=170, height=64)
+        except tk.TclError:
+            self.thumb.configure(image="", text=f"(미리보기 불가: {name})")
+
+    def _update_swatch(self) -> None:
+        color = self.v_color.get().strip()
+        try:
+            vision.parse_color(color)
+            self.swatch.configure(bg=color if len(color) == 7 else "#ffffff")
+        except (ValueError, tk.TclError):
+            self.swatch.configure(bg="#ffffff")
+
+    # ---- 화면 작업 ----
+    def _screen_windows(self):
+        return [self.top, self.editor.top, self.gui.root]
+
+    def on_crop(self, region_only: bool = False) -> None:
+        def action(restore):
+            grabber = self.gui.get_grabber()
+            sw, sh = grabber.screen_size()
+            shot = grabber.grab(0, 0, sw, sh)
+            hint = ("검색할 영역을 드래그하세요" if region_only else "찾을 이미지를 드래그해서 잘라내세요") + " · Esc 취소"
+            self.selector = RegionSelector(self.gui.root, shot,
+                                           lambda rect: self._on_region(rect, shot, region_only, restore), hint)
+        self.gui.run_screen_action(self._screen_windows(), "화면 캡처", action)
+
+    def on_pick_region(self) -> None:
+        self.on_crop(region_only=True)
+
+    def _on_region(self, rect, shot, region_only: bool, restore) -> None:
+        restore()
+        self._regrab()
+        if rect is None:
+            return
+        try:
+            ox, oy = self.editor.coord_origin()
+        except ValueError as e:
+            self.error.configure(text=str(e))
+            return
+        sh, sw = shot.shape[:2]
+        if region_only:
+            area = rect
+        else:
+            x, y, w, h = rect
+            name = self.editor.new_template_name()
+            vision.save_png(shot[y:y + h, x:x + w], self.editor.assets_dir / name)
+            self.v_template.set(name)
+            self._update_thumb()
+            area = search_region_around(rect, sw, sh)
+        for v, value in zip(self.v_region, (area[0] - ox, area[1] - oy, area[2], area[3])):
+            v.set(str(value))
+        self.v_full.set(False)
+        self.error.configure(text="")
+        self._on_kind()
+
+    def on_pick_color(self) -> None:
+        def action(restore):
+            try:
+                sx, sy = self.editor.app.backend.cursor_pos()
+                b, g, r = (int(v) for v in self.gui.get_grabber().grab(sx, sy, 1, 1)[0, 0])
+                ox, oy = self.editor.coord_origin()
+                self.v_px.set(str(sx - ox))
+                self.v_py.set(str(sy - oy))
+                self.v_color.set(f"#{r:02x}{g:02x}{b:02x}")
+                self.error.configure(text="")
+            except Exception as e:
+                self.error.configure(text=str(e))
+            restore()
+        self.gui.run_screen_action([], "커서 위치 색 가져오기", action)
+
+    def on_test(self) -> None:
+        try:
+            item = self._build_item()
+            origin = self.editor.coord_origin()
+        except ValueError as e:
+            self.error.configure(text=str(e))
+            return
+        self.error.configure(text="")
+
+        def action(restore):
+            try:
+                m = vision.Vision(self.editor.assets_dir, self.gui.get_grabber()).check(item["cond"], origin)
+                text = f"{'✔ 충족' if m.matched else '✘ 불충족'} · 일치도 {m.score * 100:.0f}%"
+                if m.pos:
+                    text += f" · 찾은 위치 ({m.pos[0] - origin[0]}, {m.pos[1] - origin[1]})"
+                self.test_label.configure(text=text, foreground="#2e7d32" if m.matched else "#c62828")
+            except Exception as e:
+                self.test_label.configure(text=f"오류: {e}", foreground="#c62828")
+            restore()
+            self._regrab()
+        self.gui.run_screen_action(self._screen_windows(), "화면 확인", action)
+
+    def _regrab(self) -> None:
+        if self._modal and self.top.winfo_exists():
+            try:
+                self.top.grab_set()
+            except tk.TclError:
+                pass
+
+    # ---- 결과 ----
+    def _build_item(self) -> dict:
+        if self.v_kind.get() == "image" and not self.v_template.get():
+            raise ValueError("먼저 '화면에서 잘라내기'로 찾을 이미지를 지정하세요")
+        region = None if self.v_full.get() else [v.get() for v in self.v_region]
+        return em.build_wait_until(
+            delay_ms=self.v_delay.get(), kind=self.v_kind.get(), template=self.v_template.get(),
+            region=region, threshold_pct=self.v_threshold.get(), x=self.v_px.get(), y=self.v_py.get(),
+            color=self.v_color.get(), tolerance=self.v_tol.get(), negate=self.v_negate.get(),
+            timeout_s=self.v_timeout.get(), on_timeout=self.v_on_timeout.get(), interval_ms=self.v_interval.get())
+
+    def _on_ok(self) -> None:
+        try:
+            self.result = self._build_item()
+        except ValueError as e:
+            self.error.configure(text=str(e))
+            return
+        self.top.destroy()
+
+    @classmethod
+    def ask(cls, editor: "EditorWindow", item: dict | None = None) -> dict | None:
+        dlg = cls(editor, item)
+        dlg._modal = True
         dlg.top.grab_set()
         dlg.top.wait_window()
         return dlg.result

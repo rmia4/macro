@@ -172,7 +172,31 @@ class Vision:
         return Match(score >= cond.get("threshold", DEFAULT_THRESHOLD), round(score, 4), pos)
 
 
+def save_png(img, path: str | Path) -> None:
+    """BGR 이미지를 PNG 로 저장 (한글 경로 지원)."""
+    import cv2
+    ok, buf = cv2.imencode(".png", img)
+    if not ok:
+        raise ValueError("PNG 인코딩 실패")
+    buf.tofile(str(path))
+
+
+def png_base64(img) -> str:
+    """tk.PhotoImage(data=...) 용 PNG base64 문자열."""
+    import base64
+    import cv2
+    ok, buf = cv2.imencode(".png", img)
+    if not ok:
+        raise ValueError("PNG 인코딩 실패")
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
 def conditions_in(events) -> list[dict]:
     return [ev["cond"] for ev in events if isinstance(ev, dict) and isinstance(ev.get("cond"), dict)]
+
+
+def templates_in(events) -> set[str]:
+    """이벤트(또는 편집 항목)가 쓰는 조건 이미지 파일 이름."""
+    return {c["template"] for c in conditions_in(events) if c.get("kind") == "image" and c.get("template")}
 
 

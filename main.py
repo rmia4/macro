@@ -4,6 +4,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import shlex
+import shutil
 import sys
 import threading
 from pathlib import Path
@@ -167,14 +168,33 @@ class App:
                 self.log(f"불러오기 실패 '{name}': {e}")
         self.library = lib
 
-    def store(self, name: str, macro: Macro, old_name: str | None = None) -> str:
-        """라이브러리에 저장. 이름이 바뀌면 이전 파일을 지운다. 저장된 이름을 반환."""
+    def store(self, name: str, macro: Macro, old_name: str | None = None,
+              assets: dict[str, Path] | None = None) -> str:
+        """라이브러리에 저장. 이름이 바뀌면 이전 파일(과 이미지 폴더)을 지운다. 저장된 이름을 반환.
+
+        assets: (실험적) 조건 이미지 {파일 이름: 원본 경로}. 주면 macros/<이름>/ 을 이것으로 교체하고,
+        None 이면 이미지 폴더는 그대로 둔다 (이름이 바뀌면 폴더만 옮긴다).
+        """
         path = macro_path(self.macros_dir, name)
         name = path.stem
         if name != old_name and path.exists():
             raise ValueError(f"같은 이름의 매크로가 이미 있습니다: {name}")
+        if assets is not None:  # 원본이 사라지기 전에 먼저 읽어 둔다
+            data = {fname: Path(src).read_bytes() for fname, src in assets.items()}
         save_macro(macro, path)
         self.library[name] = macro
+        target = self.macros_dir / name
+        old_dir = self.macros_dir / old_name if old_name else None
+        if assets is not None:
+            for d in {target, old_dir} - {None}:
+                if d.is_dir():
+                    shutil.rmtree(d)
+            if data:
+                target.mkdir(parents=True, exist_ok=True)
+                for fname, content in data.items():
+                    (target / fname).write_bytes(content)
+        elif old_dir and old_name != name and old_dir.is_dir() and not target.exists():
+            old_dir.rename(target)
         if old_name and old_name != name:
             self.library.pop(old_name, None)
             try:
@@ -183,6 +203,11 @@ class App:
                 pass
         self.log(f"저장: {name}")
         return name
+
+    def asset_files(self, name: str) -> dict[str, Path]:
+        """(실험적) 매크로 이미지 폴더의 PNG 파일들."""
+        d = self.macros_dir / name
+        return {p.name: p for p in d.glob("*.png")} if d.is_dir() else {}
 
     # ---- 저장 / 불러오기 / 삭제 (REPL, GUI 공용) ----
     def save(self, name: str) -> None:
@@ -208,6 +233,9 @@ class App:
     def delete(self, name: str) -> None:
         path = delete_macro(self.macros_dir, name)
         self.library.pop(path.stem, None)
+        assets = self.macros_dir / path.stem
+        if assets.is_dir():
+            shutil.rmtree(assets)
         if self.macro_name == path.stem:
             self.macro_name = None  # 메모리의 매크로는 유지 (다시 저장 가능)
         self.log(f"삭제: {path}")
