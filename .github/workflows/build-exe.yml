@@ -6,6 +6,9 @@ on:
     branches: [claude/fervent-heisenberg-9bybm2]
     tags: ["v*"]
 
+env:
+  PYTHONUTF8: "1"  # 한글 출력이 cp1252 콘솔에서 실패하지 않도록
+
 jobs:
   build:
     runs-on: windows-latest

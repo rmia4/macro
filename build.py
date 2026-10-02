@@ -9,6 +9,11 @@ import sys
 
 import PyInstaller.__main__
 
+# Windows 콘솔(cp1252 등)에서도 한글 메시지가 깨지거나 오류 나지 않게
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
 NAME = "MacroTool"
 
 if sys.platform != "win32":
