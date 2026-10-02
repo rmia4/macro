@@ -9,7 +9,9 @@ from pathlib import Path
 import keys
 
 VERSION = 1
-EVENT_TYPES = {"move", "rmove", "mdown", "mup", "scroll", "kdown", "kup", "wait"}  # rmove: 상대 이동, wait: 지연만
+EVENT_TYPES = {"move", "rmove", "mdown", "mup", "scroll", "kdown", "kup", "wait",  # rmove: 상대 이동, wait: 지연만
+               "repeat_start", "repeat_end"}  # 반복 구간: 사이의 이벤트를 count 번 반복 (중첩 가능)
+MAX_REPEAT = 100000
 BUTTONS = {"left", "right", "middle", "x1", "x2"}
 COORD_SPACES = {"screen", "window"}
 _NAME_RE = re.compile(r"^[\w\-. ]+$")
@@ -77,6 +79,22 @@ def _is_num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+def block_pairs(events: list) -> dict[int, int]:
+    """반복 구간의 시작 인덱스 -> 끝 인덱스. 짝이 맞지 않으면 ValueError."""
+    pairs, stack = {}, []
+    for i, ev in enumerate(events):
+        typ = ev.get("type") if isinstance(ev, dict) else None
+        if typ == "repeat_start":
+            stack.append(i)
+        elif typ == "repeat_end":
+            if not stack:
+                raise ValueError(f"{i + 1}번째 '반복 끝'에 짝이 되는 '반복 시작'이 없습니다")
+            pairs[stack.pop()] = i
+    if stack:
+        raise ValueError(f"{stack[-1] + 1}번째 '반복 시작'에 짝이 되는 '반복 끝'이 없습니다")
+    return pairs
+
+
 def _validate_events(events: list) -> None:
     prev = 0.0
     for i, ev in enumerate(events):
@@ -103,6 +121,14 @@ def _validate_events(events: list) -> None:
             raise MacroFormatError(f"{where}: dx, dy 가 필요합니다")
         if typ in ("kdown", "kup") and not keys.is_known(ev.get("key", "")):
             raise MacroFormatError(f"{where}: 알 수 없는 key {ev.get('key')!r}")
+        if typ == "repeat_start":
+            count = ev.get("count")
+            if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= MAX_REPEAT:
+                raise MacroFormatError(f"{where}: 반복 횟수는 1~{MAX_REPEAT} 정수여야 합니다")
+    try:
+        block_pairs(events)
+    except ValueError as e:
+        raise MacroFormatError(str(e)) from None
 
 
 def save_macro(macro: Macro, path: str | Path) -> Path:

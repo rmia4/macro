@@ -11,7 +11,7 @@ import queue
 import sys
 import time
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, ttk
+from tkinter import messagebox, scrolledtext, simpledialog, ttk
 
 import editor_model as em
 import input_backend
@@ -575,8 +575,7 @@ class EditorWindow:
         body = ttk.Frame(self.top, padding=(8, 0, 8, 8))
         body.pack(fill="both", expand=True)
 
-        left = ttk.LabelFrame(body, text="이벤트", padding=6)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        left = ttk.LabelFrame(body, text="이벤트", padding=6)  # 설정 패널을 먼저 배치한 뒤 남은 공간을 채운다
         self.banner = tk.Label(left, text="대기", fg="white", bg=COLORS["idle"],
                                font=("", 12, "bold"), pady=5)
         self.banner.pack(fill="x", pady=(0, 6))
@@ -605,23 +604,25 @@ class EditorWindow:
         add.pack(fill="x")
         ttk.Label(add, text="추가:").pack(side="left")
         for text, kind in (("키 입력", "tap"), ("마우스 클릭", "click"), ("지연", "wait"), ("기타…", None)):
-            ttk.Button(add, text=text, command=lambda k=kind: self.on_add(k)).pack(side="left", padx=2)
+            ttk.Button(add, text=text, width=9, command=lambda k=kind: self.on_add(k)).pack(side="left", padx=2)
+        ttk.Button(add, text="🔁 반복 구간", command=self.on_wrap_repeat).pack(side="left", padx=(10, 2))
         edit = ttk.Frame(left)
         edit.pack(fill="x", pady=(4, 0))
         for text, cmd in (("수정", self.on_edit), ("삭제", self.on_delete),
                           ("▲ 위로", lambda: self.on_move(-1)), ("▼ 아래로", lambda: self.on_move(1))):
-            ttk.Button(edit, text=text, command=cmd).pack(side="left", padx=(0, 4))
-        self.btn_undo = ttk.Button(edit, text="↶ 되돌리기", command=self.undo)
-        self.btn_redo = ttk.Button(edit, text="↷ 다시 실행", command=self.redo)
+            ttk.Button(edit, text=text, width=8, command=cmd).pack(side="left", padx=(0, 4))
+        self.btn_undo = ttk.Button(edit, text="↶ 되돌리기", width=10, command=self.undo)
+        self.btn_redo = ttk.Button(edit, text="↷ 다시 실행", width=10, command=self.redo)
         self.btn_undo.pack(side="left", padx=(8, 4))
         self.btn_redo.pack(side="left")
         for seq, fn in (("<Control-z>", self.undo), ("<Control-Z>", self.redo), ("<Control-y>", self.redo)):
             self.top.bind(seq, lambda e, f=fn: self._shortcut(f))
-        self.summary = ttk.Label(edit, foreground="#444")
-        self.summary.pack(side="right")
+        self.summary = ttk.Label(left, foreground="#444")
+        self.summary.pack(anchor="e", pady=(4, 0))
 
         right = ttk.LabelFrame(body, text="매크로 설정", padding=6)
-        right.pack(side="left", fill="y")
+        right.pack(side="right", fill="y")
+        left.pack(side="left", fill="both", expand=True, padx=(0, 6))
         ttk.Label(right, text="대상 창 제목").grid(row=0, column=0, sticky="w", pady=2)
         ttk.Entry(right, textvariable=self.v_title, width=18).grid(row=0, column=1, sticky="w", padx=6)
         ttk.Label(right, text="좌표 기준").grid(row=1, column=0, sticky="w", pady=2)
@@ -673,15 +674,18 @@ class EditorWindow:
     # ---- 이벤트 목록 ----
     def refresh_tree(self, select: list[int] | None = None) -> None:
         self.tree.delete(*self.tree.get_children())
-        for i, it in enumerate(self.items):
+        for i, (it, depth) in enumerate(zip(self.items, em.depths(self.items))):
             self.tree.insert("", "end", iid=str(i), values=(
-                i + 1, round(it.get("dt", 0) * 1000), em.EVENT_LABELS[it["type"]], em.describe(it)))
+                i + 1, round(it.get("dt", 0) * 1000), "│ " * depth + em.EVENT_LABELS[it["type"]],
+                em.describe(it)))
         shown = [str(i) for i in (select or []) if self.tree.exists(str(i))]
         if shown:
             self.tree.selection_set(shown)
             self.tree.see(shown[-1])
+        total, expanded = em.total_duration(self.items), em.expanded_duration(self.items)
+        extra = f" (반복 포함 {expanded:.2f}초)" if abs(expanded - total) > 0.0001 else ""
         self.summary.configure(text=f"항목 {len(self.items)}개 (이벤트 {em.event_count(self.items)}개) · "
-                                    f"{em.total_duration(self.items):.2f}초")
+                                    f"{total:.2f}초{extra}")
         self.coord_box.configure(state="disabled" if em.has_positional(self.items) else "readonly")
 
     # ---- 되돌리기 (이벤트 목록 변경만 대상) ----
@@ -734,7 +738,8 @@ class EditorWindow:
         if len(sel) != 1:
             return
         i = sel[0]
-        kinds = {"path": em.PATH_KINDS, "relpath": em.RELPATH_KINDS}.get(self.items[i]["type"], em.EDIT_KINDS)
+        kinds = {"path": em.PATH_KINDS, "relpath": em.RELPATH_KINDS, "repeat_start": em.REPEAT_START_KINDS,
+                 "repeat_end": em.REPEAT_END_KINDS}.get(self.items[i]["type"], em.EDIT_KINDS)
         result = EventDialog.ask(self.top, kinds, item=self.items[i], pick=self.pick_position)
         if result:
             self._snapshot()
@@ -745,6 +750,13 @@ class EditorWindow:
         sel = self.selected_indices()
         if not sel:
             return
+        # 반복 시작/끝 중 하나를 지우면 짝도 지운다 (안의 이벤트는 남는다)
+        for i in list(sel):
+            if self.items[i]["type"] in em.BLOCK_MARKERS:
+                partner = em.block_partner(self.items, i)
+                if partner is not None and partner not in sel:
+                    sel.append(partner)
+        sel.sort()
         self._snapshot()
         for i in reversed(sel):
             del self.items[i]
@@ -757,9 +769,29 @@ class EditorWindow:
         i, j = sel[0], sel[0] + step
         if not 0 <= j < len(self.items):
             return
+        moved = list(self.items)
+        moved.insert(j, moved.pop(i))
+        if em.block_error(moved) and not em.block_error(self.items):
+            return  # 반복 시작/끝의 순서가 뒤바뀌는 이동은 하지 않는다
         self._snapshot()
-        self.items.insert(j, self.items.pop(i))
+        self.items = moved
         self._changed([j])
+
+    def on_wrap_repeat(self) -> None:
+        count = simpledialog.askinteger("반복 구간", "반복 횟수 (선택한 이벤트를 감쌉니다.\n선택이 없으면 끝에 빈 구간 추가)",
+                                        parent=self.top, initialvalue=2, minvalue=1, maxvalue=em.MAX_REPEAT)
+        if count:
+            self.wrap_repeat(count)
+
+    def wrap_repeat(self, count: int) -> None:
+        try:
+            items, select = em.wrap_repeat(self.items, self.selected_indices(), count)
+        except ValueError as e:
+            messagebox.showerror("반복 구간", str(e), parent=self.top)
+            return
+        self._snapshot()
+        self.items = items
+        self._changed(select)
 
     def pick_position(self) -> tuple[int, int]:
         """현재 커서 위치를 이 매크로의 좌표 기준으로 반환."""
@@ -953,7 +985,7 @@ class EventDialog:
         self.v_kind = tk.StringVar(self.top, value=labels.get(kind, kinds[0][1]))
         self.v = {k: tk.StringVar(self.top, value=str(init.get(k, default))) for k, default in (
             ("delay_ms", 100), ("key", ""), ("button", "left"), ("x", 0), ("y", 0),
-            ("dx", 0), ("dy", -1), ("hold_ms", ""), ("duration_ms", 0), ("scale_pct", 100))}
+            ("dx", 0), ("dy", -1), ("hold_ms", ""), ("duration_ms", 0), ("scale_pct", 100), ("count", 2))}
         self.v_cursor = tk.BooleanVar(self.top, value=init.get("at_cursor", False))
         if not item and pick is not None:
             try:  # 새 마우스 이벤트는 현재 커서 위치로 시작
@@ -1010,10 +1042,11 @@ class EventDialog:
         row(8, "hold", "누름 유지(ms)", ttk.Entry(f, textvariable=self.v["hold_ms"], width=10))
         row(9, "duration", "이동 시간(ms)", ttk.Entry(f, textvariable=self.v["duration_ms"], width=10))
         row(10, "scale", "이동량 배율(%)", ttk.Entry(f, textvariable=self.v["scale_pct"], width=10))
+        row(11, "count", "반복 횟수", ttk.Entry(f, textvariable=self.v["count"], width=10))
         self.error = ttk.Label(f, foreground="#c62828", wraplength=320)
-        self.error.grid(row=11, column=0, columnspan=2, sticky="w")
+        self.error.grid(row=12, column=0, columnspan=2, sticky="w")
         btns = ttk.Frame(f)
-        btns.grid(row=12, column=0, columnspan=2, pady=(8, 0))
+        btns.grid(row=13, column=0, columnspan=2, pady=(8, 0))
         ttk.Button(btns, text="확인", command=self._on_ok).pack(side="left", padx=4)
         ttk.Button(btns, text="취소", command=self.top.destroy).pack(side="left")
         self.top.bind("<Return>", lambda e: self._on_ok())
@@ -1033,6 +1066,8 @@ class EventDialog:
             for w in widgets:
                 w.grid() if field in fields else w.grid_remove()
         self.delay_label.configure(text="지연(ms)" if kind == "wait" else "앞 지연(ms)")
+        if kind == "repeat_end":
+            self.delay_label.configure(text="반복 전 대기(ms)")
         self.rows["pos"][0].configure(text="끝 위치 X, Y" if kind == "path" else "X, Y")
         if "hold" in fields and not self.v["hold_ms"].get():
             self.v["hold_ms"].set(str(em.DEFAULT_HOLD_MS[kind]))
@@ -1057,7 +1092,7 @@ class EventDialog:
             self.result = em.build_items(self.kind, delay_ms=v["delay_ms"], key=v["key"],
                                          button=v["button"], x=v["x"], y=v["y"], dx=v["dx"],
                                          dy=v["dy"], hold_ms=v["hold_ms"], at_cursor=self.v_cursor.get(),
-                                         duration_ms=v["duration_ms"], scale_pct=v["scale_pct"],
+                                         duration_ms=v["duration_ms"], scale_pct=v["scale_pct"], count=v["count"],
                                          points=self.item.get("points") if self.item else None)
         except ValueError as e:
             self.error.configure(text=str(e))

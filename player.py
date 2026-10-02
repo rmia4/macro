@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 import keys
-from profiles import Macro
+from profiles import Macro, block_pairs
 
 
 @dataclass
@@ -153,6 +153,8 @@ class Player:
         if not self._locate_window(macro):
             return False
         events = macro.events
+        ends = block_pairs(events)                       # 반복 시작 -> 끝
+        starts = {end: start for start, end in ends.items()}
         first = next((e for e in events if "x" in e), None)
         self._roll_offset()
         if o.mouse_mode == "relative":
@@ -162,11 +164,14 @@ class Player:
             if not self._approach(first):
                 return False
         self._origin = self._clock()
-        cum = prev = 0.0
+        cum = 0.0
         j = o.time_jitter / 100.0
-        for i, ev in enumerate(events):
-            dt = max(0.0, ev["t"] - prev) / o.speed
-            prev = ev["t"]
+        gaps = [max(0.0, ev["t"] - (events[i - 1]["t"] if i else 0.0)) for i, ev in enumerate(events)]
+        remaining: dict[int, int] = {}  # 반복 끝 인덱스 -> 남은 반복 횟수
+        i = 0
+        while i < len(events):
+            ev = events[i]
+            dt = gaps[i] / o.speed
             if j and dt > 0:
                 dt *= 1 + self._rng.uniform(-j, j)
             cum += dt
@@ -175,6 +180,13 @@ class Player:
             if not self._dispatch(ev):
                 return False
             self.event_index = i
+            if ev["type"] == "repeat_start":
+                remaining[ends[i]] = ev["count"] - 1
+            elif ev["type"] == "repeat_end" and remaining.get(i, 0) > 0:
+                remaining[i] -= 1
+                i = starts[i] + 1  # 구간 처음으로 (반복 시작 표시는 다시 실행하지 않음)
+                continue
+            i += 1
         return True
 
     def _wait_until(self, cum: float) -> bool:
@@ -304,7 +316,7 @@ class Player:
                     return False
             b.key_up(ev["key"])
             self._held_keys.pop(ev["key"], None)
-        # "wait": 대기는 이미 타임라인에 반영됨
+        # "wait", "repeat_start", "repeat_end": 대기는 이미 타임라인에 반영됨, 반복은 _play_once 가 처리
         return True
 
     def _release_all(self) -> None:

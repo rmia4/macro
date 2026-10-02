@@ -150,3 +150,48 @@ def test_build_rmove():
     Macro.from_dict({"version": 1, "events": em.to_events(em.build_items("rmove", dx=1, dy=0))})
     with pytest.raises(Exception):
         Macro.from_dict({"version": 1, "events": [{"t": 0, "type": "rmove", "dx": 1}]})
+
+
+def _keys(*names):
+    out = []
+    for n in names:
+        out += em.build_items("tap", key=n, delay_ms=100)
+    return out
+
+
+def test_wrap_repeat_selection_and_empty():
+    items = _keys("a", "b", "c")                    # 6 항목
+    new, sel = em.wrap_repeat(items, [2, 3], 3)     # b 누름/뗌 감싸기
+    assert [i["type"] for i in new] == ["kdown", "kup", "repeat_start", "kdown", "kup", "repeat_end", "kdown", "kup"]
+    assert new[2] == {"type": "repeat_start", "count": 3, "dt": 0.1} and new[3]["dt"] == 0.0  # 앞 지연은 구간 앞으로
+    assert sel == [2, 5]
+    assert em.depths(new) == [0, 0, 0, 1, 1, 0, 0, 0]
+    assert em.describe(new[2]) == "×3회 반복"
+    empty, sel = em.wrap_repeat(items, [], 2)
+    assert [i["type"] for i in empty[-2:]] == ["repeat_start", "repeat_end"] and sel == [6, 7]
+    with pytest.raises(ValueError):
+        em.wrap_repeat(new, [2, 3], 2)               # 시작만 포함하는 선택은 거부
+    with pytest.raises(ValueError):
+        em.wrap_repeat(items, [0], 0)
+
+
+def test_expanded_duration_and_partner():
+    items = _keys("a")                              # 0.1 + 0.05
+    items, _ = em.wrap_repeat(items, [0, 1], 4)     # 구간: (0 + 0.05) + 끝 0 -> 0.05 x4, 앞 0.1
+    assert em.total_duration(items) == 0.15
+    assert em.expanded_duration(items) == 0.3
+    outer, _ = em.wrap_repeat(items, [0, 3], 2)
+    assert em.expanded_duration(outer) == 0.5  # 앞 지연 0.1 은 한 번만 + (0.2 x 2)
+    assert em.block_partner(outer, 0) == 5 and em.block_partner(outer, 4) == 1 and em.block_partner(outer, 2) is None
+
+
+def test_build_repeat_start_and_validation():
+    assert em.build_items("repeat_start", delay_ms=0, count="7") == [{"type": "repeat_start", "count": 7, "dt": 0.0}]
+    with pytest.raises(ValueError):
+        em.build_items("repeat_start", count="0")
+    assert em.item_fields({"type": "repeat_start", "count": 5, "dt": 0.2})["count"] == 5
+    items = _keys("a") + [{"type": "repeat_end", "dt": 0}]
+    assert any("반복 구간" in e for e in em.validate_for_save("x", None, items, {}, None))
+    good, _ = em.wrap_repeat(_keys("a"), [0, 1], 2)
+    assert em.validate_for_save("x", None, good, {}, None) == []
+    Macro.from_dict({"version": 1, "events": em.to_events(good)})

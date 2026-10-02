@@ -11,11 +11,13 @@ import re
 
 import keys
 from hotkeys import CONTROL_KEYS
-from profiles import BUTTONS, macro_path
+from profiles import BUTTONS, MAX_REPEAT, block_pairs, macro_path
 
 EVENT_LABELS = {"move": "마우스 이동", "mdown": "마우스 누름", "mup": "마우스 뗌",
                 "scroll": "스크롤", "kdown": "키 누름", "kup": "키 뗌", "wait": "지연",
-                "path": "마우스 이동 경로", "rmove": "마우스 상대 이동", "relpath": "상대 이동 경로"}
+                "path": "마우스 이동 경로", "rmove": "마우스 상대 이동", "relpath": "상대 이동 경로",
+                "repeat_start": "🔁 반복 시작", "repeat_end": "🔁 반복 끝"}
+BLOCK_MARKERS = ("repeat_start", "repeat_end")
 
 # 추가 가능한 종류 (tap/click 은 누름+뗌 두 개의 이벤트를 만든다)
 ADD_KINDS = [("tap", "키 입력 (누르고 떼기)"), ("kdown", "키 누름"), ("kup", "키 뗌"),
@@ -24,6 +26,8 @@ ADD_KINDS = [("tap", "키 입력 (누르고 떼기)"), ("kdown", "키 누름"), 
 EDIT_KINDS = [k for k in ADD_KINDS if k[0] not in ("tap", "click")]
 PATH_KINDS = [("path", "마우스 이동 경로")]  # 경로 항목 수정 전용
 RELPATH_KINDS = [("relpath", "상대 이동 경로")]
+REPEAT_START_KINDS = [("repeat_start", "반복 시작")]
+REPEAT_END_KINDS = [("repeat_end", "반복 끝")]
 
 # 종류별 입력 필드 (cursor: 좌표 대신 현재 커서 위치에서 입력 가능)
 KIND_FIELDS = {
@@ -31,6 +35,7 @@ KIND_FIELDS = {
     "click": {"button", "pos", "cursor", "hold"}, "mdown": {"button", "pos", "cursor"},
     "mup": {"button", "pos", "cursor"}, "move": {"pos"}, "scroll": {"pos", "cursor", "scroll"},
     "wait": set(), "path": {"pos", "duration"}, "rmove": {"delta"}, "relpath": {"duration", "scale"},
+    "repeat_start": {"count"}, "repeat_end": set(),
 }
 GROUPED = {"move": "path", "rmove": "relpath"}  # 연속되면 묶이는 이벤트 -> 묶음 항목 종류
 DEFAULT_HOLD_MS = {"tap": 50, "click": 60}
@@ -88,6 +93,78 @@ def path_duration(item: dict) -> float:
     return round(sum(max(0.0, p[0]) for p in item["points"][1:]), 4)
 
 
+def item_duration(item: dict) -> float:
+    return max(0.0, item.get("dt", 0.0)) + (path_duration(item) if "points" in item else 0.0)
+
+
+def expanded_duration(items: list[dict]) -> float:
+    """반복 구간을 펼쳤을 때의 실행 시간. 한 바퀴 = 구간 안 이벤트들 + '반복 끝' 지연."""
+    stack = [[0.0, 1]]  # [누적 시간, 반복 횟수]
+    for it in items:
+        if it["type"] == "repeat_start":
+            stack[-1][0] += item_duration(it)
+            stack.append([0.0, it.get("count", 1)])
+        elif it["type"] == "repeat_end" and len(stack) > 1:
+            inner, count = stack.pop()
+            stack[-1][0] += (inner + item_duration(it)) * count
+        else:
+            stack[-1][0] += item_duration(it)
+    while len(stack) > 1:  # 짝이 안 맞는 경우(편집 중)는 1회로 계산
+        inner, _ = stack.pop()
+        stack[-1][0] += inner
+    return round(stack[0][0], 4)
+
+
+def depths(items: list[dict]) -> list[int]:
+    """각 항목의 반복 구간 중첩 깊이 (표시용 들여쓰기)."""
+    out, d = [], 0
+    for it in items:
+        if it["type"] == "repeat_end":
+            d = max(0, d - 1)
+        out.append(d)
+        if it["type"] == "repeat_start":
+            d += 1
+    return out
+
+
+def block_partner(items: list[dict], i: int) -> int | None:
+    """반복 시작/끝 표시의 짝 인덱스."""
+    try:
+        pairs = block_pairs(items)
+    except ValueError:
+        return None
+    rev = {v: k for k, v in pairs.items()}
+    return pairs.get(i, rev.get(i))
+
+
+def block_error(items: list[dict]) -> str | None:
+    try:
+        block_pairs(items)
+        return None
+    except ValueError as e:
+        return str(e)
+
+
+def wrap_repeat(items: list[dict], selected: list[int], count: int) -> tuple[list[dict], list[int]]:
+    """선택한 범위(첫~마지막)를 반복 구간으로 감싼다. 선택이 없으면 끝에 빈 구간을 추가.
+
+    범위가 다른 구간과 엇갈리면(시작만 포함 등) ValueError. (새 목록, 새 선택) 반환.
+    """
+    if not 1 <= count <= MAX_REPEAT:
+        raise ValueError(f"반복 횟수는 1~{MAX_REPEAT} 이어야 합니다")
+    start = {"type": "repeat_start", "count": count, "dt": 0.0}
+    end = {"type": "repeat_end", "dt": 0.0}
+    if not selected:
+        return items + [start, end], [len(items), len(items) + 1]
+    a, b = min(selected), max(selected)
+    inner = items[a:b + 1]
+    if block_error(inner):
+        raise ValueError("선택 범위가 다른 반복 구간과 겹칩니다. 구간 전체를 포함하도록 선택하세요")
+    start["dt"] = inner[0].get("dt", 0.0)  # 첫 이벤트 앞의 지연은 구간 앞으로 옮긴다
+    inner = [dict(inner[0], dt=0.0)] + inner[1:]
+    return items[:a] + [start] + inner + [end] + items[b + 1:], [a, b + 2]
+
+
 def total_duration(items: list[dict]) -> float:
     return round(sum(max(0.0, i.get("dt", 0.0)) + (path_duration(i) if "points" in i else 0)
                      for i in items), 4)
@@ -102,6 +179,10 @@ def describe(item: dict) -> str:
     if typ in ("kdown", "kup"):
         return item["key"]
     if typ == "wait":
+        return ""
+    if typ == "repeat_start":
+        return f"×{item['count']}회 반복"
+    if typ == "repeat_end":
         return ""
     if typ == "path":
         pts = item["points"]
@@ -133,7 +214,7 @@ def _int(value, label: str, minimum: int | None = None) -> int:
 
 def build_items(kind: str, *, delay_ms="0", key: str = "", button: str = "left",
                 x="0", y="0", dx="0", dy="0", hold_ms=None, at_cursor: bool = False,
-                duration_ms=None, points: list | None = None, scale_pct="100") -> list[dict]:
+                duration_ms=None, points: list | None = None, scale_pct="100", count="2") -> list[dict]:
     """입력값으로 편집 항목을 만든다. 잘못된 값은 ValueError.
 
     at_cursor: 버튼/스크롤을 좌표 없이 현재 커서 위치에서 입력.
@@ -172,6 +253,10 @@ def build_items(kind: str, *, delay_ms="0", key: str = "", button: str = "left",
         base["dx"], base["dy"] = _int(dx, "가로 스크롤"), _int(dy, "세로 스크롤")
         if base["dx"] == 0 and base["dy"] == 0:
             raise ValueError("스크롤 양이 0 입니다")
+    if "count" in fields:
+        base["count"] = _int(count, "반복 횟수", 1)
+        if base["count"] > MAX_REPEAT:
+            raise ValueError(f"반복 횟수는 {MAX_REPEAT} 이하여야 합니다")
     if "delta" in fields:
         base["dx"], base["dy"] = _int(dx, "이동량 X"), _int(dy, "이동량 Y")
         if base["dx"] == 0 and base["dy"] == 0:
@@ -233,7 +318,7 @@ def item_fields(item: dict) -> dict:
         out["duration_ms"] = round(path_duration(item) * 1000)
         out["scale_pct"] = 100
         return out
-    for k in ("key", "button", "x", "y", "dx", "dy"):
+    for k in ("key", "button", "x", "y", "dx", "dy", "count"):
         if k in item:
             out[k] = item[k]
     out["at_cursor"] = "cursor" in KIND_FIELDS[item["type"]] and "x" not in item
@@ -286,6 +371,9 @@ def validate_for_save(name: str, hotkey: str | None, items: list[dict],
                     errors.append(f"핫키: {hotkey.upper()} 는 '{other}' 매크로가 사용 중입니다")
     if not items:
         errors.append("이벤트가 없습니다 (녹화하거나 추가하세요)")
+    err = block_error(items)
+    if err:
+        errors.append(f"반복 구간: {err}")
     used_keys = {keys.hotkey_key(i["key"]) for i in items if "key" in i}
     bad = sorted(k for k in CONTROL_KEYS if k in used_keys)
     for combo in ([hotkey] if parts else []) + [r for r in reserved if r]:

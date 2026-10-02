@@ -239,3 +239,39 @@ def test_rmove_sends_relative_deltas_in_any_mode():
     p.run(m)
     # rmove 뒤에는 커서 위치를 모르므로 같은 좌표라도 절대 이동을 다시 보낸다
     assert be.names() == [("rel", 5, -3), ("abs", 100, 100)]
+
+
+def test_repeat_block_runs_count_times_with_timing():
+    evs = [key(0.1, "kdown", "a"), key(0.2, "kup", "a"),
+           {"t": 0.3, "type": "repeat_start", "count": 3},
+           key(0.4, "kdown", "b"), key(0.5, "kup", "b"),
+           {"t": 0.6, "type": "repeat_end"},
+           key(0.7, "kdown", "c"), key(0.8, "kup", "c")]
+    p, be, clock, m = build(evs)
+    p.run(m)
+    assert [c[2] for c in be.calls if c[1] == "kdown"] == ["a", "b", "b", "b", "c"]
+    b_times = [round(c[0], 3) for c in be.calls if c[1] == "kdown" and c[2] == "b"]
+    # 반복 간격 = 끝 표시까지(0.1) + 첫 이벤트 지연(0.1) + 구간 길이(0.1) = 0.3초
+    assert b_times == [0.4, 0.7, 1.0]
+    assert round(be.calls[-1][0], 3) == 1.4
+
+
+def test_nested_repeat_blocks():
+    evs = [{"t": 0, "type": "repeat_start", "count": 2},
+           key(0.1, "kdown", "x"), key(0.11, "kup", "x"),
+           {"t": 0.12, "type": "repeat_start", "count": 3},
+           key(0.13, "kdown", "y"), key(0.14, "kup", "y"),
+           {"t": 0.15, "type": "repeat_end"},
+           {"t": 0.16, "type": "repeat_end"}]
+    p, be, clock, m = build(evs, repeat=2)
+    p.run(m)
+    seq = "".join(c[2] for c in be.calls if c[1] == "kdown")
+    assert seq == "xyyyxyyy" * 2  # 전체 반복마다 안쪽 반복 횟수도 처음부터
+
+
+def test_stop_inside_repeat_block():
+    evs = [{"t": 0, "type": "repeat_start", "count": 100000}, key(0.1, "kdown"), key(0.2, "kup"),
+           {"t": 0.2, "type": "repeat_end"}]
+    p, be, clock, m = build(evs, max_minutes=0.01)  # 0.6초
+    p.run(m)
+    assert 2 <= len([c for c in be.calls if c[1] == "kdown"]) <= 4

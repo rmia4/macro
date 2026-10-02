@@ -646,3 +646,52 @@ def test_editor_first_open_centered(gui):
     cx = top.winfo_rootx() + top.winfo_width() // 2
     pcx = gui.root.winfo_rootx() + gui.root.winfo_width() // 2
     assert top.winfo_viewable() and abs(cx - pcx) <= 30
+
+
+def test_editor_repeat_block_ui(gui, monkeypatch):
+    import editor_model as em
+    gui.on_add()
+    ed = gui.editor
+    ed.insert_items(em.build_items("tap", key="a", delay_ms=100))
+    ed.insert_items(em.build_items("tap", key="b", delay_ms=100))
+    ed.tree.selection_set(["2", "3"])
+    monkeypatch.setattr("gui.simpledialog.askinteger", lambda *a, **k: 5)
+    ed.on_wrap_repeat()
+    assert [i["type"] for i in ed.items] == ["kdown", "kup", "repeat_start", "kdown", "kup", "repeat_end"]
+    assert ed.tree.item("3")["values"][2] == "│ 키 누름"            # 들여쓰기
+    assert "반복 포함" in ed.summary.cget("text")
+    # 반복 시작을 아래로 옮겨 끝 뒤로 가는 이동은 무시, 안쪽 이동은 허용
+    ed.tree.selection_set("5"); ed.on_move(-1)
+    ed.tree.selection_set("4"); ed.on_move(1)
+    assert [i["type"] for i in ed.items][2] == "repeat_start" and em.block_error(ed.items) is None
+    ed.tree.selection_set("2"); ed.on_move(-1)                      # 바깥으로 이동은 가능
+    assert ed.items[1]["type"] == "repeat_start"
+    # 시작만 지우면 짝도 지워지고 안의 이벤트는 남는다
+    ed.tree.selection_set("1")
+    ed.on_delete()
+    assert [i["type"] for i in ed.items] == ["kdown", "kup", "kdown", "kup"]
+    ed.undo()
+    assert sum(i["type"] in em.BLOCK_MARKERS for i in ed.items) == 2
+    # 횟수 수정
+    i = next(n for n, it in enumerate(ed.items) if it["type"] == "repeat_start")
+    from gui import EventDialog
+    d = EventDialog(gui.root, em.REPEAT_START_KINDS, item=ed.items[i])
+    assert d.v["count"].get() == "5"
+    d.v["count"].set("9")
+    d._on_ok()
+    assert d.result[0]["count"] == 9
+    ed.v_name.set("rep")
+    assert ed.on_save()
+    m = gui.app.library["rep"]
+    assert [e["type"] for e in m.events].count("repeat_start") == 1
+
+
+def test_editor_wrap_overlapping_selection_shows_error(gui):
+    import editor_model as em
+    gui.on_add()
+    ed = gui.editor
+    ed.insert_items(em.build_items("tap", key="a"))
+    ed.wrap_repeat(2)  # 선택 없음 -> 마지막에 추가된 a 누름/뗌이 선택되어 있으므로 감싸짐
+    ed.tree.selection_set(["0", "1"])  # 반복 시작 + 안쪽 일부
+    ed.wrap_repeat(3)
+    assert "겹칩니다" in gui.shown[-1][1]

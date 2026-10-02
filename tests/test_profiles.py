@@ -44,3 +44,22 @@ def test_hotkey_normalized_on_load():
         Macro.from_dict({"version": 1, "events": [], "hotkey": "ctrl+shift+f1"})
     # 이전 버전 파일의 enabled 키는 무시
     assert Macro.from_dict({"version": 1, "events": [], "enabled": False}).hotkey is None
+
+
+
+@pytest.mark.parametrize("events", [
+    [{"t": 0, "type": "repeat_start", "count": 2}],
+    [{"t": 0, "type": "repeat_end"}],
+    [{"t": 0, "type": "repeat_end"}, {"t": 0, "type": "repeat_start", "count": 2}],
+    [{"t": 0, "type": "repeat_start", "count": 0}, {"t": 0, "type": "repeat_end"}],
+    [{"t": 0, "type": "repeat_start", "count": "3"}, {"t": 0, "type": "repeat_end"}],
+])
+def test_repeat_blocks_validated(events):
+    with pytest.raises(MacroFormatError):
+        Macro.from_dict({"version": 1, "events": events})
+
+
+def test_block_pairs_nested():
+    from profiles import block_pairs
+    evs = [{"type": "repeat_start"}, {"type": "repeat_start"}, {"type": "repeat_end"}, {"type": "repeat_end"}]
+    assert block_pairs(evs) == {1: 2, 0: 3}
