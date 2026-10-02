@@ -1728,6 +1728,11 @@ def center_on_parent(top, parent) -> None:
     y = max(0, min(y, top.winfo_screenheight() - h))
     top.geometry(f"+{x}+{y}")
     top.deiconify()
+    # 위치는 제목 표시줄을 포함한 바깥 테두리 기준이다 (Windows). 안쪽 영역이 가운데 오도록 테두리만큼 보정
+    top.update_idletasks()
+    dx, dy = top.winfo_rootx() - x, top.winfo_rooty() - y
+    if 0 < dx < 50 or 0 < dy < 80:
+        top.geometry(f"+{max(0, x - dx)}+{max(0, y - dy)}")
 
 
 def restore_geometry(window, geometry: str) -> None:
