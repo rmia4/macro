@@ -7,6 +7,7 @@ dist/
 
 # 사용자 데이터 (녹화한 매크로, 프로그램 설정)
 macros/*.json
+macros/*/
 profiles/*.json
 settings.json
 settings.tmp

@@ -11,6 +11,7 @@ from typing import Callable
 
 import keys
 from profiles import Macro, block_pairs
+from vision import conditions_in
 
 
 @dataclass
@@ -86,7 +87,9 @@ class Player:
                  clock: Callable[[], float] = time.perf_counter,
                  waiter: Callable[[float], bool] | None = None,
                  rng: random.Random | None = None,
-                 log: Callable[[str], None] | None = None) -> None:
+                 log: Callable[[str], None] | None = None,
+                 vision=None) -> None:
+        """vision: (실험적) 화면 조건 판정기 (vision.Vision). 조건 이벤트가 있는 매크로에 필요."""
         self.backend = backend
         self.options = options or PlayOptions()
         self._stop = threading.Event()
@@ -96,6 +99,8 @@ class Player:
         self._log = log or (lambda msg: None)
         self._held_keys: dict[str, float] = {}
         self._held_buttons: set[str] = set()
+        self.vision = vision
+        self.last_match = None  # 마지막 조건 판정 결과 (표시용)
         self._offset = (0, 0)
         self._origin = 0.0
         self._win = (0, 0)
@@ -132,6 +137,11 @@ class Player:
         for ev in macro.events:
             if ev["type"] in ("kdown", "kup") and not keys.is_known(ev["key"]):
                 raise ValueError(f"알 수 없는 키: {ev['key']}")
+        conds = conditions_in(macro.events)
+        if conds:  # 입력을 보내기 전에 화면 인식 준비가 되었는지 확인
+            if self.vision is None:
+                raise ValueError("화면 조건 이벤트가 있지만 화면 인식을 사용할 수 없습니다")
+            self.vision.preload(conds)
         self.opt = dataclasses.replace(self.options)
         self._stop.clear()
         self._deadline = self._clock() + self.opt.max_minutes * 60 if self.opt.max_minutes > 0 else None
@@ -177,7 +187,18 @@ class Player:
             cum += dt
             if not self._wait_until(cum) or not self._wait_focus(macro):
                 return False
-            if not self._dispatch(ev):
+            if ev["type"] == "wait_until":
+                result = self._wait_condition(ev, macro)
+                if result == "stopped":
+                    return False
+                if result == "timeout" and ev.get("on_timeout", "stop") == "stop":
+                    self._log(f"조건 대기 시간 초과로 재생을 멈춥니다 ({ev.get('timeout', 10):g}초)")
+                    self._stop.set()
+                    return False
+                if result == "timeout":
+                    self._log("조건 대기 시간 초과 — 계속 진행합니다")
+                self._origin = self._clock() - cum  # 대기한 만큼 이후 시간표를 뒤로 민다
+            elif not self._dispatch(ev):
                 return False
             self.event_index = i
             if ev["type"] == "repeat_start":
@@ -198,6 +219,25 @@ class Player:
                 return not self._stop.is_set()
             if self._sleep(remaining):
                 return False
+
+    # ---- (실험적) 화면 조건 ----
+    def _wait_condition(self, ev: dict, macro: Macro) -> str:
+        """조건이 맞을 때까지 대기. "ok" | "timeout" | "stopped"."""
+        timeout = ev.get("timeout", 10)
+        interval = ev.get("interval", 0.1)
+        start = self._clock()
+        while True:
+            if not self._wait_focus(macro):
+                return "stopped"
+            self.last_match = self.vision.check(ev["cond"], self._win)
+            if self.last_match.matched:
+                return "ok"
+            waited = self._clock() - start
+            if timeout > 0 and waited >= timeout:
+                return "timeout"
+            step = interval if timeout <= 0 else min(interval, timeout - waited)
+            if self._sleep(step):
+                return "stopped"
 
     # ---- 창 / 포커스 ----
     def _locate_window(self, macro: Macro) -> bool:

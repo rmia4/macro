@@ -14,6 +14,7 @@ from hotkeys import CONTROL_KEYS, HOTKEY_PLAY, HOTKEY_QUIT, HOTKEY_RECORD, Hotke
 from player import PlayOptions, Player, options_from_dict, options_to_dict, set_option
 from profiles import Macro, delete_macro, list_macros, load_macro, macro_path, save_macro
 from recorder import Recorder
+from vision import Vision, conditions_in
 
 MACROS_DIR = Path(__file__).resolve().parent / "macros"
 
@@ -24,7 +25,7 @@ HELP = """명령: record | play | stop | save <이름> | load <이름> | delete 
 
 class App:
     def __init__(self, backend, macros_dir: Path = MACROS_DIR, log=print,
-                 recorder_factory=Recorder, player_factory=Player) -> None:
+                 recorder_factory=Recorder, player_factory=Player, vision_factory=Vision) -> None:
         self.backend = backend
         self.macros_dir = Path(macros_dir)
         self.log = log
@@ -37,6 +38,7 @@ class App:
         self.playing_keys: frozenset[str] = frozenset()
         self._recorder_factory = recorder_factory
         self._player_factory = player_factory
+        self._vision_factory = vision_factory
         self._recorder = None
         self._player = None
         self._thread: threading.Thread | None = None
@@ -97,7 +99,12 @@ class App:
             self.start_record(self.options.window_title, relative=self.options.mouse_mode == "relative")
 
     # ---- 재생 ----
-    def start_play(self, macro: Macro, options: PlayOptions, name: str | None = None) -> None:
+    def assets_dir(self, name: str | None) -> Path | None:
+        """(실험적) 매크로별 조건 이미지 폴더: macros/<이름>/"""
+        return self.macros_dir / name if name in self.library else None
+
+    def start_play(self, macro: Macro, options: PlayOptions, name: str | None = None,
+                   assets_dir: Path | None = None) -> None:
         with self._lock:
             if self.playing:
                 raise RuntimeError("이미 재생 중입니다")
@@ -105,7 +112,10 @@ class App:
                 raise RuntimeError("녹화 중에는 재생할 수 없습니다")
             if not macro.events:
                 raise ValueError("이벤트가 없습니다")
-            player = self._player_factory(self.backend, options, log=self.log)
+            vision = None
+            if conditions_in(macro.events):
+                vision = self._vision_factory(assets_dir or self.assets_dir(name))
+            player = self._player_factory(self.backend, options, log=self.log, vision=vision)
             self._player = player
             self.playing_macro, self.playing_name = macro, name
             self.playing_keys = frozenset(keys.hotkey_key(ev["key"]) for ev in macro.events if "key" in ev)

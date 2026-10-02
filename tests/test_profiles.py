@@ -63,3 +63,14 @@ def test_block_pairs_nested():
     from profiles import block_pairs
     evs = [{"type": "repeat_start"}, {"type": "repeat_start"}, {"type": "repeat_end"}, {"type": "repeat_end"}]
     assert block_pairs(evs) == {1: 2, 0: 3}
+
+
+
+def test_wait_until_validation():
+    ok = {"t": 0, "type": "wait_until", "cond": {"kind": "pixel", "x": 1, "y": 2, "color": "#ffffff"},
+          "timeout": 5, "on_timeout": "continue"}
+    Macro.from_dict({"version": 1, "events": [ok]})
+    for bad in (dict(ok, cond={"kind": "x"}), dict(ok, timeout=-1), dict(ok, on_timeout="skip"),
+                dict(ok, interval=0)):
+        with pytest.raises(MacroFormatError):
+            Macro.from_dict({"version": 1, "events": [bad]})

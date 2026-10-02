@@ -10,13 +10,15 @@ from __future__ import annotations
 import re
 
 import keys
+import vision
 from hotkeys import CONTROL_KEYS
 from profiles import BUTTONS, MAX_REPEAT, block_pairs, macro_path
 
 EVENT_LABELS = {"move": "마우스 이동", "mdown": "마우스 누름", "mup": "마우스 뗌",
                 "scroll": "스크롤", "kdown": "키 누름", "kup": "키 뗌", "wait": "지연",
                 "path": "마우스 이동 경로", "rmove": "마우스 상대 이동", "relpath": "상대 이동 경로",
-                "repeat_start": "🔁 반복 시작", "repeat_end": "🔁 반복 끝"}
+                "repeat_start": "🔁 반복 시작", "repeat_end": "🔁 반복 끝",
+                "wait_until": "🔍 조건 대기(실험)"}
 BLOCK_MARKERS = ("repeat_start", "repeat_end")
 
 # 추가 가능한 종류 (tap/click 은 누름+뗌 두 개의 이벤트를 만든다)
@@ -182,6 +184,11 @@ def describe(item: dict) -> str:
         return ""
     if typ == "repeat_start":
         return f"×{item['count']}회 반복"
+    if typ == "wait_until":
+        timeout = item.get("timeout", 10)
+        limit = f"최대 {timeout:g}초" if timeout > 0 else "무제한"
+        after = "중지" if item.get("on_timeout", "stop") == "stop" else "계속"
+        return f"{vision.describe_condition(item['cond'])} · {limit} · 초과 시 {after}"
     if typ == "repeat_end":
         return ""
     if typ == "path":
@@ -327,7 +334,7 @@ def item_fields(item: dict) -> dict:
 
 def has_positional(items: list[dict]) -> bool:
     """좌표가 저장된 항목이 있는지 (있으면 좌표 기준을 바꿀 수 없다)."""
-    return any(i["type"] == "path" or (i["type"] in POSITIONAL and "x" in i) for i in items)
+    return any(i["type"] == "path" or (i["type"] in POSITIONAL and "x" in i) or "cond" in i for i in items)
 
 
 def unique_name(base: str, existing) -> str:

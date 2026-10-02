@@ -195,3 +195,11 @@ def test_build_repeat_start_and_validation():
     good, _ = em.wrap_repeat(_keys("a"), [0, 1], 2)
     assert em.validate_for_save("x", None, good, {}, None) == []
     Macro.from_dict({"version": 1, "events": em.to_events(good)})
+
+
+def test_wait_until_item_description():
+    item = {"type": "wait_until", "dt": 0.0, "timeout": 0, "on_timeout": "continue",
+            "cond": {"kind": "image", "template": "ok.png", "threshold": 0.9}}
+    assert em.EVENT_LABELS["wait_until"].startswith("🔍")
+    assert em.describe(item) == "이미지 'ok.png' ≥90% 화면 전체 · 무제한 · 초과 시 계속"
+    assert em.has_positional([item])

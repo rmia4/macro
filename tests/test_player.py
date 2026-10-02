@@ -275,3 +275,76 @@ def test_stop_inside_repeat_block():
     p, be, clock, m = build(evs, max_minutes=0.01)  # 0.6초
     p.run(m)
     assert 2 <= len([c for c in be.calls if c[1] == "kdown"]) <= 4
+
+
+class ScriptedVision:
+    """판정 결과를 순서대로 돌려주는 가짜 화면 인식."""
+    def __init__(self, results):
+        from vision import Match
+        self.results = list(results)
+        self.checks = []
+        self.preloaded = None
+        self.Match = Match
+
+    def preload(self, conds):
+        self.preloaded = conds
+
+    def check(self, cond, origin=(0, 0)):
+        self.checks.append(origin)
+        ok = self.results.pop(0) if self.results else False
+        return self.Match(ok, 1.0 if ok else 0.0)
+
+
+PIX = {"kind": "pixel", "x": 1, "y": 1, "color": "#000000"}
+
+
+def test_wait_until_shifts_following_timeline():
+    evs = [key(0.1, "kdown", "a"), {"t": 0.2, "type": "wait_until", "cond": PIX, "timeout": 10},
+           key(0.3, "kup", "a")]
+    v = ScriptedVision([False] * 5 + [True])   # 6번째 확인에서 조건 충족 (0.1초 간격)
+    p, be, clock, m = build(evs)
+    p.vision = v
+    p.run(m)
+    assert v.preloaded == [PIX] and len(v.checks) == 6
+    down, up = be.calls[0][0], be.calls[1][0]
+    assert round(down, 3) == 0.1
+    assert round(up - down, 3) == round(0.1 + 0.5 + 0.1, 3)   # 대기 0.5초만큼 뒤로 밀림, 간격 유지
+
+
+def test_wait_until_timeout_stop_and_continue():
+    evs = [{"t": 0, "type": "wait_until", "cond": PIX, "timeout": 1, "on_timeout": "stop"}, key(0.1, "kdown")]
+    p, be, clock, m = build(evs, repeat=3)
+    p.vision = ScriptedVision([])
+    logs = []
+    p._log = logs.append
+    p.run(m)
+    assert be.calls == [] and round(clock.t, 3) == 1.0 and any("시간 초과" in s for s in logs)
+    evs[0] = dict(evs[0], on_timeout="continue")
+    p, be, clock, m = build(evs)
+    p.vision = ScriptedVision([])
+    p.run(m)
+    assert [c[1] for c in be.calls] == ["kdown", "kup"]   # 초과 후 계속 (끝에서 키 해제)
+
+
+def test_wait_until_stop_request_and_window_origin():
+    evs = [{"t": 0, "type": "wait_until", "cond": PIX, "timeout": 0}]   # 무제한
+    p, be, clock, m = build(evs)
+    v = ScriptedVision([])
+    p.vision = v
+    clock.on_wait = lambda: p.stop() if clock.t > 2 else None
+    p.run(m)
+    assert 20 <= len(v.checks) <= 22
+    clock2 = FakeClock()
+    be2 = FakeBackend(clock2)
+    v2 = ScriptedVision([True])
+    m2 = Macro(events=evs, coord_space="window", window={"title": "Game"})
+    Player(be2, PlayOptions(approach=False), clock=clock2, waiter=clock2.wait, vision=v2).run(m2)
+    assert v2.checks == [(100, 50)]   # 창 좌상단 기준으로 판정
+
+
+def test_conditions_require_vision():
+    evs = [{"t": 0, "type": "wait_until", "cond": PIX}, key(0.1, "kdown")]
+    p, be, clock, m = build(evs)
+    with pytest.raises(ValueError):
+        p.run(m)
+    assert be.calls == []

@@ -71,9 +71,10 @@ class FakeRecorder:
 
 class FakePlayer:
     """App 의 player_factory 대체. stop() 될 때까지(최대 5초) 재생 중 상태를 유지한다."""
-    def __init__(self, backend, options=None, log=None):
+    def __init__(self, backend, options=None, log=None, vision=None):
         import threading
         self.options = options
+        self.vision = vision
         self.loop_index, self.event_index = 1, 0
         self._stop = threading.Event()
 

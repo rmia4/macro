@@ -104,3 +104,20 @@ def test_cli_play_without_macro(tmp_path):
     app, out = make_app(tmp_path)
     app.handle("play")
     assert out[-1].startswith("오류: 재생할 매크로가 없습니다")
+
+
+
+def test_start_play_creates_vision_for_condition_macros(tmp_path):
+    made = []
+    app = App(FakeBackend(), macros_dir=tmp_path, log=lambda m: None, recorder_factory=FakeRecorder,
+              player_factory=FakePlayer, vision_factory=lambda d: made.append(d) or ("vision", d))
+    plain = Macro(events=[{"t": 0, "type": "kdown", "key": "a"}])
+    cond = Macro(events=[{"t": 0, "type": "wait_until", "cond": {"kind": "pixel", "x": 1, "y": 1, "color": "#000000"}}])
+    app.store("plain", plain)
+    app.store("cond", cond)
+    app.start_play(plain, PlayOptions(), "plain")
+    assert app._player.vision is None and made == []
+    app.stop_play(); app._thread.join(1)
+    app.start_play(cond, PlayOptions(), "cond")
+    assert made == [tmp_path / "cond"] and app._player.vision == ("vision", tmp_path / "cond")
+    app.stop_play(); app._thread.join(1)

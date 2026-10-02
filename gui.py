@@ -738,6 +738,8 @@ class EditorWindow:
         if len(sel) != 1:
             return
         i = sel[0]
+        if self.items[i]["type"] not in em.KIND_FIELDS:
+            return  # (실험적) 조건 대기 편집 화면은 다음 단계에서 추가
         kinds = {"path": em.PATH_KINDS, "relpath": em.RELPATH_KINDS, "repeat_start": em.REPEAT_START_KINDS,
                  "repeat_end": em.REPEAT_END_KINDS}.get(self.items[i]["type"], em.EDIT_KINDS)
         result = EventDialog.ask(self.top, kinds, item=self.items[i], pick=self.pick_position)

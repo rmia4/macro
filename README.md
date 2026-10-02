@@ -116,6 +116,23 @@ GUI 테스트는 tkinter+디스플레이가 있을 때만 실행된다(Linux: `x
 pip install -r requirements-dev.txt && python -m pytest tests
 ```
 
+## (실험적) 화면 조건 대기 — 개발 중
+화면을 보고 반응하는 기능의 1단계. 현재는 **매크로 JSON에 직접 작성**해야 하며, 기록 화면에서는 목록에
+`🔍 조건 대기(실험)`으로 표시만 된다(편집 UI는 다음 단계). 주 모니터만 지원한다.
+
+```json
+{"t": 1.2, "type": "wait_until", "timeout": 10, "on_timeout": "stop", "interval": 0.1,
+ "cond": {"kind": "image", "template": "확인버튼.png", "region": [600, 400, 300, 150], "threshold": 0.85}}
+{"t": 2.0, "type": "wait_until", "timeout": 0, "on_timeout": "continue",
+ "cond": {"kind": "pixel", "x": 120, "y": 40, "color": "#d03030", "tolerance": 20, "negate": true}}
+```
+- 조건이 맞을 때까지 `interval`(초)마다 확인하고, 맞으면 진행한다. 기다린 시간만큼 이후 이벤트가 뒤로 밀린다(간격은 유지).
+- `timeout`: 최대 대기 초(0 = 무제한). 초과 시 `on_timeout`이 `stop`이면 재생 중지(기본), `continue`면 계속.
+- 이미지 조건: `macros/<매크로 이름>/` 폴더의 PNG를 `region`(없으면 화면 전체)에서 찾는다. `threshold`는 일치도(0~1).
+- 픽셀 조건: 지정 좌표 색이 `color`와 채널별 `tolerance` 이내인지. `negate: true`면 "아닐 때".
+- 좌표는 매크로의 좌표 기준(화면/창)을 따른다. 재생 시작 전에 이미지 파일이 모두 있는지 확인한다.
+- 필요 패키지: `mss`, `opencv-python-headless`, `numpy` (requirements.txt).
+
 ## 알려진 한계
 - 독점 전체 화면 모드보다 **창 모드/테두리 없는 창 모드**가 안정적이다.
 - **상대 이동 모드**는 게임의 마우스 감도·가속 설정과 Windows "포인터 정확도 향상" 설정에 따라 재현 결과가 달라질 수 있다

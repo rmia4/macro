@@ -7,10 +7,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import keys
+import vision
 
 VERSION = 1
 EVENT_TYPES = {"move", "rmove", "mdown", "mup", "scroll", "kdown", "kup", "wait",  # rmove: 상대 이동, wait: 지연만
-               "repeat_start", "repeat_end"}  # 반복 구간: 사이의 이벤트를 count 번 반복 (중첩 가능)
+               "repeat_start", "repeat_end",  # 반복 구간: 사이의 이벤트를 count 번 반복 (중첩 가능)
+               "wait_until"}  # (실험적) 화면 조건이 맞을 때까지 대기
+ON_TIMEOUT = ("stop", "continue")
 MAX_REPEAT = 100000
 BUTTONS = {"left", "right", "middle", "x1", "x2"}
 COORD_SPACES = {"screen", "window"}
@@ -121,6 +124,17 @@ def _validate_events(events: list) -> None:
             raise MacroFormatError(f"{where}: dx, dy 가 필요합니다")
         if typ in ("kdown", "kup") and not keys.is_known(ev.get("key", "")):
             raise MacroFormatError(f"{where}: 알 수 없는 key {ev.get('key')!r}")
+        if typ == "wait_until":
+            try:
+                vision.validate_condition(ev.get("cond"))
+            except ValueError as e:
+                raise MacroFormatError(f"{where}: {e}") from None
+            if not _is_num(ev.get("timeout", 10)) or ev.get("timeout", 10) < 0:
+                raise MacroFormatError(f"{where}: timeout 은 0(무제한) 이상의 초여야 합니다")
+            if ev.get("on_timeout", "stop") not in ON_TIMEOUT:
+                raise MacroFormatError(f"{where}: on_timeout 은 stop 또는 continue 입니다")
+            if not _is_num(ev.get("interval", 0.1)) or ev.get("interval", 0.1) < 0.01:
+                raise MacroFormatError(f"{where}: interval 은 0.01초 이상이어야 합니다")
         if typ == "repeat_start":
             count = ev.get("count")
             if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= MAX_REPEAT:
