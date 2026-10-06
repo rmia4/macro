@@ -30,6 +30,10 @@ ADD_KINDS = [("tap", "키 입력 (누르고 떼기)"), ("kdown", "키 누름"), 
              ("click", "마우스 클릭"), ("mdown", "마우스 누름"), ("mup", "마우스 뗌"),
              ("move", "마우스 이동"), ("rmove", "마우스 상대 이동"), ("scroll", "스크롤"), ("wait", "지연")]
 EDIT_KINDS = [k for k in ADD_KINDS if k[0] not in ("tap", "click")]
+# 기록 화면 '추가' 줄 버튼별 종류 (대화상자 드롭다운에 이것만 나온다)
+ADD_GROUPS = {"key": [k for k in ADD_KINDS if k[0] in ("tap", "kdown", "kup")],
+              "mouse": [k for k in ADD_KINDS if k[0] in ("click", "mdown", "mup", "move", "rmove", "scroll")],
+              "wait": [k for k in ADD_KINDS if k[0] == "wait"]}
 PATH_KINDS = [("path", "마우스 이동 경로")]  # 경로 항목 수정 전용
 RELPATH_KINDS = [("relpath", "상대 이동 경로")]
 REPEAT_END_KINDS = [("repeat_end", "반복 끝")]

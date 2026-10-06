@@ -681,8 +681,8 @@ class EditorWindow:
         add = ttk.Frame(left)
         add.pack(fill="x")
         ttk.Label(add, text="추가:").pack(side="left")
-        for text, kind in (("키 입력", "tap"), ("마우스 클릭", "click"), ("지연", "wait"), ("기타…", None)):
-            ttk.Button(add, text=text, width=9, command=lambda k=kind: self.on_add(k)).pack(side="left", padx=2)
+        for text, group in (("키 입력", "key"), ("마우스", "mouse"), ("지연", "wait")):
+            ttk.Button(add, text=text, width=9, command=lambda g=group: self.on_add(g)).pack(side="left", padx=2)
         flow = ttk.Frame(left)
         flow.pack(fill="x", pady=(4, 0))
         ttk.Label(flow, text="흐름:").pack(side="left")
@@ -813,8 +813,10 @@ class EditorWindow:
         self._update_title()
         self.refresh_tree(select)
 
-    def on_add(self, kind: str | None = None) -> None:
-        result = EventDialog.ask(self.top, em.ADD_KINDS, kind=kind or "tap", pick=self.pick_position,
+    def on_add(self, group: str = "key") -> None:
+        """group: 'key'(키 입력·누름·뗌) / 'mouse'(클릭·누름·뗌·이동·상대 이동·스크롤) / 'wait'."""
+        kinds = em.ADD_GROUPS[group]
+        result = EventDialog.ask(self.top, kinds, kind=kinds[0][0], pick=self.pick_position,
                                  record=self.start_move_record)
         if result:
             self.insert_items(result)

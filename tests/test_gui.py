@@ -1154,3 +1154,18 @@ def test_move_record_inserts_only_moves_after_selection(gui):
         del FakeRecorder.events
     assert [i["type"] for i in ed.items] == ["kdown", "kup", "path", "kdown", "kup"]
     assert ed.items[2]["points"][-1][1:] == [3, 4] and not ed._moves_only
+
+
+def test_editor_add_buttons_limit_kinds(gui, monkeypatch):
+    import editor_model as em
+    from gui import EventDialog
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.on_add()
+    seen = []
+    monkeypatch.setattr(EventDialog, "ask", classmethod(lambda cls, parent, kinds, **kw: seen.append(
+        ([k for k, _ in kinds], kw["kind"]))))
+    for group in ("key", "mouse", "wait"):
+        gui.editor.on_add(group)
+    assert seen == [(["tap", "kdown", "kup"], "tap"),
+                    (["click", "mdown", "mup", "move", "rmove", "scroll"], "click"), (["wait"], "wait")]
+    assert sum(len(v) for v in em.ADD_GROUPS.values()) == len(em.ADD_KINDS)  # 남는 종류 없음 → 기타 버튼 없음
