@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+numpy-wheel/
 *.spec
 
 # 사용자 데이터 (녹화한 매크로, 프로그램 설정)

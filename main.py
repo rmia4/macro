@@ -312,13 +312,19 @@ def selftest() -> int:
         import tkinter as tk
         from pynput import keyboard, mouse  # noqa: F401
         lines.append(f"modules ok (numpy {numpy.__version__})")
-        from vision import MssGrabber
+        if input_backend.IS_WINDOWS:
+            input_backend.init_process()  # DXGI 복제는 DPI 인식이 켜져 있어야 한다
+        from vision import MssGrabber, default_grabber
         g = MssGrabber()
         w, h = g.screen_size()
         g.grab(0, 0, 2, 2)
         lines.append(f"screen capture ok ({w}x{h})")
+        g = default_grabber()
+        shot = g.grab(0, 0, 4, 4)
+        active = getattr(g, "active", False)
+        lines.append(f"default capture ok ({type(g).__name__}, {'DXGI' if active else 'mss'}"
+                     f"{'' if active else ', ' + str(getattr(g, 'error', None))}, {shot.shape})")
         if input_backend.IS_WINDOWS:
-            input_backend.init_process()
             b = input_backend.WindowsBackend()
             lines.append(f"backend ok (cursor {b.cursor_pos()}, admin={input_backend.is_admin()})")
         root = tk.Tk()

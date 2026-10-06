@@ -366,3 +366,198 @@ class RawMouseListener:
         u.RegisterRawInputDevices(ctypes.byref(dev), 1, ctypes.sizeof(dev))
         u.UnregisterClassW(cls_name, hinst)
         self._hwnd = None
+
+
+# ---- 화면 캡처: DXGI 데스크톱 복제 (Windows 8+) ----
+
+class _GUID(ctypes.Structure):
+    _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD), ("Data3", wintypes.WORD),
+                ("Data4", ctypes.c_ubyte * 8)]
+
+    @classmethod
+    def parse(cls, text: str) -> "_GUID":
+        h = text.replace("-", "")
+        return cls(int(h[:8], 16), int(h[8:12], 16), int(h[12:16], 16),
+                   (ctypes.c_ubyte * 8)(*bytes.fromhex(h[16:])))
+
+
+class _DXGI_OUTPUT_DESC(ctypes.Structure):
+    _fields_ = [("DeviceName", wintypes.WCHAR * 32), ("DesktopCoordinates", wintypes.RECT),
+                ("AttachedToDesktop", wintypes.BOOL), ("Rotation", wintypes.UINT), ("Monitor", wintypes.HMONITOR)]
+
+
+class _DXGI_OUTDUPL_FRAME_INFO(ctypes.Structure):
+    _fields_ = [("LastPresentTime", ctypes.c_longlong), ("LastMouseUpdateTime", ctypes.c_longlong),
+                ("AccumulatedFrames", wintypes.UINT), ("RectsCoalesced", wintypes.BOOL),
+                ("ProtectedContentMaskedOut", wintypes.BOOL), ("PointerPosition", wintypes.POINT),
+                ("PointerVisible", wintypes.BOOL), ("TotalMetadataBufferSize", wintypes.UINT),
+                ("PointerShapeBufferSize", wintypes.UINT)]
+
+
+class _D3D11_TEXTURE2D_DESC(ctypes.Structure):
+    _fields_ = [("Width", wintypes.UINT), ("Height", wintypes.UINT), ("MipLevels", wintypes.UINT),
+                ("ArraySize", wintypes.UINT), ("Format", wintypes.UINT), ("SampleCount", wintypes.UINT),
+                ("SampleQuality", wintypes.UINT), ("Usage", wintypes.UINT), ("BindFlags", wintypes.UINT),
+                ("CPUAccessFlags", wintypes.UINT), ("MiscFlags", wintypes.UINT)]
+
+
+class _D3D11_MAPPED_SUBRESOURCE(ctypes.Structure):
+    _fields_ = [("pData", ctypes.c_void_p), ("RowPitch", wintypes.UINT), ("DepthPitch", wintypes.UINT)]
+
+
+_IID_IDXGIFactory1 = "770aae78-f26f-4dba-a829-253c83d1b387"
+_IID_IDXGIOutput1 = "00cddea8-939b-4b83-a340-a685226666cc"
+_IID_ID3D11Texture2D = "6f15aaf2-d208-4e89-9ab4-489535d34f9c"
+_DXGI_ERROR_NOT_FOUND = 0x887A0002
+_DXGI_ERROR_WAIT_TIMEOUT = 0x887A0027
+_DXGI_FORMAT_B8G8R8A8_UNORM = 87
+_D3D11_USAGE_STAGING = 3
+_D3D11_CPU_ACCESS_READ = 0x20000
+_D3D11_MAP_READ = 1
+
+
+def _vcall(obj, index: int, *args, argtypes=(), restype=ctypes.c_long):
+    """COM 객체의 가상 함수 표 index 번째 메서드 호출 (HRESULT 는 부호 없는 값으로 확인)."""
+    vtbl = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))[0]
+    fn = ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(vtbl[index])
+    return fn(obj, *args)
+
+
+def _check(hr, what: str) -> None:
+    if hr is not None and hr < 0:
+        raise OSError(hr & 0xFFFFFFFF, f"{what} 실패 (0x{hr & 0xFFFFFFFF:08X})")
+
+
+def _release(obj) -> None:
+    if obj:
+        _vcall(obj, 2, restype=wintypes.ULONG)
+
+
+class DesktopDuplication:
+    """주 모니터를 DXGI 데스크톱 복제로 캡처. 화면이 바뀐 프레임만 GPU 안에서 복사(update)하고,
+    필요한 영역만 CPU 로 읽는다(read). 만들거나 쓰다 실패하면 OSError (원격 데스크톱·회전 화면 등).
+    스레드 안전하지 않으므로 호출하는 쪽에서 잠근다."""
+
+    def __init__(self) -> None:
+        self._objs: dict[str, ctypes.c_void_p] = {}
+        self.size = (0, 0)
+        self.has_frame = False
+        try:
+            self._open()
+        except BaseException:
+            self.close()
+            raise
+
+    def _new(self, name: str) -> ctypes.c_void_p:
+        p = self._objs[name] = ctypes.c_void_p()
+        return p
+
+    def _open(self) -> None:
+        if not IS_WINDOWS:
+            raise OSError("Windows 전용")
+        factory = self._new("factory")
+        _check(ctypes.windll.dxgi.CreateDXGIFactory1(ctypes.byref(_GUID.parse(_IID_IDXGIFactory1)),
+                                                     ctypes.byref(factory)), "CreateDXGIFactory1")
+        desc = _DXGI_OUTPUT_DESC()
+        found = False
+        i = 0
+        while not found:
+            adapter = ctypes.c_void_p()
+            hr = _vcall(factory, 12, i, ctypes.byref(adapter), argtypes=(wintypes.UINT, ctypes.c_void_p))
+            if hr & 0xFFFFFFFF == _DXGI_ERROR_NOT_FOUND:
+                break
+            _check(hr, "EnumAdapters1")
+            j = 0
+            while True:
+                output = ctypes.c_void_p()
+                hr = _vcall(adapter, 7, j, ctypes.byref(output), argtypes=(wintypes.UINT, ctypes.c_void_p))
+                if hr & 0xFFFFFFFF == _DXGI_ERROR_NOT_FOUND:
+                    break
+                _check(hr, "EnumOutputs")
+                _check(_vcall(output, 7, ctypes.byref(desc), argtypes=(ctypes.c_void_p,)), "IDXGIOutput.GetDesc")
+                rc = desc.DesktopCoordinates
+                if desc.AttachedToDesktop and rc.left == 0 and rc.top == 0:  # 주 모니터
+                    self._objs["adapter"], self._objs["output"] = adapter, output
+                    found = True
+                    break
+                _release(output)
+                j += 1
+            if not found:
+                _release(adapter)
+            i += 1
+        if not found:
+            raise OSError("주 모니터 출력을 찾지 못했습니다")
+        if desc.Rotation not in (0, 1):  # 회전된 화면은 GDI 캡처로
+            raise OSError("회전된 화면")
+        rc = desc.DesktopCoordinates
+        self.size = (rc.right - rc.left, rc.bottom - rc.top)
+        device, context = self._new("device"), self._new("context")
+        _check(ctypes.windll.d3d11.D3D11CreateDevice(
+            self._objs["adapter"], 0, None, 0, None, 0, 7,  # D3D_DRIVER_TYPE_UNKNOWN, D3D11_SDK_VERSION
+            ctypes.byref(device), None, ctypes.byref(context)), "D3D11CreateDevice")
+        output1 = self._new("output1")
+        _check(_vcall(self._objs["output"], 0, ctypes.byref(_GUID.parse(_IID_IDXGIOutput1)), ctypes.byref(output1),
+                      argtypes=(ctypes.c_void_p, ctypes.c_void_p)), "QueryInterface(IDXGIOutput1)")
+        dup = self._new("dup")
+        _check(_vcall(output1, 22, device, ctypes.byref(dup), argtypes=(ctypes.c_void_p, ctypes.c_void_p)),
+               "DuplicateOutput")
+
+    def close(self) -> None:
+        for name in ("staging", "dup", "output1", "context", "device", "output", "adapter", "factory"):
+            obj = self._objs.pop(name, None)
+            try:
+                _release(obj)
+            except OSError:
+                pass
+        self.has_frame = False
+
+    def update(self, timeout_ms: int = 0) -> bool:
+        """새 프레임이 있으면 GPU 안에서 복사해 둔다. 새 프레임이면 True, 그대로면 False."""
+        dup = self._objs["dup"]
+        info = _DXGI_OUTDUPL_FRAME_INFO()
+        res = ctypes.c_void_p()
+        hr = _vcall(dup, 8, timeout_ms, ctypes.byref(info), ctypes.byref(res),
+                    argtypes=(wintypes.UINT, ctypes.c_void_p, ctypes.c_void_p))
+        if hr & 0xFFFFFFFF == _DXGI_ERROR_WAIT_TIMEOUT:
+            return False
+        _check(hr, "AcquireNextFrame")  # 화면 모드 변경·보안 데스크톱 등: 다시 만들어야 한다
+        tex = ctypes.c_void_p()
+        try:
+            if info.LastPresentTime == 0:  # 마우스만 움직임: 화면 그림은 그대로
+                return False
+            _check(_vcall(res, 0, ctypes.byref(_GUID.parse(_IID_ID3D11Texture2D)), ctypes.byref(tex),
+                          argtypes=(ctypes.c_void_p, ctypes.c_void_p)), "QueryInterface(ID3D11Texture2D)")
+            if "staging" not in self._objs:
+                desc = _D3D11_TEXTURE2D_DESC()
+                _vcall(tex, 10, ctypes.byref(desc), argtypes=(ctypes.c_void_p,), restype=None)
+                if desc.Format != _DXGI_FORMAT_B8G8R8A8_UNORM:
+                    raise OSError(f"지원하지 않는 화면 형식 {desc.Format}")
+                desc.MipLevels = desc.ArraySize = desc.SampleCount = 1
+                desc.SampleQuality = desc.BindFlags = desc.MiscFlags = 0
+                desc.Usage, desc.CPUAccessFlags = _D3D11_USAGE_STAGING, _D3D11_CPU_ACCESS_READ
+                staging = ctypes.c_void_p()
+                _check(_vcall(self._objs["device"], 5, ctypes.byref(desc), None, ctypes.byref(staging),
+                              argtypes=(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)), "CreateTexture2D")
+                self._objs["staging"] = staging
+                self.size = (desc.Width, desc.Height)
+            _vcall(self._objs["context"], 47, self._objs["staging"], tex,
+                   argtypes=(ctypes.c_void_p, ctypes.c_void_p), restype=None)  # CopyResource
+            self.has_frame = True
+            return True
+        finally:
+            _release(tex)
+            _release(res)
+            _vcall(dup, 14)  # ReleaseFrame
+
+    def read(self, copy) -> None:
+        """마지막 프레임을 copy(주소, 한 줄 바이트 수, 너비, 높이) 로 넘긴다 (BGRA). copy 가 끝나면 무효."""
+        if not self.has_frame:
+            raise OSError("아직 프레임이 없습니다")
+        mapped = _D3D11_MAPPED_SUBRESOURCE()
+        context, staging = self._objs["context"], self._objs["staging"]
+        _check(_vcall(context, 14, staging, 0, _D3D11_MAP_READ, 0, ctypes.byref(mapped),
+                      argtypes=(ctypes.c_void_p, wintypes.UINT, wintypes.UINT, wintypes.UINT, ctypes.c_void_p)), "Map")
+        try:
+            copy(mapped.pData, mapped.RowPitch, *self.size)
+        finally:
+            _vcall(context, 15, staging, 0, argtypes=(ctypes.c_void_p, wintypes.UINT), restype=None)  # Unmap

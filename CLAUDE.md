@@ -12,12 +12,12 @@
 | `player.py` | 재생기: 시간표(origin+cum), 지터, 보간, 창 포커스 제한, 반복/분기/탈출, 조건 대기, 안전 해제. `PlayOptions`/`set_option`/`options_*_dict` |
 | `recorder.py` | `RecorderCore`(순수) + `Recorder`(pynput, relative 시 Raw Input) |
 | `profiles.py` | 매크로 JSON 스키마 검증(`Macro.from_dict`), `blocks()` 반복·분기 구조, 저장/목록/경로 |
-| `vision.py` | 조건: 검증·설명, `evaluate`(변수·all/any 단축 평가), 이미지(템플릿 매칭)/범위 색 판정, `MssGrabber`, `dominant_color`. OpenCV 없이 numpy 로 구현: `match_template`(FFT, TM_CCOEFF_NORMED 동일), PNG `encode_png`/`decode_png`(zlib) — exe 용량 때문에 cv2 쓰지 말 것 |
-| `input_backend.py` | Windows API만: SendInput(스캔코드), DPI, 창 찾기, 클릭 통과, `RawMouseListener`. 로직 넣지 말 것 |
+| `vision.py` | 조건: 검증·설명, `evaluate`(변수·all/any 단축 평가), 이미지(템플릿 매칭)/범위 색 판정, `MssGrabber`, `dominant_color`. OpenCV 없이 numpy 로 구현: `match_template`(FFT, TM_CCOEFF_NORMED 동일), PNG `encode_png`/`decode_png`(zlib) — exe 용량 때문에 cv2 쓰지 말 것. 판정 최적화: 지난 위치 주변 먼저(`_last_pos`), 화면 crc 같으면 재사용(`_last_full`), 넓은 영역은 축소 후보→원본 확인(`pyramid_factor`/`shrink`), `Vision.frame()` 안에서는 캡처 공유(여러 조건 영역 합쳐 한 번). 캡처는 `default_grabber()`(Windows: `DxgiGrabber`→실패 시 `MssGrabber`, 프로세스에 하나) |
+| `input_backend.py` | Windows API만: SendInput(스캔코드), DPI, 창 찾기, 클릭 통과, `RawMouseListener`, `DesktopDuplication`(DXGI COM 을 ctypes 가상 함수 표로 호출). 로직 넣지 말 것 |
 | `keys.py` | 키 이름↔스캔코드/VK, 핫키 파싱(`parse_hotkey`: 1~2키, `ctrl+f1`), tk 키 이름 변환 |
 | `hotkeys.py` | 전역 핫키 디스패처(조합·auto-repeat·suppress), 제어 키 F8/F9/F10 |
 | `settings.py` / `paths.py` | settings.json(창 위치, 실행 가능 여부, 전환 키, 오버레이 위치 등) / 데이터 폴더(exe면 exe 옆) |
-| `build.py`, `.github/workflows/build-exe.yml`, `icon.ico` | PyInstaller **폴더 배포**(onedir, 단일 exe는 Defender 오탐 Bearfoos.A!ml) + 버전 정보·아이콘, CI: 부트로더 직접 컴파일→Windows 테스트→빌드→`--selftest`→artifact(폴더)/Release(zip) |
+| `build.py`, `.github/workflows/build-exe.yml`, `icon.ico` | PyInstaller **폴더 배포**(onedir, 단일 exe는 Defender 오탐 Bearfoos.A!ml) + 버전 정보·아이콘, CI: 부트로더 직접 컴파일→numpy 를 BLAS 없이 소스 빌드(캐시)→Windows 테스트→빌드→`--selftest`→artifact(폴더)/Release(zip). 용량: `EXCLUDES`(표준 라이브러리·numpy 하위 모듈), `--optimize 2`, `PRUNE`(Tcl tzdata 등) |
 
 ## 핵심 설계 규칙
 - **OS 의존은 주입**: Player/Recorder/App/GUI는 backend·clock·waiter·grabber·vision·factory를 주입받는다. 테스트는 `tests/fakes.py`의 FakeBackend/FakeClock/FakeRecorder/FakePlayer 사용. Windows API 호출은 input_backend에만.

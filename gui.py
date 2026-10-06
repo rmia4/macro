@@ -386,7 +386,7 @@ class Gui:
     # ---- 화면 작업: 창을 숨기고 카운트다운 후 실행 ----
     def get_grabber(self):
         if self.grabber is None:
-            self.grabber = vision.MssGrabber()
+            self.grabber = vision.default_grabber()
         return self.grabber
 
     def notice(self, text: str, seconds: float = 1.2) -> None:
@@ -1814,7 +1814,8 @@ class ConditionDialog:
             try:
                 checker = vision.Vision(self.editor.assets_dir, self.gui.get_grabber())
                 defs = em.variable_defs(self.editor.items)
-                m = vision.evaluate(cond, lambda c: checker.check(c, origin), defs)
+                with checker.frame(cond, origin, defs):
+                    m = vision.evaluate(cond, lambda c: checker.check(c, origin), defs)
                 text = "✔ 충족" if m.matched else "✘ 불충족"
                 if cond["kind"] in vision.SCREEN_KINDS:
                     measure = "색 비율" if cond["kind"] == "pixel" else "일치도"

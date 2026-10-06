@@ -312,3 +312,118 @@ def test_vision_does_not_import_opencv():
             "assert 'cv2' not in sys.modules\n")
     root = str(__import__("pathlib").Path(vision.__file__).parent)
     subprocess.run([sys.executable, "-c", code], cwd=root, check=True)
+
+
+# ---- 판정 최적화: 지난 위치 먼저 · 화면 그대로면 재사용 · 한 번에 캡처 · 줄여서 찾기 ----
+
+def test_image_checks_last_position_first(setup):
+    v, g = setup
+    cond = {"kind": "image", "template": "확인버튼.png", "threshold": 0.9}
+    assert v.check(cond).pos == (325, 215) and g.calls[-1] == (0, 0, 400, 300)
+    g.calls.clear()
+    m = v.check(cond)
+    assert m.matched and m.pos == (325, 215)
+    assert g.calls == [(300 - 8, 200 - 8, 50 + 16, 30 + 16)]                # 지난 위치 주변만 캡처
+    # 버튼이 옮겨 가면 주변에서 못 찾고 전체를 다시 본다
+    g.screen[200:230, 300:350] = 0
+    g.screen[20:50, 30:80] = vision.load_png(v.assets_dir / "확인버튼.png")
+    g.calls.clear()
+    assert v.check(cond).pos == (55, 35) and g.calls[-1] == (0, 0, 400, 300)
+
+
+def test_image_unchanged_screen_reuses_result(setup, monkeypatch):
+    v, g = setup
+    cond = {"kind": "image", "template": "확인버튼.png", "region": [0, 0, 200, 150]}  # 없는 영역
+    searches = []
+    real = Vision._search
+    monkeypatch.setattr(Vision, "_search", lambda self, *a: searches.append(1) or real(self, *a))
+    first = v.check(cond)
+    again = v.check(cond)
+    assert not again.matched and again.score == first.score and len(searches) == 1   # 화면 그대로: 계산 안 함
+    assert v.check(dict(cond, threshold=0.01)).matched and len(searches) == 1         # 기준만 달라도 재사용
+    g.screen[10, 10] = (1, 2, 3)
+    v.check(cond)
+    assert len(searches) == 2                                                         # 바뀌면 다시 계산
+
+
+def test_frame_grabs_nearby_conditions_once(setup):
+    v, g = setup
+    a = {"kind": "pixel", "x": 60, "y": 50, "color": "#fa140a"}
+    b = {"kind": "pixel", "x": 50, "y": 40, "w": 20, "h": 20, "color": "#fa140a", "ratio": 0.001}
+    cond = {"kind": "all", "conds": [a, {"kind": "var", "name": "v"}]}
+    with v.frame(cond, (0, 0), {"v": b}):
+        m = vision.evaluate(cond, v.check, {"v": b})
+    assert m.matched and g.calls == [(50, 40, 20, 20)]                     # 합친 영역 한 번만
+    g.calls.clear()
+    far = dict(b, x=300, y=250, w=10, h=10)
+    with v.frame({"kind": "any", "conds": [a, far]}):
+        v.check(far)
+        v.check(a)
+    assert g.calls == [(300, 250, 10, 10), (60, 50, 1, 1)]                 # 멀리 떨어지면 따로
+    v.check(a)
+    assert len(g.calls) == 3                                                # 묶음 밖에서는 매번 캡처
+
+
+def test_pyramid_search_finds_same_as_full():
+    rng = np.random.default_rng(5)
+    screen = rng.integers(0, 256, size=(400, 600, 3), dtype=np.uint8)
+    tpl = screen[123:123 + 70, 301:301 + 90].copy()
+    assert vision.pyramid_factor(400, 600, 70, 90) == 4
+    assert vision.pyramid_factor(400, 600, 20, 90) == 1                     # 짧은 변이 작으면 원본 크기로
+    assert vision.pyramid_factor(80, 100, 70, 90) == 1                      # 영역이 좁으면 원본 크기로
+    v = Vision(None, FakeGrabber(screen))
+    v._templates["t.png"] = tpl
+    m = v.check({"kind": "image", "template": "t.png"})
+    assert m.matched and m.score > 0.999 and m.pos == (301 + 45, 123 + 35)
+    assert vision.shrink(np.arange(16.0).reshape(4, 4), 2).tolist() == [[2.5, 4.5], [10.5, 12.5]]
+
+
+class FakeDuplication:
+    """BGRA 화면을 가진 가짜 DXGI 복제."""
+
+    def __init__(self, screen, fail_update=False):
+        self.bgra = np.concatenate([screen, np.full(screen.shape[:2] + (1,), 255, np.uint8)], axis=2)
+        self.size = (screen.shape[1], screen.shape[0])
+        self.has_frame = False
+        self.fail_update = fail_update
+        self.closed = False
+
+    def update(self, timeout_ms=0):
+        if self.fail_update:
+            raise OSError("access lost")
+        new = not self.has_frame
+        self.has_frame = True
+        return new
+
+    def read(self, copy):
+        buf = np.ascontiguousarray(self.bgra)
+        copy(buf.ctypes.data, buf.shape[1] * 4, *self.size)
+
+    def close(self):
+        self.closed = True
+
+
+def test_dxgi_grabber_reads_region_and_falls_back():
+    screen, _ = make_screen()
+    fallback = FakeGrabber(screen)
+    dup = FakeDuplication(screen)
+    g = vision.DxgiGrabber(fallback, lambda: dup)
+    assert g.screen_size() == (400, 300) and g.active
+    assert np.array_equal(g.grab(300, 200, 50, 30), screen[200:230, 300:350]) and fallback.calls == []
+    assert g.grab(390, 290, 20, 20) is not None and fallback.calls == [(390, 290, 20, 20)]  # 화면 밖은 대신
+
+    now = [0.0]
+    dup.fail_update = True
+    attempts = []
+    g = vision.DxgiGrabber(fallback, lambda: attempts.append(1) or dup, clock=lambda: now[0])
+    assert np.array_equal(g.grab(0, 0, 5, 5), screen[:5, :5]) and dup.closed and g.error == "access lost"
+    g.grab(0, 0, 5, 5)
+    assert len(attempts) == 1                                                # 잠시 다시 만들지 않는다
+    now[0] = g.RETRY + 1
+    dup.fail_update = False
+    assert np.array_equal(g.grab(1, 1, 3, 3), screen[1:4, 1:4]) and len(attempts) == 2
+
+    def broken():
+        raise OSError("no dxgi")
+    g = vision.DxgiGrabber(fallback, broken)
+    assert g.screen_size() == (400, 300) and not g.active and g.error == "no dxgi"

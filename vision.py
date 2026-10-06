@@ -18,7 +18,10 @@ from __future__ import annotations
 
 import re
 import struct
+import threading
+import time
 import zlib
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +35,11 @@ DEFAULT_TOLERANCE = 20
 DEFAULT_RATIO = 0.5
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _TEMPLATE_RE = re.compile(r"^[\w\-. ]+\.png$")
+NEAR_PAD = 8            # 마지막으로 찾은 위치 주변을 먼저 볼 때 사방 여유 (픽셀)
+PYRAMID_MIN_SIDE = 16   # 줄여서 찾을 때 줄인 이미지의 짧은 변 최소 (이보다 작으면 원본 크기로만 찾는다)
+PYRAMID_MIN_AREA = 8    # 검색 영역이 이미지 넓이의 이 배수 이상일 때만 줄여서 찾는다
+PYRAMID_PEAKS = 3       # 줄인 화면에서 원본 크기로 다시 확인할 후보 수
+PREFETCH_SLACK = 2.0    # 여러 조건의 영역을 합친 사각형이 각 영역 넓이 합의 이 배수 이하면 한 번에 캡처
 
 
 def _num(v) -> bool:
@@ -148,14 +156,137 @@ class MssGrabber:
         return np.asarray(shot)[:, :, :3]  # BGRA -> BGR
 
 
+class DxgiGrabber:
+    """DXGI 데스크톱 복제로 캡처 (GDI 보다 빠르고 전체화면 게임도 잘 잡힌다). 화면이 바뀐 프레임만 GPU 안에서
+    복사하고 요청한 영역만 읽는다. 쓸 수 없을 때(원격 데스크톱, 회전된 화면, 드라이버 문제, 아직 프레임 없음 등)는
+    fallback(기본 MssGrabber)으로 찍고, 복제는 RETRY 초 뒤에 다시 만들어 본다."""
+
+    RETRY = 3.0
+
+    def __init__(self, fallback=None, open_duplication=None, clock=time.monotonic) -> None:
+        if open_duplication is None:
+            from input_backend import DesktopDuplication as open_duplication
+        self._open = open_duplication
+        self._fallback = fallback or MssGrabber()
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._dup = None
+        self._failed_at: float | None = None
+        self.error: str | None = None  # 마지막 실패 이유 (점검용)
+
+    def _duplication(self):
+        if self._dup is None:
+            if self._failed_at is not None and self._clock() - self._failed_at < self.RETRY:
+                return None
+            try:
+                self._dup = self._open()
+            except OSError as e:
+                self._fail(e)
+        return self._dup
+
+    def _fail(self, e) -> None:
+        self.error = str(e)
+        self._failed_at = self._clock()
+        if self._dup is not None:
+            self._dup.close()
+            self._dup = None
+
+    @property
+    def active(self) -> bool:
+        """DXGI 로 찍고 있는지 (아니면 fallback)."""
+        with self._lock:
+            dup = self._duplication()
+            if dup is not None and not dup.has_frame:
+                try:
+                    dup.update(100)
+                except OSError as e:
+                    self._fail(e)
+                    return False
+            return self._dup is not None and self._dup.has_frame
+
+    def screen_size(self) -> tuple[int, int]:
+        with self._lock:
+            dup = self._duplication()
+            if dup is not None:
+                return dup.size
+        return self._fallback.screen_size()
+
+    def grab(self, x: int, y: int, w: int, h: int):
+        import ctypes
+        import numpy as np
+        out = None
+        with self._lock:
+            dup = self._duplication()
+            if dup is not None:
+                try:
+                    dup.update(0 if dup.has_frame else 100)
+                    sw, sh = dup.size
+                    if dup.has_frame and 0 <= x and 0 <= y and x + w <= sw and y + h <= sh:
+                        def copy(addr, pitch, fw, fh):
+                            nonlocal out
+                            rows = (ctypes.c_ubyte * (pitch * (y + h))).from_address(addr)
+                            img = np.frombuffer(rows, np.uint8).reshape(y + h, pitch)
+                            out = img[y:, x * 4:(x + w) * 4].reshape(h, w, 4)[:, :, :3].copy()
+                        dup.read(copy)
+                except OSError as e:
+                    self._fail(e)
+                    out = None
+        return out if out is not None else self._fallback.grab(x, y, w, h)
+
+
+_default_grabber = None
+_default_lock = threading.Lock()
+
+
+def default_grabber():
+    """프로그램 전체가 함께 쓰는 화면 캡처 (Windows 는 DXGI, 안 되면 mss). 복제는 출력마다 수가 제한돼 하나만 만든다."""
+    global _default_grabber
+    with _default_lock:
+        if _default_grabber is None:
+            import sys
+            _default_grabber = DxgiGrabber() if sys.platform == "win32" else MssGrabber()
+        return _default_grabber
+
+
+class _Frame:
+    """한 번의 판정 동안 캡처를 나눠 쓴다: 이미 찍은 영역 안이면 다시 찍지 않고 잘라 쓴다."""
+
+    def __init__(self, grabber) -> None:
+        self.grabber = grabber
+        self._size = None
+        self.shots: list[tuple[int, int, object]] = []
+
+    def screen_size(self) -> tuple[int, int]:
+        if self._size is None:
+            self._size = self.grabber.screen_size()
+        return self._size
+
+    def grab(self, x: int, y: int, w: int, h: int):
+        for sx, sy, img in self.shots:
+            ih, iw = img.shape[:2]
+            if sx <= x and sy <= y and x + w <= sx + iw and y + h <= sy + ih:
+                return img[y - sy:y - sy + h, x - sx:x - sx + w]
+        img = self.grabber.grab(x, y, w, h)
+        self.shots.append((x, y, img))
+        return img
+
+
 class Vision:
-    """조건 판정. grabber 를 주입하면 OS 없이 테스트할 수 있다 (grab(x, y, w, h), screen_size())."""
+    """조건 판정. grabber 를 주입하면 OS 없이 테스트할 수 있다 (grab(x, y, w, h), screen_size()).
+
+    이미지 조건은 같은 조건(이미지·영역·기준점)마다 마지막으로 찾은 위치를 기억해 그 주변을 먼저 보고,
+    영역 화면이 지난번 전체 검색 때와 똑같으면 다시 계산하지 않는다. 넓은 영역은 줄인 화면에서 후보를 찾고
+    후보 주변만 원본 크기로 확인한다."""
 
     def __init__(self, assets_dir: str | Path | None, grabber=None) -> None:
         self.assets_dir = Path(assets_dir) if assets_dir else None
-        self.grabber = grabber or MssGrabber()
+        self.grabber = grabber or default_grabber()
         self._templates: dict[str, object] = {}
-        self._fft_cache: dict[str, dict] = {}  # 템플릿별 FFT (같은 영역을 반복해서 찾을 때 재사용)
+        self._fft_cache: dict = {}  # (템플릿, 축소 배율)별 FFT (같은 영역을 반복해서 찾을 때 재사용)
+        self._small: dict = {}      # (템플릿, 축소 배율) -> 줄인 템플릿
+        self._last_pos: dict = {}   # 조건 키 -> 마지막으로 찾은 왼쪽 위 (화면 좌표)
+        self._last_full: dict = {}  # 조건 키 -> (영역 모양, 화면 crc, 점수, 왼쪽 위) 지난 전체 검색
+        self._frame: _Frame | None = None
 
     def template(self, name: str):
         """템플릿 이미지(BGR)."""
@@ -178,6 +309,64 @@ class Vision:
             if cond.get("kind") == "image":
                 self.template(cond["template"])
 
+    @contextmanager
+    def frame(self, cond: dict | None = None, origin: tuple[int, int] = (0, 0), variables: dict | None = None):
+        """이 안의 판정들은 캡처를 나눠 쓴다. cond 를 주면 그 조건이 볼 화면 영역들을 (가까우면) 한 번에 찍어 둔다."""
+        if self._frame is not None:
+            yield
+            return
+        self._frame = _Frame(self.grabber)
+        try:
+            if cond is not None:
+                self._prefetch(cond, origin, variables or {})
+            yield
+        finally:
+            self._frame = None
+
+    def _grabber(self):
+        return self._frame or self.grabber
+
+    def _prefetch(self, cond: dict, origin, variables: dict) -> None:
+        rects = []
+        for c in screen_leaves(cond, variables):
+            try:
+                r = self._leaf_rect(c, origin)
+            except (OSError, ValueError, KeyError):
+                continue  # 이미지 누락 등은 실제 판정에서 알린다
+            if r is not None:
+                rects.append(r)
+        if len(rects) < 2:
+            return
+        x0, y0 = min(r[0] for r in rects), min(r[1] for r in rects)
+        x1, y1 = max(r[2] for r in rects), max(r[3] for r in rects)
+        if (x1 - x0) * (y1 - y0) <= PREFETCH_SLACK * sum((r[2] - r[0]) * (r[3] - r[1]) for r in rects):
+            self._frame.grab(x0, y0, x1 - x0, y1 - y0)
+
+    def _leaf_rect(self, cond: dict, origin):
+        """잎 조건이 캡처할 화면 사각형 (x0, y0, x1, y1). 볼 것이 없으면 None."""
+        if cond["kind"] == "pixel":
+            x, y = int(round(cond["x"])) + origin[0], int(round(cond["y"])) + origin[1]
+            if "w" not in cond:
+                return x, y, x + 1, y + 1
+            return self._clip(x, y, cond["w"], cond["h"], 1, 1)
+        th, tw = self.template(cond["template"]).shape[:2]
+        return self._image_rect(cond, origin, tw, th)
+
+    def _clip(self, x, y, w, h, min_w, min_h):
+        sw, sh = self._grabber().screen_size()  # 주 모니터 밖으로 나간 부분은 잘라낸다
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(sw, x + w), min(sh, y + h)
+        if x1 - x0 < min_w or y1 - y0 < min_h:
+            return None
+        return x0, y0, x1, y1
+
+    def _image_rect(self, cond: dict, origin, tw: int, th: int):
+        if cond.get("region"):
+            rx, ry, rw, rh = cond["region"]
+            return self._clip(rx + origin[0], ry + origin[1], rw, rh, tw, th)
+        rw, rh = self._grabber().screen_size()
+        return self._clip(0, 0, rw, rh, tw, th)
+
     def check(self, cond: dict, origin: tuple[int, int] = (0, 0)) -> Match:
         if cond["kind"] == "pixel":
             m = self._check_pixel(cond, origin)
@@ -189,44 +378,138 @@ class Vision:
 
     def _check_pixel(self, cond: dict, origin) -> Match:
         import numpy as np
+        g = self._grabber()
         x, y = int(round(cond["x"])) + origin[0], int(round(cond["y"])) + origin[1]
         tr, tg, tb = parse_color(cond["color"])
         tol = cond.get("tolerance", DEFAULT_TOLERANCE)
         if "w" not in cond:  # 한 점
-            b, g, r = (int(v) for v in self.grabber.grab(x, y, 1, 1)[0, 0])
-            diff = max(abs(r - tr), abs(g - tg), abs(b - tb))
+            b, g_, r = (int(v) for v in g.grab(x, y, 1, 1)[0, 0])
+            diff = max(abs(r - tr), abs(g_ - tg), abs(b - tb))
             return Match(diff <= tol, round(1 - diff / 255, 4))
-        sw, sh = self.grabber.screen_size()
-        x0, y0 = max(0, x), max(0, y)
-        x1, y1 = min(sw, x + cond["w"]), min(sh, y + cond["h"])
-        if x1 <= x0 or y1 <= y0:
+        rect = self._clip(x, y, cond["w"], cond["h"], 1, 1)
+        if rect is None:
             return Match(False, 0.0)
-        area = self.grabber.grab(x0, y0, x1 - x0, y1 - y0).astype(np.int16)
-        diff = np.abs(area - np.array([tb, tg, tr], dtype=np.int16)).max(axis=2)
-        share = float((diff <= tol).mean())
+        x0, y0, x1, y1 = rect
+        area = g.grab(x0, y0, x1 - x0, y1 - y0)
+        # 채널별 [목표 - 오차, 목표 + 오차] 안인지 uint8 그대로 비교 (형 변환 복사 없음)
+        target = np.array([tb, tg, tr])
+        lo = np.clip(target - tol, 0, 255).astype(np.uint8)
+        hi = np.clip(target + tol, 0, 255).astype(np.uint8)
+        inside = ((area >= lo) & (area <= hi)).all(axis=2)
+        share = float(inside.mean())
         return Match(share >= cond.get("ratio", DEFAULT_RATIO), round(share, 4))
 
     def _check_image(self, cond: dict, origin) -> Match:
         import numpy as np
-        tpl = self.template(cond["template"])
+        name = cond["template"]
+        tpl = self.template(name)
         th, tw = tpl.shape[:2]
-        if cond.get("region"):
-            rx, ry, rw, rh = cond["region"]
-            rx, ry = rx + origin[0], ry + origin[1]
-        else:
-            rx, ry = 0, 0
-            rw, rh = self.grabber.screen_size()
-        sw, sh = self.grabber.screen_size()  # 주 모니터 밖으로 나간 부분은 잘라낸다
-        x0, y0 = max(0, rx), max(0, ry)
-        x1, y1 = min(sw, rx + rw), min(sh, ry + rh)
-        if x1 - x0 < tw or y1 - y0 < th:
+        threshold = cond.get("threshold", DEFAULT_THRESHOLD)
+        rect = self._image_rect(cond, origin, tw, th)
+        if rect is None:
             return Match(False, 0.0)  # 영역이 이미지보다 작다
-        shot = self.grabber.grab(x0, y0, x1 - x0, y1 - y0)
-        result = match_template(shot, tpl, self._fft_cache.setdefault(cond["template"], {}))
-        ly, lx = np.unravel_index(int(np.argmax(result)), result.shape)
-        score = float(max(0.0, min(1.0, result[ly, lx])))
-        pos = (x0 + int(lx) + tw // 2, y0 + int(ly) + th // 2)
-        return Match(score >= cond.get("threshold", DEFAULT_THRESHOLD), round(score, 4), pos)
+        x0, y0, x1, y1 = rect
+        g = self._grabber()
+        key = (name, tuple(cond.get("region") or ()), tuple(origin))
+
+        last = self._last_pos.get(key)  # 지난번 위치 주변부터 (게임 화면의 버튼은 대개 같은 자리에 있다)
+        if last is not None:
+            nx0, ny0 = max(x0, last[0] - NEAR_PAD), max(y0, last[1] - NEAR_PAD)
+            nx1, ny1 = min(x1, last[0] + tw + NEAR_PAD), min(y1, last[1] + th + NEAR_PAD)
+            if nx1 - nx0 >= tw and ny1 - ny0 >= th:
+                score, lx, ly = _best_match(g.grab(nx0, ny0, nx1 - nx0, ny1 - ny0), tpl)
+                if score >= threshold:
+                    self._last_pos[key] = (nx0 + lx, ny0 + ly)
+                    return Match(True, round(score, 4), (nx0 + lx + tw // 2, ny0 + ly + th // 2))
+
+        shot = g.grab(x0, y0, x1 - x0, y1 - y0)
+        crc = zlib.crc32(np.ascontiguousarray(shot))
+        prev = self._last_full.get(key)
+        if prev is not None and prev[0] == shot.shape and prev[1] == crc:
+            score, (px, py) = prev[2], prev[3]  # 화면이 그대로면 지난 결과를 다시 쓴다
+        else:
+            score, lx, ly = self._search(shot, tpl, name)
+            px, py = x0 + lx, y0 + ly
+            self._last_full[key] = (shot.shape, crc, score, (px, py))
+        if score >= threshold:
+            self._last_pos[key] = (px, py)
+        else:
+            self._last_pos.pop(key, None)
+        return Match(score >= threshold, round(score, 4), (px + tw // 2, py + th // 2))
+
+    def _search(self, shot, tpl, name: str) -> tuple[float, int, int]:
+        """영역 전체에서 가장 잘 맞는 곳 (점수, 왼쪽 위 x, y). 넓은 영역은 줄인 화면에서 후보를 고른 뒤
+        후보 주변만 원본 크기로 다시 맞춰 본다."""
+        H, W = shot.shape[:2]
+        h, w = tpl.shape[:2]
+        f = pyramid_factor(H, W, h, w)
+        if f == 1:
+            return _best_match(shot, tpl, self._fft_cache.setdefault((name, 1), {}))
+        small_tpl = self._small.get((name, f))
+        if small_tpl is None:
+            small_tpl = self._small[(name, f)] = shrink(tpl, f)
+        coarse = match_template(shrink(shot, f), small_tpl, self._fft_cache.setdefault((name, f), {}))
+        best = (-1.0, 0, 0)
+        for cy, cx in _peaks(coarse, small_tpl.shape[0], small_tpl.shape[1], PYRAMID_PEAKS):
+            wy0, wx0 = max(0, cy * f - f), max(0, cx * f - f)
+            wy1, wx1 = min(H, cy * f + h + 2 * f), min(W, cx * f + w + 2 * f)
+            score, lx, ly = _best_match(shot[wy0:wy1, wx0:wx1], tpl)
+            if score > best[0]:
+                best = (score, wx0 + lx, wy0 + ly)
+        return best
+
+
+def screen_leaves(cond: dict, variables: dict, _seen: frozenset = frozenset()) -> list[dict]:
+    """조건이 판정할 수 있는 화면 잎 조건들 (변수는 지정된 조건을 따라간다)."""
+    out = []
+    for c in leaf_conditions(cond):
+        kind = c.get("kind")
+        if kind in SCREEN_KINDS:
+            out.append(c)
+        elif kind == "var" and c.get("name") not in _seen and isinstance(variables.get(c.get("name")), dict):
+            out += screen_leaves(variables[c["name"]], variables, _seen | {c["name"]})
+    return out
+
+
+def pyramid_factor(H: int, W: int, h: int, w: int) -> int:
+    """(H, W) 영역에서 (h, w) 이미지를 찾을 때 먼저 줄여 볼 배율 (1 = 줄이지 않음)."""
+    if H * W < PYRAMID_MIN_AREA * h * w:
+        return 1
+    for f in (4, 2):
+        if min(h, w) // f >= PYRAMID_MIN_SIDE:
+            return f
+    return 1
+
+
+def shrink(img, f: int):
+    """f×f 칸 평균으로 1/f 축소 (남는 가장자리는 버림) -> float64."""
+    import numpy as np
+    img = np.asarray(img)
+    h, w = img.shape[0] // f * f, img.shape[1] // f * f
+    a = img[:h, :w].astype(np.float64)
+    return a.reshape(h // f, f, w // f, f, *img.shape[2:]).mean(axis=(1, 3))
+
+
+def _peaks(result, h: int, w: int, k: int) -> list[tuple[int, int]]:
+    """점수 맵에서 서로 (h/2, w/2) 이상 떨어진 상위 k 개 위치 (y, x)."""
+    import numpy as np
+    r = np.array(result, dtype=np.float64)
+    out = []
+    for _ in range(k):
+        y, x = np.unravel_index(int(np.argmax(r)), r.shape)
+        if out and r[y, x] == -np.inf:
+            break
+        out.append((int(y), int(x)))
+        r[max(0, y - h // 2):y + h // 2 + 1, max(0, x - w // 2):x + w // 2 + 1] = -np.inf
+    return out
+
+
+def _best_match(img, tpl, cache: dict | None = None) -> tuple[float, int, int]:
+    """img 안에서 tpl 이 가장 잘 맞는 곳 (0~1 로 자른 점수, 왼쪽 위 x, y)."""
+    import numpy as np
+    result = match_template(img, tpl, cache)
+    ly, lx = np.unravel_index(int(np.argmax(result)), result.shape)
+    return float(max(0.0, min(1.0, result[ly, lx]))), int(lx), int(ly)
 
 
 def dominant_color(img, tolerance: int = DEFAULT_TOLERANCE) -> tuple[str, float]:
