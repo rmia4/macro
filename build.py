@@ -105,6 +105,7 @@ def main() -> None:
         "--noupx",
         "--optimize", "2",
         "--icon", str(ROOT / "icon.ico"),
+        "--add-data", f"{ROOT / 'icon.ico'}{os.pathsep}.",
         "--version-file", str(version_file(version)),
         "--distpath", str(OUT),
         "--workpath", str(WORK),

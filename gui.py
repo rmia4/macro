@@ -20,6 +20,7 @@ import input_backend
 import keys
 from hotkeys import CONTROL_KEYS, HOTKEY_PLAY, HOTKEY_QUIT, HOTKEY_RECORD, HotkeyListener
 from main import App
+from paths import resource_path
 from player import PlayOptions, options_from_dict, options_to_dict, set_option
 from profiles import BUTTONS, Macro
 from settings import OVERLAY_POSITIONS, SETTINGS_PATH, Settings
@@ -55,6 +56,7 @@ class Gui:
 
     def __init__(self, root: tk.Tk, app: App, settings: Settings | None = None) -> None:
         self.root, self.app = root, app
+        root.iconbitmap(default=str(resource_path("icon.ico")))
         self.settings = settings or Settings(None)
         self._logs: queue.Queue[str] = queue.Queue()
         self._calls: queue.Queue = queue.Queue()  # 다른 스레드(핫키) -> Tk 스레드
@@ -2068,6 +2070,9 @@ class HotkeyCaptureDialog:
 
 
 def run_gui(app: App) -> int:
+    if input_backend.IS_WINDOWS:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("rmia4.MacroTool")
     root = tk.Tk()
     gui = Gui(root, app, Settings(SETTINGS_PATH))
     gui.hotkey_listener = HotkeyListener(gui.hotkey_bindings(), gui.hotkey_suppressed)

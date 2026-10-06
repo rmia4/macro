@@ -14,7 +14,7 @@ import keys
 from hotkeys import CONTROL_KEYS, HOTKEY_PLAY, HOTKEY_QUIT, HOTKEY_RECORD, HotkeyListener
 from player import PlayOptions, Player, options_from_dict, options_to_dict, set_option
 from profiles import Macro, delete_macro, list_macros, load_macro, macro_path, save_macro
-from paths import app_dir, is_frozen
+from paths import app_dir, is_frozen, resource_path
 from recorder import Recorder
 from vision import Vision, conditions_in
 
@@ -330,6 +330,7 @@ def selftest() -> int:
         root = tk.Tk()
         root.withdraw()
         root.update()
+        root.iconbitmap(default=str(resource_path("icon.ico")))
         root.destroy()
         lines.append("tk ok")
         lines.append(f"data dir: {app_dir()}")
@@ -357,6 +358,7 @@ def report_crash() -> None:
         from tkinter import messagebox
         root = tk.Tk()
         root.withdraw()
+        root.iconbitmap(default=str(resource_path("icon.ico")))
         messagebox.showerror("매크로 도구 오류", f"프로그램 오류로 종료합니다.\n자세한 내용: {path}\n\n{text[-800:]}")
         root.destroy()
     except Exception:

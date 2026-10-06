@@ -14,3 +14,8 @@ def app_dir() -> Path:
     if is_frozen():
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
+
+
+def resource_path(name: str) -> Path:
+    """소스 실행과 PyInstaller 배포에서 공용 리소스 위치."""
+    return Path(__file__).resolve().parent / name
