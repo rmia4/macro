@@ -307,12 +307,11 @@ def selftest() -> int:
     import traceback
     lines = []
     try:
-        import cv2
         import mss  # noqa: F401
-        import numpy  # noqa: F401
+        import numpy
         import tkinter as tk
         from pynput import keyboard, mouse  # noqa: F401
-        lines.append(f"modules ok (opencv {cv2.__version__})")
+        lines.append(f"modules ok (numpy {numpy.__version__})")
         from vision import MssGrabber
         g = MssGrabber()
         w, h = g.screen_size()

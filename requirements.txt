@@ -1,5 +1,4 @@
 pynput>=1.7.6
 # (실험적) 화면 인식 조건
 mss>=9
-opencv-python-headless>=4.8
 numpy>=1.24

@@ -1,2 +1,4 @@
 -r requirements.txt
 pytest>=7
+# 테스트에서 자체 구현(PNG·템플릿 매칭)을 OpenCV 결과와 비교할 때만 사용. exe 에는 들어가지 않는다
+opencv-python-headless>=4.8

@@ -12,12 +12,12 @@
 | `player.py` | 재생기: 시간표(origin+cum), 지터, 보간, 창 포커스 제한, 반복/분기/탈출, 조건 대기, 안전 해제. `PlayOptions`/`set_option`/`options_*_dict` |
 | `recorder.py` | `RecorderCore`(순수) + `Recorder`(pynput, relative 시 Raw Input) |
 | `profiles.py` | 매크로 JSON 스키마 검증(`Macro.from_dict`), `blocks()` 반복·분기 구조, 저장/목록/경로 |
-| `vision.py` | 조건: 검증·설명, `evaluate`(변수·all/any 단축 평가), 이미지(템플릿 매칭)/범위 색 판정, `MssGrabber`, `dominant_color`, PNG 입출력(한글 경로 위해 imdecode/tofile) |
+| `vision.py` | 조건: 검증·설명, `evaluate`(변수·all/any 단축 평가), 이미지(템플릿 매칭)/범위 색 판정, `MssGrabber`, `dominant_color`. OpenCV 없이 numpy 로 구현: `match_template`(FFT, TM_CCOEFF_NORMED 동일), PNG `encode_png`/`decode_png`(zlib) — exe 용량 때문에 cv2 쓰지 말 것 |
 | `input_backend.py` | Windows API만: SendInput(스캔코드), DPI, 창 찾기, 클릭 통과, `RawMouseListener`. 로직 넣지 말 것 |
 | `keys.py` | 키 이름↔스캔코드/VK, 핫키 파싱(`parse_hotkey`: 1~2키, `ctrl+f1`), tk 키 이름 변환 |
 | `hotkeys.py` | 전역 핫키 디스패처(조합·auto-repeat·suppress), 제어 키 F8/F9/F10 |
 | `settings.py` / `paths.py` | settings.json(창 위치, 실행 가능 여부, 전환 키, 오버레이 위치 등) / 데이터 폴더(exe면 exe 옆) |
-| `build.py`, `.github/workflows/build-exe.yml` | PyInstaller 단일 exe, CI: Windows 테스트→빌드→`--selftest`→artifact |
+| `build.py`, `.github/workflows/build-exe.yml`, `icon.ico` | PyInstaller **폴더 배포**(onedir, 단일 exe는 Defender 오탐 Bearfoos.A!ml) + 버전 정보·아이콘, CI: 부트로더 직접 컴파일→Windows 테스트→빌드→`--selftest`→artifact(폴더)/Release(zip) |
 
 ## 핵심 설계 규칙
 - **OS 의존은 주입**: Player/Recorder/App/GUI는 backend·clock·waiter·grabber·vision·factory를 주입받는다. 테스트는 `tests/fakes.py`의 FakeBackend/FakeClock/FakeRecorder/FakePlayer 사용. Windows API 호출은 input_backend에만.
@@ -45,7 +45,7 @@ xvfb-run -a python3.12 -m pytest -q tests        # (Linux 클라우드) tkinter 
 - 실제 Windows 동작은 CI(`Build Windows exe`)에서만 검증된다. Windows 전용 차이(창 테두리, 콘솔 인코딩 cp1252 등)에 주의.
 
 ## 빌드 / 브랜치
-- 기본 브랜치: `claude/fervent-heisenberg-9bybm2` (main 없음). 푸시하면 CI가 exe를 만들어 artifact `MacroTool-windows`로 올림. `v*` 태그면 Release.
+- 기본 브랜치: `main` (릴리스용). 푸시하면 CI가 빌드해 artifact `MacroTool-windows`(MacroTool 폴더)로 올림. `v*` 태그면 Release에 zip.
 - 사용자 데이터(`macros/*.json`, `macros/*/`, `settings.json`, 로그)는 git에 올리지 않는다.
 - 큰 기능은 별도 브랜치에서 하고 요청 시 병합(fast-forward).
 - **브랜치 이름은 작업 내용이 드러나게** 짓는다: `feature/<기능>`, `fix/<문제>`, `docs/<내용>` (영문 소문자·하이픈, 예: `feature/condition-variables-while`).

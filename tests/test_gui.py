@@ -774,7 +774,6 @@ class Ev:
 def _open_condition(gui):
     if gui.macros_enabled:
         gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
-    pytest.importorskip("cv2")
     from gui import ConditionDialog
     gui.grabber = ScreenGrabber()
     gui.delay.set("0")
