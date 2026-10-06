@@ -12,7 +12,7 @@ import re
 import keys
 import vision
 from hotkeys import CONTROL_KEYS
-from profiles import BUTTONS, MAX_REPEAT, block_pairs, blocks, macro_path, var_scopes
+from profiles import BUTTONS, MAX_REPEAT, block_pairs, blocks, macro_path
 
 EVENT_LABELS = {"move": "마우스 이동", "mdown": "마우스 누름", "mup": "마우스 뗌",
                 "scroll": "스크롤", "kdown": "키 누름", "kup": "키 뗌", "wait": "지연",
@@ -217,16 +217,10 @@ def event_count(items: list[dict]) -> int:
     return sum(len(i["points"]) if "points" in i else 1 for i in items)
 
 
-def scope_text(items: list[dict], i: int) -> str:
-    """i 번째 '변수 저장'의 초기화 시점 설명. 구조가 잘못되었으면 빈 문자열."""
-    try:
-        loop = var_scopes(items).get(items[i]["name"])
-    except (ValueError, KeyError):
-        return ""
-    if loop is None:
-        return "재생 회차마다 초기화"
-    kind = "동안 반복" if items[loop]["type"] == "while_start" else "반복"
-    return f"#{loop + 1} {kind}의 회차마다 초기화"
+def variable_defs(items: list[dict]) -> dict[str, dict]:
+    """변수 이름 -> 지정된 조건 (같은 이름이 여러 번이면 마지막 것). '지금 찾아보기'용."""
+    return {it["name"]: it["cond"] for it in items
+            if it.get("type") == "set_var" and isinstance(it.get("cond"), dict)}
 
 
 def describe(item: dict) -> str:

@@ -8,7 +8,7 @@
 |---|---|
 | `main.py` | 진입점(기본 GUI, `--cli` REPL, `--selftest`), `App`: 라이브러리·녹화·재생 상태, 저장/이름변경/삭제(+이미지 폴더) |
 | `gui.py` | tkinter 화면 전부: `Gui`(메인 목록), `EditorWindow`(기록 화면), `EventDialog`, `ConditionDialog`(wait/if/break/click/set_var/loop(횟수·동안 반복) + 여러 조건의 하위 조건용 cond 모드, 모드별 선택지 `KINDS_BY_MODE`), `RegionSelector`, `HotkeyCaptureDialog`, `Overlay`, `center_on_parent` |
-| `editor_model.py` | 기록 화면의 **순수 로직**: 이벤트↔편집 항목(dt 기반) 변환, 이동 경로 묶기(path/relpath), 항목 생성(build_*), 구간 감싸기(wrap_repeat/wrap_if/wrap_while), 반복문(build_loop/replace_loop_start), 변수 범위 표시(scope_text), 저장 검증 |
+| `editor_model.py` | 기록 화면의 **순수 로직**: 이벤트↔편집 항목(dt 기반) 변환, 이동 경로 묶기(path/relpath), 항목 생성(build_*), 구간 감싸기(wrap_repeat/wrap_if/wrap_while), 반복문(build_loop/replace_loop_start), 변수 지정 모음(variable_defs), 저장 검증 |
 | `player.py` | 재생기: 시간표(origin+cum), 지터, 보간, 창 포커스 제한, 반복/분기/탈출, 조건 대기, 안전 해제. `PlayOptions`/`set_option`/`options_*_dict` |
 | `recorder.py` | `RecorderCore`(순수) + `Recorder`(pynput, relative 시 Raw Input) |
 | `profiles.py` | 매크로 JSON 스키마 검증(`Macro.from_dict`), `blocks()` 반복·분기 구조, 저장/목록/경로 |
@@ -23,7 +23,7 @@
 - **OS 의존은 주입**: Player/Recorder/App/GUI는 backend·clock·waiter·grabber·vision·factory를 주입받는다. 테스트는 `tests/fakes.py`의 FakeBackend/FakeClock/FakeRecorder/FakePlayer 사용. Windows API 호출은 input_backend에만.
 - **시간**: 저장은 절대 시각 `t`, 편집 화면은 `dt`(직전으로부터 지연). 재생은 `origin + 누적 dt`까지 대기 → 조건 대기 후엔 `origin = now - cum`으로 재정렬.
 - **블록**: repeat_start(count, 0=무한)/repeat_end, while_start(cond)/while_end, if_start(cond)/else/if_end는 `profiles.blocks()`로 검증·해석(`parent_loop`=가장 안쪽 반복, `loops`=감싸는 반복 체인; 시작/끝 표시는 자기 반복 바깥). 재생은 인덱스 점프(반복 시작 표시는 재실행 안 함, while_end는 while_start로 돌아가 재판정).
-- **조건/변수**: cond = image/pixel/var 잎 또는 all/any(잎만, 중첩 없음). 변수는 boolean, `set_var`로 저장. 초기화는 `profiles.var_scopes()` — 저장·사용 위치를 모두 감싸는 가장 안쪽 반복의 회차마다(없으면 재생 회차마다). `vision.conditions_in`은 화면 잎 조건만 반환(변수만 쓰면 vision 불필요).
+- **조건/변수**: cond = image/pixel/var 잎 또는 all/any(잎만, 중첩 없음). `set_var`는 판정하지 않고 변수에 조건을 **지정**만 한다(`Player.variables[이름] = cond`). 변수 조건은 **쓰일 때마다** `vision.evaluate`가 지정된 조건을 판정(미지정·자기 참조 = 거짓, bool 값도 허용). 지정은 재생 회차마다 비운다. `vision.conditions_in`은 화면 잎 조건만 반환(변수만 쓰면 vision 불필요).
 - **흐름 제어 조건은 변수로만**(UI 규칙): 반복문·만약·반복 탈출 창은 변수/여러 조건(변수만)만 고른다. 화면 판정(이미지/범위 색)은 변수 저장·조건 대기·이미지 클릭에서. 예전 화면 조건 항목은 수정 시에만 image/pixel 선택지를 덧붙인다(`em.uses_screen`). 데이터·재생은 화면 조건도 계속 지원.
 - **이벤트 타입**: move, rmove(dx,dy), mdown/mup/scroll(x,y 생략=현재 커서), kdown/kup, wait, repeat_*, wait_until, if_start/else/if_end, break_if, click_image, set_var(name, cond), while_start/while_end. 새 타입 추가 시: profiles 검증 → player → editor_model(라벨·describe·depths·KIND_FIELDS) → gui(on_edit 라우팅) → 테스트.
 - **좌표**: 매크로별 `coord_space` screen/window(창 클라이언트 좌상단 기준). 조건 좌표도 동일.

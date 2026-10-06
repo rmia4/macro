@@ -7,7 +7,7 @@
            "ratio": 0.5, "negate": false}
           범위 [x, y, w, h] 안에서 color(채널별 ±tolerance)인 픽셀의 비율이 ratio 이상이면 충족.
           w, h 를 생략하면 (x, y) 한 점만 본다.
-  변수:   {"kind": "var", "name": "보스", "negate": false}  저장된 판정 결과(참/거짓). 없으면 거짓.
+  변수:   {"kind": "var", "name": "보스", "negate": false}  '변수 저장'으로 지정한 조건을 쓰일 때 판정. 없으면 거짓.
   복합:   {"kind": "all" | "any", "conds": [잎 조건 2개 이상], "negate": false}
           all = 모두 맞을 때(그리고), any = 하나라도 맞을 때(또는). 안에는 이미지/색/변수만 (중첩 없음).
 
@@ -482,16 +482,24 @@ def variables_used(events) -> set[str]:
             for c in leaf_conditions(ev["cond"]) if c.get("kind") == "var" and isinstance(c.get("name"), str)}
 
 
-def evaluate(cond: dict, check_leaf, variables: dict) -> Match:
-    """조건 판정. check_leaf(이미지/색 조건) -> Match. 변수는 variables 에서 (없으면 거짓).
+def evaluate(cond: dict, check_leaf, variables: dict, _seen: frozenset = frozenset()) -> Match:
+    """조건 판정. check_leaf(이미지/색 조건) -> Match.
+    변수는 variables[이름] 이 조건(dict)이면 쓰이는 지금 판정하고, 참/거짓 값이면 그대로 쓴다 (없으면 거짓).
+    자기 자신을 다시 참조하는 변수는 거짓으로 본다.
     여러 조건은 결과가 정해지면 나머지를 보지 않는다. 반환하는 Match 는 위치·점수를 마지막 판정에서 가져온다."""
     kind = cond["kind"]
     if kind == "var":
-        m = Match(bool(variables.get(cond["name"], False)), 1.0)
+        name = cond["name"]
+        value = variables.get(name, False)
+        if isinstance(value, dict) and name not in _seen:
+            sub = evaluate(value, check_leaf, variables, _seen | {name})
+            m = Match(sub.matched, sub.score, sub.pos)
+        else:
+            m = Match(value is True, 1.0)
     elif kind in GROUP_KINDS:
         want_all = kind == "all"
         for c in cond["conds"]:  # 마지막으로 본 조건의 결과가 곧 전체 결과
-            sub = evaluate(c, check_leaf, variables)
+            sub = evaluate(c, check_leaf, variables, _seen)
             m = Match(sub.matched, sub.score, sub.pos)
             if sub.matched != want_all:
                 break

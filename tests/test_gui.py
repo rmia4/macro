@@ -1008,7 +1008,7 @@ def test_while_and_set_var_dialogs(gui):
     assert d.result["type"] == "set_var" and d.result["name"] == "적" and d.result["cond"]["kind"] == "pixel"
     ed.items.insert(0, d.result)
     ed.refresh_tree()
-    assert "재생 회차마다 초기화" in ed.tree.item("0")["values"][3]
+    assert "쓰일 때 판정" in ed.tree.item("0")["values"][3]
     # 반복문 추가: 기본은 횟수, 변수를 고르면 동안 반복
     ed.tree.selection_set(["1", "2"])
     d = ConditionDialog(ed, mode="loop")

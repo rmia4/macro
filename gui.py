@@ -764,8 +764,7 @@ class EditorWindow:
         for i, (it, depth) in enumerate(zip(self.items, em.depths(self.items))):
             detail = em.describe(it)
             if it["type"] == "set_var":
-                scope = em.scope_text(self.items, i)
-                detail += f" · {scope}" if scope else ""
+                detail += " · 쓰일 때 판정"
             self.tree.insert("", "end", iid=str(i), values=(
                 i + 1, round(it.get("dt", 0) * 1000), "│ " * depth + em.EVENT_LABELS[it["type"]], detail))
         shown = [str(i) for i in (select or []) if self.tree.exists(str(i))]
@@ -1424,8 +1423,8 @@ class ConditionDialog:
                  "if": "조건이 맞으면 '만약' 구간을, 아니면 '아니면' 구간(있을 때)을 실행합니다. 선택한 이벤트를 감쌉니다.",
                  "break": "조건이 맞으면 가장 안쪽 반복 구간을 끝냅니다 (구간 밖이면 이번 회차를 끝냄).",
                  "click": "이미지가 나타날 때까지 기다렸다가, 찾은 위치(+보정)를 클릭합니다.",
-                 "set_var": "조건을 한 번 판정해 결과(참/거짓)를 변수에 저장합니다. 이후 조건에서 '변수'로 씁니다. "
-                            "변수는 저장·사용 위치를 모두 감싸는 가장 안쪽 반복의 회차마다 거짓으로 초기화됩니다.",
+                 "set_var": "조건을 변수에 지정합니다. 여기서는 판정하지 않고, 이후 조건에서 '변수'로 쓰일 때마다 "
+                            "그 자리에서 판정해 참/거짓을 정합니다. 지정 전에 쓰이면 거짓입니다.",
                  "loop": "조건이 맞는 동안 구간을 반복합니다 (매 회차 시작 전에 판정). 선택한 이벤트를 감쌉니다.",
                  "count": "정한 횟수만큼 구간을 반복합니다. 선택한 이벤트를 감쌉니다 (선택이 없으면 끝에 빈 구간).",
                  "cond": "'여러 조건'에 넣을 변수 조건 하나를 고릅니다."}
@@ -1508,12 +1507,12 @@ class ConditionDialog:
 
         # 변수
         self.f_var = ttk.LabelFrame(f, text="변수", padding=6)
-        ttk.Label(self.f_var, text="'변수 저장'으로 저장한 값이 참이면 충족").pack(side="left")
+        ttk.Label(self.f_var, text="'변수 저장'으로 지정한 조건을 지금 판정해 참이면 충족").pack(side="left")
         self.var_box = ttk.Combobox(self.f_var, textvariable=self.v_var, width=18,
                                     values=em.variables_in(self.editor.items))
         self.var_box.pack(side="left", padx=6)
         if not em.variables_in(self.editor.items):
-            ttk.Label(self.f_var, text="먼저 📌 변수 저장으로 화면 판정 결과를 저장하세요",
+            ttk.Label(self.f_var, text="먼저 📌 변수 저장으로 화면 판정 조건을 지정하세요",
                       foreground="#c62828").pack(side="left")
 
         # 여러 조건
@@ -1750,15 +1749,16 @@ class ConditionDialog:
         def action(restore):
             try:
                 checker = vision.Vision(self.editor.assets_dir, self.gui.get_grabber())
-                m = vision.evaluate(cond, lambda c: checker.check(c, origin), {})
+                defs = em.variable_defs(self.editor.items)
+                m = vision.evaluate(cond, lambda c: checker.check(c, origin), defs)
                 text = "✔ 충족" if m.matched else "✘ 불충족"
                 if cond["kind"] in vision.SCREEN_KINDS:
                     measure = "색 비율" if cond["kind"] == "pixel" else "일치도"
                     text += f" · {measure} {m.score * 100:.0f}%"
                 if m.pos:
                     text += f" · 찾은 위치 ({m.pos[0] - origin[0]}, {m.pos[1] - origin[1]})"
-                if vision.variables_used([item]):
-                    text += " · 변수는 거짓으로 가정"
+                if vision.variables_used([item]) - set(defs):
+                    text += " · 지정 안 된 변수는 거짓으로 가정"
                 self.test_label.configure(text=text, foreground="#2e7d32" if m.matched else "#c62828")
             except Exception as e:
                 self.test_label.configure(text=f"오류: {e}", foreground="#c62828")

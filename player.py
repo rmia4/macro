@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 import keys
-from profiles import Macro, blocks, var_scopes
+from profiles import Macro, blocks
 from vision import conditions_in, evaluate
 
 
@@ -103,7 +103,7 @@ class Player:
         self._held_buttons: set[str] = set()
         self.vision = vision
         self.last_match = None  # 마지막 조건 판정 결과 (표시용)
-        self.variables: dict[str, bool] = {}  # 변수 저장 결과 (범위가 되는 반복의 회차마다 초기화)
+        self.variables: dict[str, dict] = {}  # 변수 이름 -> 지정된 조건 (쓰일 때 판정, 재생 회차마다 비움)
         self._offset = (0, 0)
         self._origin = 0.0
         self._win = (0, 0)
@@ -170,9 +170,6 @@ class Player:
         ends = bl.repeat                                 # 반복 시작 -> 끝
         starts = {end: start for start, end in ends.items()}
         while_starts = {end: start for start, end in bl.while_end.items()}
-        scoped: dict[int | None, list[str]] = {}         # 반복 시작 -> 그 회차마다 초기화할 변수
-        for name, loop in var_scopes(events, bl).items():
-            scoped.setdefault(loop, []).append(name)
         self.variables = {}
         lap_cum: dict[int, float] = {}                   # 동안 반복 -> 이번 회차 시작 시각(cum)
         first = next((e for e in events if "x" in e), None)
@@ -214,26 +211,23 @@ class Player:
             elif typ in ("if_start", "break_if", "while_start"):
                 self._check(ev["cond"])
             elif typ == "set_var":
-                self.variables[ev["name"]] = self._check(ev["cond"]).matched
+                self.variables[ev["name"]] = ev["cond"]  # 지금 판정하지 않고, 변수가 쓰일 때 판정한다
             elif not self._dispatch(ev):
                 return False
             self.event_index = i
             if typ == "repeat_start":
                 remaining[ends[i]] = ev["count"] - 1 if ev["count"] > 0 else -1  # -1 = 무한
-                self._reset_vars(scoped.get(i))
             elif typ == "repeat_end" and remaining.get(i, 0) != 0:
                 if remaining[i] > 0:
                     remaining[i] -= 1
                 start = starts[i]
                 i = start + 1  # 구간 처음으로 (반복 시작 표시는 다시 실행하지 않음)
-                self._reset_vars(scoped.get(start))
                 continue
             elif typ == "while_start":
                 if not self.last_match.matched:
                     i = bl.while_end[i] + 1  # 조건이 맞지 않으면 동안 반복 끝 다음으로
                     continue
                 lap_cum[i] = cum
-                self._reset_vars(scoped.get(i))
             elif typ == "while_end":
                 start = while_starts[i]
                 # 한 바퀴에 지연이 없어도 CPU 를 독점하지 않도록 최소 간격을 둔다
@@ -258,10 +252,6 @@ class Player:
                 continue
             i += 1
         return True
-
-    def _reset_vars(self, names) -> None:
-        for name in names or ():
-            self.variables.pop(name, None)
 
     def _check(self, cond: dict):
         """조건 판정 (변수·여러 조건 포함). 결과는 last_match 에도 남긴다."""

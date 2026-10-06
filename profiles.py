@@ -158,29 +158,6 @@ def block_pairs(events: list) -> dict[int, int]:
     return {**b.repeat, **b.while_end}
 
 
-def var_scopes(events: list, b: Blocks | None = None) -> dict[str, int | None]:
-    """변수 이름 -> 초기화 기준 반복의 시작 인덱스 (None = 재생 회차마다).
-
-    변수를 저장하는 곳과 조건에서 읽는 곳을 모두 감싸는 반복 중 가장 안쪽 것의 회차마다 초기화한다.
-    """
-    b = b or blocks(events)
-    chains: dict[str, tuple[int, ...]] = {}
-    for i, ev in enumerate(events):
-        names = set(vision.variables_used([ev]))
-        if ev.get("type") == "set_var" and isinstance(ev.get("name"), str):
-            names.add(ev["name"])
-        for name in names:
-            chain = b.loops.get(i, ())
-            if name not in chains:
-                chains[name] = chain
-            else:
-                old, n = chains[name], 0
-                while n < min(len(old), len(chain)) and old[n] == chain[n]:
-                    n += 1
-                chains[name] = old[:n]
-    return {name: (chain[-1] if chain else None) for name, chain in chains.items()}
-
-
 def _validate_events(events: list) -> None:
     prev = 0.0
     for i, ev in enumerate(events):

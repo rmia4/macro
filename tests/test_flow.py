@@ -3,7 +3,7 @@ import pytest
 
 import editor_model as em
 import vision
-from profiles import Macro, MacroFormatError, blocks, var_scopes
+from profiles import Macro, MacroFormatError, blocks
 from test_player import PIX, ScriptedVision, _kd, build
 
 VAR = lambda name, neg=False: {"kind": "var", "name": name, **({"negate": True} if neg else {})}  # noqa: E731
@@ -48,24 +48,6 @@ def test_blocks_while_and_parent_loop():
     assert b.loops[2] == (0, 1) and b.loops[0] == ()
 
 
-def test_var_scopes():
-    evs = [{"type": "set_var", "name": "top", "cond": PIX},           # 0
-           {"type": "repeat_start"},                                  # 1
-           {"type": "set_var", "name": "inner", "cond": PIX},         # 2
-           {"type": "if_start", "cond": VAR("inner")},                # 3
-           {"type": "if_end"},                                        # 4
-           {"type": "if_start", "cond": {"kind": "any", "conds": [PIX, VAR("top")]}},  # 5
-           {"type": "if_end"},                                        # 6
-           {"type": "set_var", "name": "w", "cond": PIX},             # 7
-           {"type": "while_start", "cond": VAR("w")},                 # 8: 조건에 쓰인 변수는 바깥 범위
-           {"type": "set_var", "name": "w", "cond": PIX},             # 9
-           {"type": "set_var", "name": "lap", "cond": PIX},           # 10
-           {"type": "break_if", "cond": VAR("lap")},                  # 11
-           {"type": "while_end"},                                     # 12
-           {"type": "repeat_end"}]                                    # 13
-    assert var_scopes(evs) == {"top": None, "inner": 1, "w": 1, "lap": 8}
-
-
 # ---- 판정 ----
 def test_evaluate_short_circuit_and_negate():
     seen = []
@@ -95,15 +77,25 @@ def test_conditions_and_templates_look_inside_groups():
 
 
 # ---- 재생 ----
-def test_set_var_then_if_var_reuses_result():
+def test_set_var_is_evaluated_each_time_it_is_used():
+    # 변수 저장은 판정하지 않고, 변수가 쓰일 때마다 지정된 조건을 판정한다
     evs = [ev(0, "set_var", name="hp", cond=PIX), ev(0, "if_start", cond=VAR("hp")), *_kd(0.1, "a"),
            ev(0.2, "else"), *_kd(0.3, "b"), ev(0.4, "if_end"), ev(0.5, "if_start", cond=VAR("hp", neg=True)),
            *_kd(0.6, "c"), ev(0.7, "if_end")]
     p, be, clock, m = build(evs)
-    v = ScriptedVision([True])
+    v = ScriptedVision([True, False])
     p.vision = v
     p.run(m)
-    assert keys_pressed(be) == "a" and len(v.checks) == 1  # 화면은 한 번만 본다
+    assert keys_pressed(be) == "ac" and len(v.checks) == 2  # 쓰인 두 번 모두 화면을 본다
+
+
+def test_evaluate_var_definition_and_self_reference():
+    leaf = lambda c: vision.Match(c["x"] == 1, 0.5, (3, 4))  # noqa: E731
+    defs = {"a": dict(PIX, x=1), "b": VAR("a", neg=True), "loop": VAR("loop")}
+    m = vision.evaluate(VAR("a"), leaf, defs)
+    assert m.matched and m.pos == (3, 4)
+    assert not vision.evaluate(VAR("b"), leaf, defs).matched
+    assert not vision.evaluate(VAR("loop"), leaf, defs).matched  # 자기 참조는 거짓
 
 
 def test_variable_only_macro_runs_without_vision():
@@ -139,40 +131,30 @@ def test_zero_delay_while_still_advances_time():
     assert keys_pressed(be) == "z" and clock() >= 0.49
 
 
-def test_variable_reset_per_inner_loop_iteration():
-    # 반복 안에서 저장·사용: 회차마다 초기화되므로 두 번째 회차의 '만약'은 거짓
-    evs = [ev(0, "repeat_start", count=2), ev(0, "if_start", cond=PIX),
-           ev(0, "set_var", name="seen", cond=PIX), ev(0, "if_end"),
-           ev(0.1, "if_start", cond=VAR("seen")), *_kd(0.1, "a"), ev(0.2, "else"), *_kd(0.2, "b"),
+def test_variable_not_judged_until_used():
+    # 저장 위치가 아니라 쓰이는 위치에서 판정: 반복 회차마다 새로 판정된다
+    evs = [ev(0, "set_var", name="go", cond=PIX), ev(0, "repeat_start", count=3),
+           ev(0.1, "if_start", cond=VAR("go")), *_kd(0.1, "a"), ev(0.2, "else"), *_kd(0.2, "b"),
            ev(0.3, "if_end"), ev(0.3, "repeat_end")]
     p, be, clock, m = build(evs)
-    p.vision = ScriptedVision([True, True, False])  # 1회차: if 참 → seen 참 / 2회차: if 거짓 (seen 미저장)
+    p.vision = ScriptedVision([True, False, True])
     p.run(m)
-    assert keys_pressed(be) == "ab"
+    assert keys_pressed(be) == "aba"
 
 
-def test_variable_set_outside_loop_persists_inside():
-    evs = [ev(0, "set_var", name="go", cond=PIX), ev(0, "repeat_start", count=3),
-           ev(0.1, "if_start", cond=VAR("go")), *_kd(0.1, "a"), ev(0.2, "if_end"), ev(0.3, "repeat_end")]
-    p, be, clock, m = build(evs)
-    p.vision = ScriptedVision([True])
-    p.run(m)
-    assert keys_pressed(be) == "aaa"
-
-
-def test_top_level_variable_reset_each_playback_round():
+def test_variable_used_before_set_is_false_each_playback_round():
     evs = [ev(0, "if_start", cond=VAR("done", neg=True)), *_kd(0.1, "a"), ev(0.2, "if_end"),
            ev(0.3, "set_var", name="done", cond=PIX)]
     p, be, clock, m = build(evs, repeat=2)
-    p.vision = ScriptedVision([True, True])
+    p.vision = ScriptedVision([])
     p.run(m)
-    assert keys_pressed(be) == "aa"  # 재생 회차마다 초기화
+    assert keys_pressed(be) == "aa"  # 재생 회차마다 비워진다 (지정 전엔 거짓)
 
 
-def test_while_condition_variable_not_reset_by_its_own_laps():
-    # 동안 반복 조건에 쓴 변수는 동안 반복 바깥 범위: 안에서 거짓으로 저장하면 끝난다
+def test_while_variable_rejudged_every_lap():
+    # 동안 반복 조건의 변수는 바퀴마다 다시 판정된다 (안에서 다시 저장할 필요 없음)
     evs = [ev(0, "set_var", name="go", cond=PIX), ev(0, "while_start", cond=VAR("go")), *_kd(0.1, "a"),
-           ev(0.2, "set_var", name="go", cond=PIX), ev(0.3, "while_end"), *_kd(0.4, "z")]
+           ev(0.3, "while_end"), *_kd(0.4, "z")]
     p, be, clock, m = build(evs)
     p.vision = ScriptedVision([True, True, False])
     p.run(m)
@@ -193,9 +175,7 @@ def test_editor_model_while_and_set_var():
     assert em.describe(sv).startswith("hp = [색 (1, 2)")
     assert em.describe(items[1]).endswith("인 동안")
     assert em.variables_in(items) == ["hp"]
-    assert em.scope_text(items, 0) == "재생 회차마다 초기화"
-    inner = items[:2] + [em.build_set_var(target="w", kind="pixel")] + items[2:]
-    assert em.scope_text(inner, 2) == "#2 동안 반복의 회차마다 초기화"
+    assert em.variable_defs(items) == {"hp": sv["cond"]}
     with pytest.raises(ValueError):
         em.build_set_var(target="a b", kind="pixel")
     g = em.build_condition(kind="any", conds=[PIX, VAR("hp")], negate=True)
