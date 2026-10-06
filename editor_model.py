@@ -61,6 +61,11 @@ KEY_CHOICES = sorted(keys.NAME_TO_SCAN, key=_key_order)
 HOTKEY_CHOICES = [k for k in KEY_CHOICES if k not in CONTROL_KEYS]
 
 
+def moves_only(events: list[dict]) -> list[dict]:
+    """녹화 이벤트 중 마우스 이동(move/rmove)만 남긴다 (이동 녹화용)."""
+    return [ev for ev in events if ev.get("type") in GROUPED]
+
+
 def to_items(events: list[dict]) -> list[dict]:
     items: list[dict] = []
     prev = 0.0

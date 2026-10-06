@@ -1110,3 +1110,47 @@ def test_infinite_repeat_summary(gui, monkeypatch):
     monkeypatch.setattr("gui.ConditionDialog.ask", classmethod(lambda cls, *a, **k: em.build_loop(count="0")))
     ed.on_add_loop()
     assert ed.items[0]["count"] == 0 and "무한 반복 포함" in ed.summary.cget("text")
+
+
+def test_event_dialog_capture_key(gui):
+    import editor_model as em
+    from types import SimpleNamespace
+    from gui import EventDialog
+    d = EventDialog(gui.root, em.ADD_KINDS, kind="tap")
+    d._capture_key()
+    assert d._capturing and d.capture_btn.cget("text") == "키를 누르세요…"
+    assert d._on_capture(SimpleNamespace(keysym="F5", keycode=0)) == "break"
+    assert d.v["key"].get() == "f5" and not d._capturing
+    d._capture_key()
+    d._on_capture(SimpleNamespace(keysym="Multi_key", keycode=0))
+    assert d.v["key"].get() == "f5" and "지원하지 않는 키" in d.error.cget("text")
+    d._on_ok()
+    assert d.result[0]["key"] == "f5"
+
+
+def test_move_record_inserts_only_moves_after_selection(gui):
+    import editor_model as em
+    from gui import EventDialog
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.on_add()
+    ed = gui.editor
+    # 이동 녹화 버튼은 마우스 이동 종류에서만 보인다
+    d = EventDialog(ed.top, em.ADD_KINDS, kind="tap", record=ed.start_move_record)
+    assert not d.rows["record"][0].winfo_manager()
+    d.v_kind.set(dict(em.ADD_KINDS)["move"])
+    assert d.rows["record"][0].winfo_manager()
+    ed.insert_items(em.build_items("tap", key="b") + em.build_items("tap", key="c"))
+    ed.tree.selection_set(["1"])
+    gui.delay.set("0")  # 카운트다운 없이 바로 시작
+    d._on_record()
+    assert not d.top.winfo_exists() and gui.app.recording
+    pump(gui)
+    assert "이동 녹화 중" in ed.banner.cget("text")
+    FakeRecorder.events = [{"t": 0.1, "type": "move", "x": 1, "y": 2}, {"t": 0.2, "type": "kdown", "key": "a"},
+                           {"t": 0.3, "type": "move", "x": 3, "y": 4}, {"t": 0.4, "type": "kup", "key": "a"}]
+    try:
+        ed.toggle_record()
+    finally:
+        del FakeRecorder.events
+    assert [i["type"] for i in ed.items] == ["kdown", "kup", "path", "kdown", "kup"]
+    assert ed.items[2]["points"][-1][1:] == [3, 4] and not ed._moves_only

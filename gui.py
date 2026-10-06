@@ -613,6 +613,7 @@ class EditorWindow:
         else:
             self.top.withdraw()  # 처음 열 때는 메인 창 가운데에 놓은 뒤 보인다
         self._undo: list[list[dict]] = []
+        self._moves_only = False  # 이동 녹화 중 (마우스 이동만 선택 위치 뒤에 추가)
         self._redo: list[list[dict]] = []
         self.top.protocol("WM_DELETE_WINDOW", self.close)
         self.v_name = tk.StringVar(self.top, value=name or em.unique_name("새 매크로", self.app.library))
@@ -813,7 +814,8 @@ class EditorWindow:
         self.refresh_tree(select)
 
     def on_add(self, kind: str | None = None) -> None:
-        result = EventDialog.ask(self.top, em.ADD_KINDS, kind=kind or "tap", pick=self.pick_position)
+        result = EventDialog.ask(self.top, em.ADD_KINDS, kind=kind or "tap", pick=self.pick_position,
+                                 record=self.start_move_record)
         if result:
             self.insert_items(result)
 
@@ -975,8 +977,15 @@ class EditorWindow:
         self._changed(select)
 
     # ---- 녹화 / 테스트 재생 ----
-    def toggle_record(self, immediate: bool = False) -> None:
+    def start_move_record(self) -> None:
+        """마우스 이동만 기록하는 녹화. 끝나면 선택한 이벤트 뒤(없으면 끝)에 추가된다."""
+        if self.app.recording or self.gui.countdown_for("editor"):
+            return
+        self.toggle_record(moves_only=True)
+
+    def toggle_record(self, immediate: bool = False, moves_only: bool = False) -> None:
         if self.gui.cancel_countdown():
+            self._moves_only = False
             return
         if self.app.recording:
             try:
@@ -987,6 +996,14 @@ class EditorWindow:
             if rec.window:
                 self.window = rec.window
             self.screen = rec.screen
+            if self._moves_only:
+                self._moves_only = False
+                moves = em.to_items(em.moves_only(rec.events))
+                if moves:
+                    self.insert_items(moves)
+                else:
+                    self.gui.log("기록된 마우스 이동이 없습니다")
+                return
             start = len(self.items)
             self._snapshot()
             self.items.extend(em.to_items(rec.events))
@@ -998,8 +1015,13 @@ class EditorWindow:
         ignore = self.gui.recording_ignore_keys(self._hotkey_value(strict=False))
         title, coord = self.v_title.get().strip(), self.coord_space
         relative = self.relative_mode
-        start = lambda: self.gui.guard(lambda: self.app.start_record(title, coord, ignore, relative))
-        start() if immediate else self.gui.start_after_delay(start, owner="editor", what="녹화")
+        self._moves_only = moves_only
+
+        def start():
+            if not self.gui.guard(lambda: self.app.start_record(title, coord, ignore, relative)):
+                self._moves_only = False
+        start() if immediate else self.gui.start_after_delay(start, owner="editor",
+                                                             what="이동 녹화" if moves_only else "녹화")
 
     def collect_options(self) -> PlayOptions:
         opts = PlayOptions()
@@ -1131,7 +1153,11 @@ class EditorWindow:
             text, color = f"{cd[0]}초 후 {cd[1]} 시작 — 게임 창으로 전환하세요", "wait"
         elif recording:
             mode = " · 상대 이동(Raw Input)" if self.app.recording_relative else ""
-            text, color = f"● 녹화 중{mode} — {HOTKEY_RECORD.upper()}로 종료 (목록 끝에 추가됨)", "rec"
+            if self._moves_only:
+                text = f"● 이동 녹화 중{mode} — {HOTKEY_RECORD.upper()}로 종료 (마우스 이동만, 선택 위치 뒤에 추가됨)"
+            else:
+                text = f"● 녹화 중{mode} — {HOTKEY_RECORD.upper()}로 종료 (목록 끝에 추가됨)"
+            color = "rec"
         elif playing:
             text, color = f"▶ 재생 중 — {self.app.playing_name or ''}", "play"
         else:
@@ -1143,9 +1169,11 @@ class EventDialog:
     """이벤트 추가/수정 대화상자. result: 편집 항목 리스트 (취소 시 None)."""
 
     def __init__(self, parent, kinds: list[tuple[str, str]], item: dict | None = None,
-                 kind: str = "tap", pick=None) -> None:
+                 kind: str = "tap", pick=None, record=None) -> None:
         self.kinds = kinds
         self.pick = pick
+        self.record = None if item else record  # 마우스 이동 추가 시 '이동 녹화' (마우스 이동만 기록)
+        self._capturing = False
         self.item = item
         self.result: list[dict] | None = None
         init = em.item_fields(item) if item else {}
@@ -1190,7 +1218,11 @@ class EventDialog:
         self.delay_label = ttk.Label(f, text="앞 지연(ms)")
         self.delay_label.grid(row=1, column=0, sticky="w", pady=3)
         ttk.Entry(f, textvariable=self.v["delay_ms"], width=10).grid(row=1, column=1, sticky="w", padx=6)
-        row(2, "key", "키", ttk.Combobox(f, textvariable=self.v["key"], values=em.KEY_CHOICES, width=14))
+        key = ttk.Frame(f)
+        ttk.Combobox(key, textvariable=self.v["key"], values=em.KEY_CHOICES, width=14).pack(side="left")
+        self.capture_btn = ttk.Button(key, text="키 입력으로 지정", command=self._capture_key)
+        self.capture_btn.pack(side="left", padx=(4, 0))
+        row(2, "key", "키", key)
         row(3, "button", "버튼", ttk.Combobox(f, textvariable=self.v["button"], state="readonly",
                                               values=sorted(BUTTONS), width=10))
         pos = ttk.Frame(f)
@@ -1217,14 +1249,19 @@ class EventDialog:
         row(9, "duration", "이동 시간(ms)", ttk.Entry(f, textvariable=self.v["duration_ms"], width=10))
         row(10, "scale", "이동량 배율(%)", ttk.Entry(f, textvariable=self.v["scale_pct"], width=10))
         row(11, "count", "반복 횟수", ttk.Entry(f, textvariable=self.v["count"], width=10))
+        if self.record is not None:
+            rec = ttk.Frame(f)
+            ttk.Button(rec, text="● 이동 녹화", command=self._on_record).pack(side="left")
+            ttk.Label(rec, text=f"(마우스 이동만 기록 · {HOTKEY_RECORD.upper()}로 종료)").pack(side="left", padx=4)
+            row(12, "record", "녹화", rec)
         self.error = ttk.Label(f, foreground="#c62828", wraplength=320)
-        self.error.grid(row=12, column=0, columnspan=2, sticky="w")
+        self.error.grid(row=13, column=0, columnspan=2, sticky="w")
         btns = ttk.Frame(f)
-        btns.grid(row=13, column=0, columnspan=2, pady=(8, 0))
+        btns.grid(row=14, column=0, columnspan=2, pady=(8, 0))
         ttk.Button(btns, text="확인", command=self._on_ok).pack(side="left", padx=4)
         ttk.Button(btns, text="취소", command=self.top.destroy).pack(side="left")
-        self.top.bind("<Return>", lambda e: self._on_ok())
-        self.top.bind("<Escape>", lambda e: self.top.destroy())
+        self.top.bind("<Return>", lambda e: None if self._capturing else self._on_ok())
+        self.top.bind("<Escape>", lambda e: None if self._capturing else self.top.destroy())
 
     @property
     def kind(self) -> str:
@@ -1236,6 +1273,8 @@ class EventDialog:
         fields = set(em.KIND_FIELDS[kind])
         if "cursor" in fields and self.v_cursor.get():
             fields.discard("pos")  # 현재 커서 위치 사용 시 좌표 입력 숨김
+        if kind in em.GROUPED:
+            fields.add("record")
         for field, widgets in self.rows.items():
             for w in widgets:
                 w.grid() if field in fields else w.grid_remove()
@@ -1245,6 +1284,29 @@ class EventDialog:
         self.rows["pos"][0].configure(text="끝 위치 X, Y" if kind == "path" else "X, Y")
         if "hold" in fields and not self.v["hold_ms"].get():
             self.v["hold_ms"].set(str(em.DEFAULT_HOLD_MS[kind]))
+
+    def _capture_key(self) -> None:
+        """다음에 누르는 키 하나를 키 이름으로 지정한다."""
+        self._capturing = True
+        self.capture_btn.configure(text="키를 누르세요…")
+        self.error.configure(text="")
+        self.top.bind("<KeyPress>", self._on_capture)
+        self.top.focus_set()  # 입력 칸이 키를 받지 않도록
+
+    def _on_capture(self, event) -> str:
+        name = keys.name_from_tk(event.keysym, event.keycode, windows=sys.platform == "win32")
+        self._capturing = False
+        self.top.unbind("<KeyPress>")
+        self.capture_btn.configure(text="키 입력으로 지정")
+        if name and keys.is_known(name):
+            self.v["key"].set(name)
+        else:
+            self.error.configure(text=f"지원하지 않는 키입니다: {event.keysym}")
+        return "break"
+
+    def _on_record(self) -> None:
+        self.top.destroy()
+        self.record()
 
     def _pick_later(self, n: int = 3) -> None:
         if n > 0:
