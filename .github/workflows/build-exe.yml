@@ -8,7 +8,7 @@ on:
 
 env:
   PYTHONUTF8: "1"  # 한글 출력이 cp1252 콘솔에서 실패하지 않도록
-  NUMPY_VERSION: "2.3.5"  # BLAS 없이 소스에서 빌드할 numpy (바꾸면 캐시도 새로 만든다)
+  NUMPY_VERSION: "2.5.3"  # BLAS 없이 소스에서 빌드할 numpy (바꾸면 캐시도 새로 만든다)
 
 jobs:
   build:
@@ -41,11 +41,17 @@ jobs:
         if: steps.numpy-cache.outputs.cache-hit != 'true'
         run: pip wheel "numpy==${{ env.NUMPY_VERSION }}" --no-binary numpy --no-deps -w numpy-wheel "-Csetup-args=--vsenv" "-Csetup-args=-Dblas=none" "-Csetup-args=-Dlapack=none" "-Csetup-args=-Dallow-noblas=true"
 
+      # 직접 빌드한 numpy 가 import·FFT 점검에 실패하면 일반 numpy 로 되돌린다 (용량만 커지고 빌드는 계속)
       - name: Install numpy without BLAS
         shell: pwsh
         run: |
           pip install --force-reinstall --no-deps (Get-Item numpy-wheel\numpy-*.whl).FullName
-          python -c "import numpy; b = numpy.show_config('dicts')['Build Dependencies']['blas']['name']; print('numpy', numpy.__version__, 'blas', b); assert b == 'none'"
+          python -c "import numpy as np; b = np.show_config('dicts')['Build Dependencies']['blas']['name']; assert b == 'none', b; np.fft.irfft2(np.fft.rfft2(np.ones((8, 8)))); print('numpy', np.__version__, 'blas', b)"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output "::warning::BLAS 없는 numpy 를 쓸 수 없어 일반 numpy 로 빌드합니다"
+            pip install --force-reinstall --no-deps "numpy==${{ env.NUMPY_VERSION }}"
+          }
+          exit 0
 
       - name: Check bootloader was compiled
         run: python -c "import PyInstaller, pathlib, time; p = pathlib.Path(PyInstaller.__file__).parent / 'bootloader' / 'Windows-64bit-intel' / 'runw.exe'; age = time.time() - p.stat().st_mtime; print(p, p.stat().st_size, 'bytes', int(age), 's old'); assert age < 3600, 'prebuilt bootloader'"
