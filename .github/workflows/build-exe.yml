@@ -8,6 +8,7 @@ on:
 
 env:
   PYTHONUTF8: "1"  # 한글 출력이 cp1252 콘솔에서 실패하지 않도록
+  NUMPY_VERSION: "2.5.3"  # BLAS 없이 소스에서 빌드할 numpy (바꾸면 캐시도 새로 만든다)
 
 jobs:
   build:
@@ -27,6 +28,36 @@ jobs:
           pip install --no-binary pyinstaller pyinstaller
         env:
           PYINSTALLER_COMPILE_BOOTLOADER: "1"
+
+      # numpy 를 BLAS/LAPACK 없이 빌드: exe 에서 OpenBLAS DLL(수십 MB)이 빠진다 (FFT·기본 연산만 쓰므로 속도 차이 없음)
+      - name: Cache numpy without BLAS
+        id: numpy-cache
+        uses: actions/cache@v4
+        with:
+          path: numpy-wheel
+          key: numpy-noblas-clangcl-${{ runner.os }}-py312-${{ env.NUMPY_VERSION }}
+
+      - name: Build numpy without BLAS
+        if: steps.numpy-cache.outputs.cache-hit != 'true'
+        # MSVC(cl) 로 빌드한 numpy 는 계산이 틀렸다(FFT·arange). clang-cl 로 빌드한다
+        env:
+          CC: clang-cl
+          CXX: clang-cl
+        run: pip wheel "numpy==${{ env.NUMPY_VERSION }}" --no-binary numpy --no-deps -w numpy-wheel "-Csetup-args=--vsenv" "-Csetup-args=-Dblas=none" "-Csetup-args=-Dlapack=none" "-Csetup-args=-Dallow-noblas=true"
+
+      # 직접 빌드한 numpy 는 화면 인식 테스트(OpenCV 결과와 비교)를 통과할 때만 쓴다.
+      # 실패하면 일반 numpy 로 되돌린다 (용량만 커지고 빌드는 계속)
+      - name: Install numpy without BLAS
+        shell: pwsh
+        run: |
+          pip install --force-reinstall --no-deps (Get-Item numpy-wheel\numpy-*.whl).FullName
+          python -c "import numpy as np; b = np.show_config('dicts')['Build Dependencies']['blas']['name']; assert b == 'none', b; print('numpy', np.__version__, 'blas', b)"
+          if ($LASTEXITCODE -eq 0) { python -m pytest -q tests/test_vision.py }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output "::warning::BLAS 없는 numpy 를 쓸 수 없어 일반 numpy 로 빌드합니다"
+            pip install --force-reinstall --no-deps "numpy==${{ env.NUMPY_VERSION }}"
+          }
+          exit 0
 
       - name: Check bootloader was compiled
         run: python -c "import PyInstaller, pathlib, time; p = pathlib.Path(PyInstaller.__file__).parent / 'bootloader' / 'Windows-64bit-intel' / 'runw.exe'; age = time.time() - p.stat().st_mtime; print(p, p.stat().st_size, 'bytes', int(age), 's old'); assert age < 3600, 'prebuilt bootloader'"

@@ -6,6 +6,7 @@ import math
 import random
 import threading
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Callable
 
@@ -255,7 +256,9 @@ class Player:
 
     def _check(self, cond: dict):
         """조건 판정 (변수·여러 조건 포함). 결과는 last_match 에도 남긴다."""
-        self.last_match = evaluate(cond, lambda c: self.vision.check(c, self._win), self.variables)
+        frame = getattr(self.vision, "frame", None)  # 여러 화면 조건이면 캡처를 한 번에
+        with frame(cond, self._win, self.variables) if frame else nullcontext():
+            self.last_match = evaluate(cond, lambda c: self.vision.check(c, self._win), self.variables)
         return self.last_match
 
     def _wait_until(self, cum: float) -> bool:
