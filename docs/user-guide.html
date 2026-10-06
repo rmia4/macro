@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MacroTool 사용 가이드</title>
+<style>
+:root {
+  --bg: #f7f6f3; --surface: #ffffff; --surface-2: #f0eee9; --text: #1f2328; --muted: #5d636b;
+  --border: #dedbd3; --accent: #2f6fdb; --accent-soft: #e6eefc; --ok: #2e7d32; --ok-soft: #e5f3e6;
+  --warn: #a15c00; --warn-soft: #fdf1dc; --rec: #c62828; --idle: #757575; --kbd: #ffffff;
+  --code: #f3f1ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #16181c; --surface: #1e2126; --surface-2: #262a30; --text: #e6e8eb; --muted: #a0a6ae;
+    --border: #353a42; --accent: #7aa7ff; --accent-soft: #1f2b44; --ok: #6cc070; --ok-soft: #1d2f1f;
+    --warn: #f0b45a; --warn-soft: #33281a; --rec: #ef6b6b; --idle: #8b9097; --kbd: #2b2f36;
+    --code: #262a30;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #16181c; --surface: #1e2126; --surface-2: #262a30; --text: #e6e8eb; --muted: #a0a6ae;
+  --border: #353a42; --accent: #7aa7ff; --accent-soft: #1f2b44; --ok: #6cc070; --ok-soft: #1d2f1f;
+  --warn: #f0b45a; --warn-soft: #33281a; --rec: #ef6b6b; --idle: #8b9097; --kbd: #2b2f36;
+  --code: #262a30;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.7 "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+  word-break: keep-all; overflow-wrap: anywhere;
+}
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; display: grid; grid-template-columns: 220px 1fr; gap: 40px; }
+header.hero { max-width: 1080px; margin: 0 auto; padding: 48px 16px 24px; }
+.hero h1 { font-size: 2.1rem; line-height: 1.25; margin: 0 0 8px; letter-spacing: -0.02em; }
+.hero p { color: var(--muted); margin: 0; font-size: 1.05rem; max-width: 46em; }
+nav.toc { position: sticky; top: 16px; align-self: start; font-size: 0.92rem; padding-top: 8px; }
+nav.toc strong { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 6px; letter-spacing: 0.04em; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; counter-reset: toc; }
+nav.toc li { counter-increment: toc; }
+nav.toc a { display: block; padding: 4px 8px; border-radius: 6px; color: var(--muted); text-decoration: none; }
+nav.toc a::before { content: counter(toc) ". "; }
+nav.toc a:hover { background: var(--surface-2); color: var(--text); }
+main { min-width: 0; padding-bottom: 80px; }
+section { padding-top: 24px; }
+h2 { font-size: 1.5rem; margin: 32px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); letter-spacing: -0.01em; }
+h3 { font-size: 1.15rem; margin: 28px 0 8px; }
+p, li { max-width: 48em; }
+a { color: var(--accent); }
+ul, ol { padding-left: 1.4em; }
+li { margin: 4px 0; }
+kbd {
+  display: inline-block; min-width: 1.6em; padding: 0 6px; border: 1px solid var(--border); border-bottom-width: 2px;
+  border-radius: 5px; background: var(--kbd); font: 600 0.85em/1.6 ui-monospace, Consolas, monospace; text-align: center;
+}
+.btn {
+  display: inline-block; padding: 0 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface);
+  font-size: 0.9em; white-space: nowrap;
+}
+code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; font-family: ui-monospace, Consolas, monospace; }
+.note, .tip, .warn {
+  border-radius: 10px; padding: 12px 16px; margin: 16px 0; border: 1px solid var(--border); max-width: 48em;
+}
+.note { background: var(--accent-soft); border-color: transparent; }
+.tip { background: var(--ok-soft); border-color: transparent; }
+.warn { background: var(--warn-soft); border-color: transparent; }
+.note b:first-child, .tip b:first-child, .warn b:first-child { display: block; margin-bottom: 2px; }
+.steps { list-style: none; padding: 0; counter-reset: step; margin: 16px 0; }
+.steps > li {
+  counter-increment: step; position: relative; padding: 14px 16px 14px 60px; margin: 10px 0; max-width: 48em;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+}
+.steps > li::before {
+  content: counter(step); position: absolute; left: 16px; top: 14px; width: 30px; height: 30px; border-radius: 50%;
+  background: var(--accent); color: var(--surface); font-weight: 700; display: grid; place-items: center; font-size: 0.95rem;
+}
+.steps > li > strong { display: block; margin-bottom: 2px; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.94rem; background: var(--surface); border-radius: 10px; overflow: hidden; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { background: var(--surface-2); font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+.table-scroll { overflow-x: auto; max-width: 100%; border: 1px solid var(--border); border-radius: 10px; }
+.table-scroll table { margin: 0; }
+/* 화면 모형 */
+.mock { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin: 16px 0; overflow: hidden; font-size: 0.85rem; max-width: 720px; }
+.mock .bar { background: var(--surface-2); padding: 6px 12px; color: var(--muted); font-size: 0.8rem; border-bottom: 1px solid var(--border); }
+.mock .body { padding: 12px; display: grid; gap: 8px; }
+.mock .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mock .pill { padding: 3px 10px; border-radius: 4px; color: #fff; font-weight: 700; }
+.mock .grid { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.mock .grid div { display: grid; grid-template-columns: 1.5fr 1fr 0.6fr 1.4fr; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.mock .grid div:first-child { background: var(--surface-2); font-weight: 600; }
+.mock .grid div:last-child { border-bottom: 0; }
+.mock .grid .sel { background: var(--accent-soft); }
+.mock .label { color: var(--muted); }
+.callout { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--rec); color: #fff; font-size: 0.72rem; font-weight: 700; vertical-align: middle; margin-left: 2px; }
+.legend { list-style: none; padding: 0; }
+.legend li { display: flex; gap: 8px; align-items: baseline; }
+.events { font-family: ui-monospace, Consolas, monospace; font-size: 0.82rem; }
+.events div { display: grid; grid-template-columns: 70px 1fr; gap: 8px; padding: 2px 8px; }
+.events .in { color: var(--muted); }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.card h4 { margin: 0 0 4px; font-size: 1rem; }
+.card p { margin: 0; color: var(--muted); font-size: 0.92rem; }
+details { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; margin: 8px 0; max-width: 48em; }
+details summary { cursor: pointer; font-weight: 600; }
+details[open] summary { margin-bottom: 6px; }
+.theme-toggle { position: fixed; right: 16px; bottom: 16px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 999px; padding: 8px 14px; cursor: pointer; font: inherit; font-size: 0.85rem; }
+@media (max-width: 860px) {
+  .wrap { grid-template-columns: 1fr; gap: 0; }
+  nav.toc { position: static; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+  .hero h1 { font-size: 1.7rem; }
+  .steps > li { padding-left: 52px; }
+  .mock .grid div { grid-template-columns: 1.4fr 1fr 0.6fr; }
+  .mock .grid div > :nth-child(4) { display: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <h1>MacroTool 처음 사용 가이드</h1>
+  <p>게임에서 반복하는 클릭·키 입력을 한 번 <b>녹화</b>해 두고, 단축키 하나로 <b>다시 재생</b>하는 프로그램입니다.
+  이 문서는 처음 써 보는 분이 첫 매크로를 만들고, 조금씩 고급 기능까지 익힐 수 있도록 순서대로 설명합니다.</p>
+</header>
+
+<div class="wrap">
+<nav class="toc" aria-label="목차">
+  <strong>목차</strong>
+  <ol>
+    <li><a href="#intro">무엇을 하는 프로그램인가</a></li>
+    <li><a href="#install">설치와 첫 실행</a></li>
+    <li><a href="#screens">화면 둘러보기</a></li>
+    <li><a href="#first">첫 매크로 만들기</a></li>
+    <li><a href="#play">재생과 멈추기</a></li>
+    <li><a href="#edit">녹화한 내용 다듬기</a></li>
+    <li><a href="#repeat">반복하기</a></li>
+    <li><a href="#vision">화면을 보고 반응하기</a></li>
+    <li><a href="#settings">매크로 설정 항목</a></li>
+    <li><a href="#keys">단축키 한눈에 보기</a></li>
+    <li><a href="#faq">문제 해결 · 자주 묻는 질문</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<!-- 1 -->
+<section id="intro">
+<h2>무엇을 하는 프로그램인가</h2>
+<p>MacroTool은 <b>싱글 플레이 게임</b>에서 지루하게 반복하는 작업(같은 자리 클릭, 아이템 제작, 정해진 키 순서 등)을 대신 해 줍니다.
+사용 흐름은 단 세 가지입니다.</p>
+<div class="cards">
+  <div class="card"><h4>① 녹화</h4><p>평소처럼 직접 한 번 조작하면 마우스·키보드 입력과 그 사이 시간이 기록됩니다.</p></div>
+  <div class="card"><h4>② 다듬기</h4><p>필요 없는 입력을 지우고, 대기 시간을 고치고, 반복 횟수를 정합니다.</p></div>
+  <div class="card"><h4>③ 재생</h4><p>게임 안에서 지정한 단축키를 누르면 기록한 그대로 다시 실행됩니다.</p></div>
+</div>
+<p>익숙해지면 "화면에 이 버튼이 보일 때까지 기다렸다가 누르기", "보스가 보이는 동안 계속 공격하기" 같은
+<b>화면을 보고 판단하는 매크로</b>도 만들 수 있습니다.</p>
+<div class="warn"><b>꼭 확인하세요</b>
+온라인 게임이나 <b>안티치트</b>가 있는 게임에서는 입력 자동화가 차단되거나 계정 제재를 받을 수 있습니다.
+이 도구는 싱글 플레이 게임용입니다. 사용 전에 게임의 이용 약관을 확인하세요.</div>
+</section>
+
+<!-- 2 -->
+<section id="install">
+<h2>설치와 첫 실행</h2>
+<p>Windows 전용이며, 따로 Python 등을 설치할 필요가 없습니다.</p>
+<ol class="steps">
+  <li><strong>압축 파일을 받아서 풉니다</strong>
+    <code>MacroTool-windows.zip</code>을 받아 <b>쓰기 가능한 폴더</b>(예: <code>문서\MacroTool\</code>)에 풉니다.
+    바탕 화면이나 <code>Program Files</code>보다 문서 폴더를 권장합니다.</li>
+  <li><strong>폴더째 둡니다</strong>
+    폴더 안에는 <code>MacroTool.exe</code>와 <code>_internal</code> 폴더가 있습니다.
+    <code>_internal</code>은 실행에 꼭 필요하니 <b>지우거나 옮기지 마세요</b>. exe만 따로 꺼내면 실행되지 않습니다.
+    바탕 화면에서 실행하고 싶으면 exe의 <b>바로 가기</b>를 만드세요.</li>
+  <li><strong><code>MacroTool.exe</code>를 실행합니다</strong>
+    처음 실행하면 Windows가 "PC 보호" 파란 경고창을 띄울 수 있습니다. 서명되지 않은 프로그램이라 생기는 것으로,
+    <span class="btn">추가 정보</span> → <span class="btn">실행</span>을 누르면 됩니다.</li>
+  <li><strong>게임이 관리자 권한이면 이 프로그램도 관리자 권한으로</strong>
+    게임을 관리자 권한으로 실행하고 있다면 MacroTool도 exe를 우클릭 → <span class="btn">관리자 권한으로 실행</span>해야
+    입력이 게임에 전달됩니다. 필요하면 시작할 때 경고가 표시됩니다.</li>
+</ol>
+<div class="note"><b>백신이 막는다면</b>
+키 입력을 감지하고 입력을 대신 보내는 프로그램이라 Windows Defender 같은 백신이 의심 파일로 분류할 수 있습니다
+(예: <code>Trojan:Win32/Bearfoos.A!ml</code> — 끝의 <code>!ml</code>은 "머신러닝 추정"이라는 뜻). 이 경우 MacroTool 폴더를
+Defender의 <b>제외 목록</b>에 추가하세요.</div>
+<div class="tip"><b>게임은 창 모드로</b>
+게임 그래픽 설정에서 <b>창 모드</b> 또는 <b>테두리 없는 창 모드</b>를 고르면 가장 안정적으로 동작합니다.
+독점 전체 화면에서는 상태 표시나 화면 판정이 안 될 수 있습니다.</div>
+<p>매크로(<code>macros</code> 폴더)와 설정(<code>settings.json</code>)은 exe와 같은 폴더에 자동으로 만들어집니다.
+다른 PC로 옮길 때는 폴더째 복사하면 됩니다. 프로그램이 오류로 꺼지면 같은 폴더에 <code>crash.log</code>가 남습니다.</p>
+</section>
+
+<!-- 3 -->
+<section id="screens">
+<h2>화면 둘러보기</h2>
+<h3>메인 화면 — 매크로 목록과 재생</h3>
+<div class="mock" aria-label="메인 화면 모형">
+  <div class="bar">MacroTool</div>
+  <div class="body">
+    <div class="row">
+      <span class="pill" style="background:var(--idle)">대기 중</span><span class="callout">1</span>
+      <span class="btn">▶ 재생 (F9)</span> <span class="btn">■ 중지</span><span class="callout">2</span>
+      <span class="label">버튼 시작 지연(초)</span> <span class="btn">3</span><span class="callout">3</span>
+    </div>
+    <div class="row">
+      <span class="pill" style="background:var(--ok)">● 매크로 실행 가능 (CTRL + F12)</span><span class="callout">4</span>
+      <span class="btn">단축키 변경</span>
+      <span class="label" style="margin-left:auto">상태 오버레이 위치</span> <span class="btn">↘ 오른쪽 아래</span><span class="callout">5</span>
+    </div>
+    <div class="grid">
+      <div><span>이름</span><span>시작 핫키</span><span>반복</span><span>대상 창</span></div>
+      <div class="sel"><span>나무 베기</span><span>f6</span><span>∞</span><span>Stardew Valley</span></div>
+      <div><span>제작 반복</span><span>ctrl+f1</span><span>50</span><span></span></div>
+    </div>
+    <div class="row"><span class="btn">+ 추가</span><span class="btn">편집</span><span class="btn">복제</span><span class="btn">삭제</span><span class="btn">새로고침</span><span class="callout">6</span></div>
+  </div>
+</div>
+<ul class="legend">
+  <li><span class="callout">1</span><span><b>상태 표시</b> — 대기 중 / 녹화 중 / 재생 중 등을 색으로 보여 줍니다.</span></li>
+  <li><span class="callout">2</span><span><b>재생 · 중지</b> — 목록에서 고른 매크로를 실행하거나 멈춥니다.</span></li>
+  <li><span class="callout">3</span><span><b>버튼 시작 지연</b> — <span class="btn">▶ 재생</span>을 누른 뒤 실제로 시작하기까지의 초(기본 3초). 이 사이에 게임 창을 클릭해 앞으로 가져옵니다.</span></li>
+  <li><span class="callout">4</span><span><b>매크로 실행 가능/불가</b> — 모든 매크로를 한꺼번에 켜고 끄는 스위치. 아래 설명을 꼭 읽어 주세요.</span></li>
+  <li><span class="callout">5</span><span><b>상태 오버레이</b> — 재생·녹화 중일 때 화면 구석에 작은 반투명 표시줄을 띄울 위치(끄기도 가능).</span></li>
+  <li><span class="callout">6</span><span><b>매크로 관리</b> — 새로 만들기, 편집(목록 더블클릭도 가능), 복제, 삭제(<kbd>Delete</kbd> 키).</span></li>
+</ul>
+<div class="warn"><b>"편집·추가 버튼이 안 눌려요!"</b>
+<b>매크로 실행 가능</b>(초록) 상태에서는 매크로를 만들거나 고칠 수 없게 버튼이 잠깁니다.
+버튼을 눌러(또는 <kbd>Ctrl</kbd>+<kbd>F12</kbd>) <b>○ 매크로 실행 불가</b>(회색)로 바꾸면 <span class="btn">+ 추가</span>·<span class="btn">편집</span> 등이 풀립니다.
+다 만들었으면 다시 <b>실행 가능</b>으로 돌려 놓아야 게임에서 단축키가 동작합니다.</div>
+<p>이 스위치는 게임 중 <b>채팅할 때</b>도 유용합니다. 실행 불가로 두면 매크로 단축키를 눌러도 아무 일도 일어나지 않고 그 키가 게임에 그대로 전달됩니다.
+재생 중에 끄면 실행 중이던 매크로도 즉시 멈춥니다.</p>
+
+<h3>기록 화면 — 매크로 하나를 만들고 고치는 곳</h3>
+<p><span class="btn">+ 추가</span>나 <span class="btn">편집</span>을 누르면 열립니다. 왼쪽은 입력 목록, 오른쪽은 매크로 설정입니다.</p>
+<div class="mock" aria-label="기록 화면 모형">
+  <div class="bar">기록 - 나무 베기</div>
+  <div class="body">
+    <div class="row"><span class="label">이름</span><span class="btn">나무 베기</span> <span class="label">시작 핫키</span><span class="btn">f6</span><span class="btn">키 입력으로 지정</span><span style="margin-left:auto" class="btn">저장</span><span class="btn">닫기</span></div>
+    <div class="row"><span class="pill" style="background:var(--idle);flex:1;text-align:center">대기</span></div>
+    <div class="row"><span class="btn">● 녹화 (F8)</span><span class="btn">▶ 테스트 재생</span></div>
+    <div class="grid events">
+      <div><span>앞 지연(ms)</span><span>종류 · 내용</span></div>
+      <div><span>0</span><span>마우스 이동 경로 (412,300)→(640,355)</span></div>
+      <div><span>120</span><span>마우스 클릭 왼쪽</span></div>
+      <div><span>800</span><span>키 입력 e</span></div>
+    </div>
+    <div class="row"><span class="label">추가:</span><span class="btn">키 입력</span><span class="btn">마우스</span><span class="btn">지연</span></div>
+    <div class="row"><span class="label">흐름:</span><span class="btn">🔁 반복문 추가</span></div>
+    <div class="row"><span class="label">조건:</span><span class="btn">🔍 조건 대기</span><span class="btn">❓ 조건 분기</span><span class="btn">🖱 이미지 클릭</span><span class="btn">⏹ 반복 탈출</span><span class="btn">📌 변수 저장</span></div>
+    <div class="row"><span class="btn">수정</span><span class="btn">삭제</span><span class="btn">▲ 위로</span><span class="btn">▼ 아래로</span><span class="btn">↶ 되돌리기</span><span class="btn">↷ 다시 실행</span></div>
+  </div>
+</div>
+<p>처음에는 <b>녹화 · 테스트 재생 · 저장</b>만 알면 충분합니다. 나머지는 필요할 때 아래 해당 장을 보세요.</p>
+</section>
+
+<!-- 4 -->
+<section id="first">
+<h2>첫 매크로 만들기</h2>
+<p>예시: 게임에서 "작업대를 클릭 → <kbd>E</kbd> 키로 제작"을 반복하는 매크로를 만들어 봅니다.</p>
+<ol class="steps">
+  <li><strong>게임과 MacroTool을 함께 켭니다</strong>
+    게임은 창 모드로 두고, 녹화하려는 작업을 바로 시작할 수 있는 위치에 캐릭터를 세워 둡니다.</li>
+  <li><strong>편집할 수 있게 "실행 불가"로 바꿉니다</strong>
+    메인 화면의 초록 버튼 <b>● 매크로 실행 가능</b>을 눌러 회색 <b>○ 매크로 실행 불가</b>로 만듭니다.</li>
+  <li><strong><span class="btn">+ 추가</span>를 누르고 이름과 시작 핫키를 정합니다</strong>
+    이름은 알아보기 쉽게(예: <code>제작 반복</code>). 시작 핫키 칸 옆 <span class="btn">키 입력으로 지정</span>을 누른 뒤 원하는 키(예: <kbd>F6</kbd>)를 누르면 됩니다.
+    <kbd>Ctrl</kbd>+<kbd>F1</kbd>처럼 두 키 조합도 됩니다. 게임에서 쓰지 않는 키를 고르세요.</li>
+  <li><strong>(권장) 대상 창 제목을 적습니다</strong>
+    오른쪽 <b>매크로 설정</b>의 <b>대상 창 제목</b>에 게임 창 제목 일부(예: <code>Stardew</code>)를 적습니다.
+    그러면 ① 그 게임 창이 앞에 있을 때만 입력을 보내고, ② 게임 창 위치가 바뀌어도 같은 자리를 클릭합니다.</li>
+  <li><strong>녹화합니다</strong>
+    <span class="btn">● 녹화</span>를 누르면 카운트다운(기본 3초)이 시작됩니다. 그 사이에 게임 창을 클릭해 앞으로 가져오고,
+    평소처럼 작업을 <b>한 번</b> 합니다. 끝나면 <kbd>F8</kbd>을 눌러 녹화를 멈춥니다.
+    <div class="tip" style="margin:10px 0 0"><b>녹화 종료는 F8로</b>
+    <span class="btn">● 녹화</span> 버튼을 다시 눌러 끝내면 그 클릭까지 기록됩니다. 기록됐다면 목록 맨 끝 항목을 지우면 됩니다.
+    <kbd>F8</kbd>은 녹화 화면이 열려 있으면 언제든 즉시 녹화를 시작·종료합니다.</div></li>
+  <li><strong>테스트 재생으로 확인합니다</strong>
+    <span class="btn">▶ 테스트 재생</span>을 누르고 카운트다운 동안 게임 창으로 전환하면, 녹화한 대로 움직이는지 볼 수 있습니다.
+    멈추려면 <kbd>F9</kbd>. 마음에 안 들면 <a href="#edit">다듬기</a>를 하거나 목록을 지우고 다시 녹화합니다.</li>
+  <li><strong>반복 횟수를 정하고 저장합니다</strong>
+    매크로 설정의 <b>반복 횟수</b>에 원하는 숫자(무한 반복은 <code>0</code>)를 적고 <span class="btn">저장</span>을 누릅니다. 저장하면 기록 화면이 닫힙니다.</li>
+  <li><strong>다시 "실행 가능"으로 바꾸고 게임에서 사용합니다</strong>
+    메인 화면 버튼을 눌러 <b>● 매크로 실행 가능</b>(초록)으로 돌립니다. 이제 게임 창에서 <kbd>F6</kbd>을 누르면 시작, 다시 누르면 멈춥니다.</li>
+</ol>
+<div class="note"><b>녹화를 이어 붙일 수 있어요</b>
+녹화를 여러 번 하면 새 녹화 내용이 목록 <b>끝에 추가</b>됩니다. 앞부분을 다시 하고 싶으면 그 항목들을 지우고 녹화한 뒤 <span class="btn">▲ 위로</span>로 옮기세요.</div>
+</section>
+
+<!-- 5 -->
+<section id="play">
+<h2>재생과 멈추기</h2>
+<div class="table-scroll"><table>
+  <tr><th>하고 싶은 일</th><th>방법</th></tr>
+  <tr><td>게임 안에서 바로 시작/중지</td><td>그 매크로의 <b>시작 핫키</b>(예: <kbd>F6</kbd>)</td></tr>
+  <tr><td>목록에서 골라 시작</td><td>매크로 선택 → <span class="btn">▶ 재생</span> 또는 <kbd>F9</kbd> / <kbd>Enter</kbd>. 시작 지연(기본 3초) 동안 게임 창으로 전환</td></tr>
+  <tr><td>즉시 멈추기</td><td><kbd>F9</kbd> 또는 <span class="btn">■ 중지</span></td></tr>
+  <tr><td>모든 매크로 잠그기</td><td><kbd>Ctrl</kbd>+<kbd>F12</kbd> (실행 가능 ↔ 불가)</td></tr>
+  <tr><td>프로그램 종료(비상용)</td><td><kbd>F10</kbd> — 눌려 있던 키·버튼을 모두 놓고 종료</td></tr>
+</table></div>
+<p>재생 중에는 화면 구석의 오버레이에 <code>▶ 제작 반복 · 3/50</code>처럼 <b>현재 회차/전체 회차</b>가 보입니다(무한 반복은 ∞).
+메인 화면에는 진행률과 경과 시간이 표시됩니다.</p>
+<div class="note"><b>안전장치</b>
+재생 중 게임 창이 뒤로 가면(대상 창 제목을 지정한 경우) 눌린 키를 모두 놓고 <b>일시정지</b>했다가, 게임 창으로 돌아오면 이어서 진행합니다.
+재생이 멈추거나 오류가 나도 눌려 있던 키와 마우스 버튼은 항상 자동으로 떼어집니다.</div>
+</section>
+
+<!-- 6 -->
+<section id="edit">
+<h2>녹화한 내용 다듬기</h2>
+<p>기록 화면의 목록에서 한 줄이 입력 하나입니다. <b>앞 지연(ms)</b>은 "바로 앞 입력이 끝나고 얼마나 기다렸다가 이 입력을 하는지"를 1/1000초 단위로 나타냅니다(1000 = 1초).</p>
+<h3>기본 편집</h3>
+<ul>
+  <li><b>수정</b>: 줄을 더블클릭하거나 선택 후 <span class="btn">수정</span>. 지연 시간·좌표·키 등을 바꿀 수 있습니다.</li>
+  <li><b>삭제</b>: 여러 줄을 <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+클릭으로 골라 <span class="btn">삭제</span> 또는 <kbd>Delete</kbd>.</li>
+  <li><b>순서 바꾸기</b>: <span class="btn">▲ 위로</span> / <span class="btn">▼ 아래로</span>.</li>
+  <li><b>되돌리기</b>: <span class="btn">↶ 되돌리기</span>(<kbd>Ctrl</kbd>+<kbd>Z</kbd>), <span class="btn">↷ 다시 실행</span>(<kbd>Ctrl</kbd>+<kbd>Y</kbd>). 최대 100단계.</li>
+</ul>
+<div class="tip"><b>마우스 이동은 한 줄로 묶여 보입니다</b>
+마우스를 움직인 궤적은 수십 개의 점이지만 목록에는 <b>마우스 이동 경로</b> 한 줄(시작→끝 좌표, 이동 시간)로 표시됩니다.
+수정 창에서 이동 시간이나 끝 위치를 바꾸면 경로 전체가 자연스럽게 맞춰집니다.</div>
+
+<h3>입력 직접 추가하기</h3>
+<p>녹화 없이 손으로 넣을 수도 있습니다. 목록에서 한 줄을 고르면 <b>그 다음</b>에, 아무것도 안 고르면 <b>맨 끝</b>에 추가됩니다.</p>
+<div class="table-scroll"><table>
+  <tr><th>버튼</th><th>넣을 수 있는 것</th><th>도움말</th></tr>
+  <tr><td><span class="btn">키 입력</span></td><td>키 입력(누르고 떼기) / 키 누름 / 키 뗌</td><td><span class="btn">키 입력으로 지정</span>을 누르고 실제 키를 누르면 쉽게 지정됩니다. "누름"과 "뗌"을 따로 넣으면 키를 누르고 있는 동작이 됩니다(예: 달리기).</td></tr>
+  <tr><td><span class="btn">마우스</span></td><td>클릭 / 누름 / 뗌 / 이동 / 상대 이동 / 스크롤</td><td>좌표는 직접 적거나 <span class="btn">3초 후 현재 위치</span>를 누르고 3초 안에 마우스를 원하는 곳에 두면 됩니다.<br>
+  <b>좌표 없이 현재 커서 위치에서 입력</b>을 체크하면 커서를 옮기지 않고 그 자리에서 클릭합니다.<br>
+  이동을 고르면 <span class="btn">● 이동 녹화</span>로 마우스 움직임만 따로 녹화할 수 있습니다(<kbd>F9</kbd>로 종료).</td></tr>
+  <tr><td><span class="btn">지연</span></td><td>아무것도 하지 않고 기다리기</td><td>로딩처럼 기다려야 하는 구간에 씁니다.</td></tr>
+</table></div>
+</section>
+
+<!-- 7 -->
+<section id="repeat">
+<h2>반복하기</h2>
+<p>반복 방법은 두 가지가 있고, 함께 쓸 수도 있습니다.</p>
+<div class="cards">
+  <div class="card"><h4>매크로 전체 반복</h4><p>매크로 설정의 <b>반복 횟수</b>. 목록 전체를 처음부터 끝까지 N번(<code>0</code> = 멈출 때까지 무한) 실행합니다. <b>반복 간 대기</b>로 회차 사이 쉬는 시간을 둘 수 있습니다.</p></div>
+  <div class="card"><h4>일부 구간만 반복</h4><p><span class="btn">🔁 반복문 추가</span>. 목록의 일부만 여러 번 돌립니다. 예: "준비 동작 1번 → 공격 10번 → 정리 1번".</p></div>
+</div>
+<h3>구간 반복 만드는 법</h3>
+<ol class="steps">
+  <li><strong>반복할 줄들을 선택합니다</strong> 첫 줄을 클릭하고 <kbd>Shift</kbd>+마지막 줄 클릭.</li>
+  <li><strong><span class="btn">🔁 반복문 추가</span>를 누릅니다</strong> 조건은 <b>횟수</b>(기본)를 그대로 두고 반복 횟수를 적은 뒤 확인.</li>
+  <li><strong>목록이 이렇게 바뀝니다</strong>
+    <div class="mock events" style="margin:8px 0 0">
+      <div><span>…</span><span>🔁 반복 시작 ×10</span></div>
+      <div><span></span><span class="in">│ 마우스 클릭 왼쪽</span></div>
+      <div><span></span><span class="in">│ 키 입력 e</span></div>
+      <div><span></span><span>🔁 반복 끝</span></div>
+    </div>
+    안쪽 줄은 <code>│</code>로 들여쓰기되어 보입니다. 반복 안에 또 반복을 넣을 수도 있습니다.</li>
+</ol>
+<p>시작이나 끝 줄 하나를 지우면 짝도 함께 지워지고, 안의 입력들은 그대로 남습니다. 아무것도 선택하지 않고 추가하면 끝에 빈 반복 구간이 생기며, 그 사이에 입력을 넣으면 됩니다.</p>
+</section>
+
+<!-- 8 -->
+<section id="vision">
+<h2>화면을 보고 반응하기</h2>
+<p>여기부터는 고급 기능입니다. 정해진 시간대로만 움직이는 매크로는 게임이 조금만 느려져도 어긋나는데,
+화면을 보고 판단하게 하면 훨씬 튼튼해집니다. 기록 화면의 <b>조건:</b> 줄 버튼들을 씁니다.</p>
+
+<h3>화면 판정의 두 종류</h3>
+<div class="cards">
+  <div class="card"><h4>📷 이미지가 보일 때</h4><p>버튼·아이콘 같은 그림을 잘라 두고, 화면에서 그 그림을 찾습니다. <b>일치도 기준</b>(기본 85%) 이상 비슷하면 "보인다"로 판정.</p></div>
+  <div class="card"><h4>🎨 범위의 색이 맞을 때</h4><p>체력바 같은 영역을 드래그해 색을 정합니다. 그 범위에서 목표 색이 일정 비율(기본 50%) 이상이면 충족. 한 점만 보려면 너비·높이를 1로.</p></div>
+</div>
+<p>둘 다 <b>반대로</b>를 체크하면 "아닐 때"가 됩니다(예: 로딩 화면이 <b>사라질 때</b>).
+설정 창의 <span class="btn">🔍 지금 찾아보기</span>를 누르면 지금 화면에서 바로 판정해 일치도를 보여 주니, 기준값을 정할 때 활용하세요.</p>
+
+<h3>🔍 조건 대기 — "~가 보일 때까지 기다리기"</h3>
+<ol class="steps">
+  <li><strong><span class="btn">🔍 조건 대기</span>를 누르고 <span class="btn">📷 화면에서 잘라내기</span></strong> 카운트다운 동안 게임 화면을 띄워 둡니다.</li>
+  <li><strong>캡처된 화면에서 찾을 부분을 드래그</strong> 잘라낸 그림과, 그 주변의 <b>검색 영역</b>이 자동으로 채워집니다.</li>
+  <li><strong>최대 대기 시간을 정합니다</strong> 0은 무제한. 시간이 지나도 안 보이면 <b>재생 중지</b>(기본) 또는 <b>계속 진행</b>을 고릅니다.</li>
+</ol>
+<p>기다린 만큼 뒤의 입력이 모두 함께 뒤로 밀리므로, 입력 사이 간격은 그대로 유지됩니다.</p>
+
+<h3>🖱 이미지 클릭 — "그 버튼이 보이면 눌러"</h3>
+<p>이미지가 화면에 나타날 때까지 기다렸다가, 찾은 위치의 가운데를 클릭합니다. 버튼 위치가 매번 조금씩 달라지는 게임에서 유용합니다.
+<b>보정 X, Y</b>로 클릭 지점을 살짝 옮길 수 있습니다.</p>
+
+<h3>📌 변수 — 판정에 이름 붙이기</h3>
+<p>"만약 ~라면", "~인 동안 반복", "~이면 반복 그만" 같은 <b>흐름 제어</b>에는 화면 판정을 직접 넣지 않고 <b>변수</b>를 거쳐서 씁니다.</p>
+<ol class="steps">
+  <li><strong><span class="btn">📌 변수 저장</span>으로 이름을 붙입니다</strong>
+    예: 변수 이름 <code>보스</code>, 조건 = 이미지 "보스 체력바가 보일 때". 이 줄은 판정을 하지 않고 "보스라는 이름은 이 판정"이라고 <b>정해만</b> 둡니다.
+    그래서 흐름 제어보다 <b>앞쪽</b>에 있어야 합니다.</li>
+  <li><strong>흐름 제어에서 변수를 고릅니다</strong>
+    변수가 쓰일 때마다 그 순간의 화면으로 다시 판정합니다. 여러 변수를 <b>모두 맞을 때(그리고)</b> / <b>하나라도 맞을 때(또는)</b>로 묶는 <b>여러 조건</b>도 고를 수 있습니다.</li>
+</ol>
+<div class="table-scroll"><table>
+  <tr><th>버튼</th><th>하는 일</th></tr>
+  <tr><td><span class="btn">❓ 조건 분기</span></td><td>선택한 줄들을 <b>만약 [조건]</b> ~ <b>분기 끝</b>으로 감쌉니다. 조건이 맞을 때만 실행. <b>'아니면' 구간도 만들기</b>를 체크하면 맞지 않을 때 실행할 구간도 생깁니다.</td></tr>
+  <tr><td><span class="btn">🔁 반복문 추가</span>에서 변수 선택</td><td><b>동안 반복</b>: 한 바퀴 돌기 전마다 조건을 확인해, 맞는 동안 계속 반복합니다.</td></tr>
+  <tr><td><span class="btn">⏹ 반복 탈출</span></td><td>조건이 맞으면 지금 돌고 있는 가장 안쪽 반복을 끝내고 다음으로 넘어갑니다. 반복 횟수 0(무한)과 함께 쓰면 "~가 보일 때까지 반복"이 됩니다.</td></tr>
+</table></div>
+
+<h3>예시: 보스가 보이는 동안 공격하기</h3>
+<div class="mock events" aria-label="예시 목록">
+  <div><span>0</span><span>📌 변수 저장: 보스 = 이미지 boss.png 보일 때</span></div>
+  <div><span>0</span><span>🔂 동안 반복 [보스]</span></div>
+  <div><span>200</span><span class="in">│ 키 입력 1  (공격 스킬)</span></div>
+  <div><span>500</span><span class="in">│ 키 입력 2</span></div>
+  <div><span>0</span><span>🔂 동안 반복 끝</span></div>
+  <div><span>300</span><span>🖱 이미지 클릭: 보상받기.png</span></div>
+</div>
+<p>보스 체력바가 보이는 동안 1·2번 스킬을 번갈아 쓰고, 보스가 사라지면 반복을 빠져나와 "보상받기" 버튼을 찾아 누릅니다.</p>
+<div class="note"><b>알아 두면 좋은 점</b>
+<ul style="margin:4px 0 0">
+  <li>잘라낸 이미지는 <code>macros\매크로 이름\</code> 폴더에 PNG로 저장됩니다. 이 폴더를 지우면 매크로가 재생되지 않습니다.</li>
+  <li>화면 판정은 <b>주 모니터</b>에서만 됩니다.</li>
+  <li>게임 해상도·UI 크기를 바꾸면 이미지가 안 맞을 수 있으니 다시 잘라내세요.</li>
+</ul></div>
+</section>
+
+<!-- 9 -->
+<section id="settings">
+<h2>매크로 설정 항목</h2>
+<p>기록 화면 오른쪽 <b>매크로 설정</b>에 있는 값들입니다. 처음엔 <b>반복 횟수</b>와 <b>대상 창 제목</b>만 바꿔도 충분합니다.</p>
+<div class="table-scroll"><table>
+  <tr><th>항목</th><th>기본값</th><th>설명</th></tr>
+  <tr><td>대상 창 제목</td><td>(비움)</td><td>이 글자가 제목에 들어간 창이 앞에 있을 때만 입력을 보냅니다. 적으면 좌표도 창 기준으로 저장됩니다.</td></tr>
+  <tr><td>좌표 기준</td><td>자동</td><td><b>화면 기준</b>(모니터 왼쪽 위부터) 또는 <b>창 기준</b>(게임 창 안쪽 왼쪽 위부터).</td></tr>
+  <tr><td>반복 횟수 (0=무한)</td><td>1</td><td>매크로 전체를 몇 번 실행할지.</td></tr>
+  <tr><td>속도 배율</td><td>1.0</td><td>2.0이면 두 배 빠르게, 0.5면 절반 속도로 재생.</td></tr>
+  <tr><td>반복 간 대기(초)</td><td>0</td><td>전체 반복의 회차 사이에 쉬는 시간.</td></tr>
+  <tr><td>마우스 모드</td><td>absolute</td><td><b>absolute</b>: 화면 좌표로 이동(일반 게임·메뉴). <b>relative</b>: 실제 마우스 움직임 양을 기록(1인칭/3인칭 3D 게임의 시점 회전용).</td></tr>
+  <tr><td>대기 시간 편차 ±%</td><td>0</td><td>매번 기다리는 시간을 조금씩 다르게 해서 기계적인 느낌을 줄입니다.</td></tr>
+  <tr><td>클릭 좌표 편차 ±px</td><td>0</td><td>클릭 위치를 몇 픽셀씩 무작위로 흔듭니다.</td></tr>
+  <tr><td>키 최소 유지(초)</td><td>0.04</td><td>키를 너무 짧게 눌러 게임이 못 알아듣는 것을 막습니다.</td></tr>
+  <tr><td>루프 시작 시 부드럽게 이동</td><td>켜짐</td><td>회차 시작 때 마우스를 첫 위치로 순간이동하지 않고 자연스럽게 옮깁니다.</td></tr>
+  <tr><td>이동 최대 시간(초)</td><td>0.4</td><td>위 부드러운 이동에 쓰는 최대 시간.</td></tr>
+  <tr><td>창 크기에 맞춰 좌표 조정</td><td>꺼짐</td><td>녹화 때와 게임 창 크기가 다르면 좌표를 비율대로 맞춥니다.</td></tr>
+  <tr><td>최대 실행 시간(분, 0=무제한)</td><td>0</td><td>이 시간이 지나면 자동으로 멈춥니다. 무한 반복을 걸어 두고 자리를 비울 때 유용.</td></tr>
+</table></div>
+<details>
+  <summary>3D 게임에서 시점(카메라) 회전을 녹화하려면</summary>
+  <p>마우스 모드를 <code>relative</code>로 바꾸고 녹화하세요. 커서 위치 대신 마우스를 실제로 움직인 양을 기록하므로, 커서가 화면 중앙에 고정되는 게임에서도 시점 회전이 재현됩니다.
+  게임 감도에 따라 회전 각도가 달라지면 이동 경로 줄을 수정해 <b>이동량 배율(%)</b>로 보정합니다.
+  Windows의 "포인터 정확도 향상" 설정도 결과에 영향을 줄 수 있습니다.</p>
+</details>
+</section>
+
+<!-- 10 -->
+<section id="keys">
+<h2>단축키 한눈에 보기</h2>
+<div class="table-scroll"><table>
+  <tr><th>키</th><th>동작</th></tr>
+  <tr><td><kbd>F8</kbd></td><td>녹화 시작/종료 (기록 화면이 열려 있을 때)</td></tr>
+  <tr><td><kbd>F9</kbd></td><td>목록에서 선택한 매크로 재생/중지 · 테스트 재생 중지 · 이동 녹화 종료</td></tr>
+  <tr><td><kbd>F10</kbd></td><td>프로그램 종료 (눌린 입력 모두 해제)</td></tr>
+  <tr><td>매크로별 시작 핫키</td><td>그 매크로 재생/중지</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>F12</kbd></td><td>전체 매크로 실행 가능 ↔ 불가 (<span class="btn">단축키 변경</span>으로 바꿀 수 있음)</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>기록 화면에서 되돌리기 / 다시 실행</td></tr>
+  <tr><td><kbd>Enter</kbd> / <kbd>Delete</kbd></td><td>메인 목록에서 재생 / 삭제</td></tr>
+</table></div>
+<p><kbd>F8</kbd>~<kbd>F10</kbd>은 프로그램 제어용이라 녹화되지 않으며, 매크로 시작 핫키로도 쓸 수 없습니다. 시작 핫키는 매크로끼리 겹칠 수 없습니다.</p>
+<div class="tip"><b>시작 핫키 고르는 요령</b>
+게임에서 안 쓰는 키(<kbd>F5</kbd>~<kbd>F7</kbd>, <kbd>F11</kbd> 등)나 <kbd>Ctrl</kbd>+<kbd>F1</kbd> 같은 조합을 추천합니다.
+조합 핫키는 <kbd>Ctrl</kbd>을 누른 채 <kbd>F1</kbd>을 누를 때 실행되고, <kbd>W</kbd>로 이동하는 중에 눌러도 동작합니다.</div>
+</section>
+
+<!-- 11 -->
+<section id="faq">
+<h2>문제 해결 · 자주 묻는 질문</h2>
+<details open>
+  <summary><span class="btn">+ 추가</span> / <span class="btn">편집</span> 버튼이 눌리지 않아요</summary>
+  <p>매크로 <b>실행 가능</b>(초록) 상태에서는 편집이 잠깁니다. <kbd>Ctrl</kbd>+<kbd>F12</kbd> 또는 버튼으로 <b>실행 불가</b>로 바꾸세요.</p>
+</details>
+<details>
+  <summary>단축키를 눌러도 게임에서 매크로가 시작되지 않아요</summary>
+  <ul>
+    <li>메인 화면이 <b>● 매크로 실행 가능</b>(초록)인지 확인하세요.</li>
+    <li>게임이 관리자 권한으로 실행 중이면 MacroTool도 <b>관리자 권한으로 실행</b>해야 합니다.</li>
+    <li>매크로에 시작 핫키가 지정되어 있는지 목록의 "시작 핫키" 열을 확인하세요.</li>
+  </ul>
+</details>
+<details>
+  <summary>재생은 되는데 게임이 입력을 무시해요</summary>
+  <ul>
+    <li><b>관리자 권한</b> 문제가 가장 흔합니다(위 항목 참고).</li>
+    <li>키를 너무 짧게 눌러서일 수 있습니다. 설정의 <b>키 최소 유지</b>를 0.08 정도로 늘려 보세요.</li>
+    <li>독점 전체 화면 대신 창 모드/테두리 없는 창 모드를 써 보세요.</li>
+    <li>안티치트가 있는 게임은 자동 입력을 막을 수 있습니다.</li>
+  </ul>
+</details>
+<details>
+  <summary>클릭 위치가 녹화할 때와 달라요</summary>
+  <ul>
+    <li><b>대상 창 제목</b>을 적어 좌표를 <b>창 기준</b>으로 녹화하면 게임 창을 옮겨도 맞습니다.</li>
+    <li>게임 창 크기가 바뀌었다면 <b>창 크기에 맞춰 좌표 조정</b>을 켜세요.</li>
+    <li>3D 게임의 시점 회전이라면 마우스 모드를 <code>relative</code>로 녹화하세요.</li>
+  </ul>
+</details>
+<details>
+  <summary>재생이 멈추지 않거나 키가 눌린 채로 남았어요</summary>
+  <p><kbd>F9</kbd>(중지)를 누르고, 그래도 안 되면 <kbd>F10</kbd>으로 프로그램을 종료하세요. 종료 전에 눌려 있던 키·버튼을 모두 놓습니다.
+  무한 반복 매크로에는 <b>최대 실행 시간</b>을 걸어 두면 안심입니다.</p>
+</details>
+<details>
+  <summary>게임에서 채팅할 때 매크로 키가 눌려 버려요</summary>
+  <p>채팅 전에 <kbd>Ctrl</kbd>+<kbd>F12</kbd>로 <b>실행 불가</b>로 바꾸세요. 그동안 매크로 키는 게임에 그대로 전달됩니다.</p>
+</details>
+<details>
+  <summary>조건 대기가 항상 "시간 초과"로 끝나요</summary>
+  <ul>
+    <li>조건 설정 창의 <span class="btn">🔍 지금 찾아보기</span>로 일치도를 확인하고, <b>일치도 기준</b>을 조금 낮춰 보세요(예: 85 → 75).</li>
+    <li>잘라낸 이미지에 배경이 많이 들어갔거나 애니메이션되는 부분이 있으면 판정이 흔들립니다. 바뀌지 않는 부분만 작게 잘라내세요.</li>
+    <li>독점 전체 화면에서는 화면을 읽지 못할 수 있습니다.</li>
+  </ul>
+</details>
+<details>
+  <summary>저장하려는데 오류가 나요</summary>
+  <p>이름이 다른 매크로와 겹치거나, 시작 핫키가 다른 매크로와 겹치거나, <kbd>F8</kbd>~<kbd>F10</kbd>을 사용했거나, 녹화 내용에 핫키·제어 키가 들어 있으면 저장되지 않습니다.
+  안내 문구를 보고 해당 부분을 고치세요. 변수를 쓰는데 그 변수를 지정하는 <b>📌 변수 저장</b> 줄이 없어도 저장되지 않습니다.</p>
+</details>
+<details>
+  <summary>설정을 처음 상태로 돌리고 싶어요</summary>
+  <p>프로그램을 끄고 MacroTool 폴더의 <code>settings.json</code>을 지우면 됩니다. 매크로(<code>macros</code> 폴더)는 그대로 남습니다.</p>
+</details>
+<details>
+  <summary>매크로를 다른 PC로 옮기거나 백업하려면?</summary>
+  <p>MacroTool 폴더 안의 <code>macros</code> 폴더를 통째로 복사하세요. 매크로 파일(<code>.json</code>)과 같은 이름의 이미지 폴더가 함께 있어야 합니다.</p>
+</details>
+</section>
+
+</main>
+</div>
+
+<button class="theme-toggle" type="button" id="themeToggle">테마 전환</button>
+<script>
+(function () {
+  var root = document.documentElement, btn = document.getElementById('themeToggle');
+  try { var saved = localStorage.getItem('guide-theme'); if (saved) root.setAttribute('data-theme', saved); } catch (e) {}
+  btn.addEventListener('click', function () {
+    var dark = root.getAttribute('data-theme') ? root.getAttribute('data-theme') === 'dark'
+      : window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var next = dark ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('guide-theme', next); } catch (e) {}
+  });
+})();
+</script>
+</body>
+</html>
