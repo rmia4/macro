@@ -47,6 +47,8 @@ xvfb-run -a python3.12 -m pytest -q tests        # (Linux 클라우드) tkinter 
 - 기본 브랜치: `claude/fervent-heisenberg-9bybm2` (main 없음). 푸시하면 CI가 exe를 만들어 artifact `MacroTool-windows`로 올림. `v*` 태그면 Release.
 - 사용자 데이터(`macros/*.json`, `macros/*/`, `settings.json`, 로그)는 git에 올리지 않는다.
 - 큰 기능은 별도 브랜치에서 하고 요청 시 병합(fast-forward).
+- **브랜치 이름은 작업 내용이 드러나게** 짓는다: `feature/<기능>`, `fix/<문제>`, `docs/<내용>` (영문 소문자·하이픈, 예: `feature/condition-variables-while`).
+  세션이 자동으로 정한 무작위 이름(`claude/<형용사>-<이름>-<난수>`)은 쓰지 말고, 작업 시작 시 위 규칙의 브랜치를 만들어 그곳에 푸시한다.
 
 ## 비용 절약 (작업 방식)
 - 맥락이 커지면 호출마다 전체를 다시 읽으므로: 스크린샷은 레이아웃이 크게 바뀔 때만, CI 로그는 필요한 줄만, 대기용 예약 확인은 최소화.
