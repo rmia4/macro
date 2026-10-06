@@ -702,8 +702,10 @@ def test_editor_repeat_block_ui(gui, monkeypatch):
     ed.insert_items(em.build_items("tap", key="a", delay_ms=100))
     ed.insert_items(em.build_items("tap", key="b", delay_ms=100))
     ed.tree.selection_set(["2", "3"])
-    monkeypatch.setattr("gui.simpledialog.askinteger", lambda *a, **k: 5)
-    ed.on_wrap_repeat()
+    from gui import ConditionDialog
+    monkeypatch.setattr(ConditionDialog, "ask", classmethod(lambda cls, *a, **k: em.build_loop(count="5")))
+    ed.on_add_loop()
+    monkeypatch.undo()
     assert [i["type"] for i in ed.items] == ["kdown", "kup", "repeat_start", "kdown", "kup", "repeat_end"]
     assert ed.tree.item("3")["values"][2] == "│ 키 누름"            # 들여쓰기
     assert "반복 포함" in ed.summary.cget("text")
@@ -721,12 +723,11 @@ def test_editor_repeat_block_ui(gui, monkeypatch):
     assert sum(i["type"] in em.BLOCK_MARKERS for i in ed.items) == 2
     # 횟수 수정
     i = next(n for n, it in enumerate(ed.items) if it["type"] == "repeat_start")
-    from gui import EventDialog
-    d = EventDialog(gui.root, em.REPEAT_START_KINDS, item=ed.items[i])
-    assert d.v["count"].get() == "5"
-    d.v["count"].set("9")
+    d = ConditionDialog(ed, ed.items[i], mode="loop")
+    assert d.v_kind.get() == "count" and d.v_count.get() == "5"
+    d.v_count.set("9")
     d._on_ok()
-    assert d.result[0]["count"] == 9
+    assert d.result["type"] == "repeat_start" and d.result["count"] == 9
     ed.v_name.set("rep")
     assert ed.on_save()
     m = gui.app.library["rep"]
@@ -919,8 +920,8 @@ def test_branch_dialog_wraps_selection_with_else(gui):
     ed.insert_items(em.build_items("tap", key="a", delay_ms=100))
     ed.tree.selection_set(["0", "1"])
     d = ConditionDialog(ed, mode="if")
-    d.v_kind.set("pixel"); d._on_kind()
-    d.v_px.set("20"); d.v_py.set("10"); d.v_color.set("#c83c1e")
+    assert d.kinds == ("var", "group") and d.v_kind.get() == "var"   # 흐름 제어는 변수로만
+    d.v_var.set("hp")
     d.v_with_else.set(True)
     d._on_ok()
     ed.wrap_if(d.result["cond"], d.result["with_else"])
@@ -934,6 +935,7 @@ def test_branch_dialog_wraps_selection_with_else(gui):
     ed.tree.selection_set("3")                    # '아니면'만 지우기
     ed.on_delete()
     assert [i["type"] for i in ed.items] == ["if_start", "kdown", "kup", "if_end"]
+    ed.items.insert(0, em.build_set_var(target="hp", kind="pixel"))
     ed.v_name.set("분기")
     assert ed.on_save()
 
@@ -951,13 +953,14 @@ def test_click_and_break_dialogs(gui):
     assert ck["type"] == "click_image" and ck["button"] == "right" and ck["offset"] == [3, 0] and ck["hold"] == 0.08
     d = ConditionDialog(ed, mode="break")
     gui.root.update()
-    assert not d.f_click.winfo_ismapped()
-    d.v_kind.set("pixel"); d._on_kind()
+    assert not d.f_click.winfo_ismapped() and not d.f_test.winfo_ismapped()
+    d.v_var.set("끝")
     d.v_negate.set(True)
     d._on_ok()
     assert d.result["type"] == "break_if" and d.result["cond"]["negate"] is True
     assert "timeout" not in d.result
-    ed.insert_items([ck, d.result])
+    import editor_model as em
+    ed.insert_items([ck, em.build_set_var(target="끝", kind="pixel"), d.result])
     ed.v_name.set("클릭탈출")
     assert ed.on_save()
     assert gui.app.library["클릭탈출"].events[0]["type"] == "click_image"
@@ -982,12 +985,13 @@ def test_edit_routes_condition_modes(gui, monkeypatch):
         ed.on_edit()
     assert seen == ["wait", "if", "break", "click"]
     ed.items = [em.build_set_var(target="v", kind="pixel"), {"type": "while_start", "cond": px, "dt": 0},
-                {"type": "while_end", "dt": 0}]
+                {"type": "while_end", "dt": 0}, {"type": "repeat_start", "count": 2, "dt": 0},
+                {"type": "repeat_end", "dt": 0}]
     ed.refresh_tree()
-    for i in (0, 1):
+    for i in (0, 1, 3):
         ed.tree.selection_set(str(i))
         ed.on_edit()
-    assert seen[4:] == ["set_var", "while"]
+    assert seen[4:] == ["set_var", "loop", "loop"]
 
 
 def test_while_and_set_var_dialogs(gui):
@@ -1006,13 +1010,20 @@ def test_while_and_set_var_dialogs(gui):
     ed.items.insert(0, d.result)
     ed.refresh_tree()
     assert "재생 회차마다 초기화" in ed.tree.item("0")["values"][3]
-    # 동안 반복: 변수 조건으로 키 입력을 감싼다
+    # 반복문 추가: 기본은 횟수, 변수를 고르면 동안 반복
     ed.tree.selection_set(["1", "2"])
-    d = ConditionDialog(ed, mode="while")
+    d = ConditionDialog(ed, mode="loop")
+    gui.root.update()
+    assert d.kinds == ("count", "var", "group") and d.v_kind.get() == "count"
+    assert d.f_count.winfo_ismapped() and not d.f_neg.winfo_ismapped() and not d.f_test.winfo_ismapped()
+    d.v_count.set("-1")
+    d._on_ok()
+    assert "반복 횟수" in d.error.cget("text")
     assert "적" in d.var_box.cget("values")
     d.v_kind.set("var"); d._on_kind()
     gui.root.update()
-    assert d.f_var.winfo_ismapped() and not d.f_test.winfo_ismapped()
+    assert d.f_var.winfo_ismapped() and d.f_neg.winfo_ismapped() and not d.f_test.winfo_ismapped()
+    assert "동안" in d.intro.cget("text")
     d._on_ok()
     assert d.error.cget("text")                     # 변수 이름이 비어 있음
     d.v_var.set("적")
@@ -1020,9 +1031,31 @@ def test_while_and_set_var_dialogs(gui):
     ed.wrap_while(d.result["cond"])
     assert [i["type"] for i in ed.items] == ["set_var", "while_start", "kdown", "kup", "while_end"]
     assert ed.tree.item("2")["values"][2] == "│ 키 누름"
+    # 수정에서 횟수로 바꾸면 짝 끝 표시도 '반복 끝'으로 바뀐다
+    ed.tree.selection_set("1")
+    d = ConditionDialog(ed, ed.items[1], mode="loop")
+    assert d.v_kind.get() == "var" and d.v_var.get() == "적"
+    d.v_kind.set("count"); d.v_count.set("3"); d._on_kind()
+    d._on_ok()
+    ed.items = em.replace_loop_start(ed.items, 1, d.result)
+    assert [i["type"] for i in ed.items] == ["set_var", "repeat_start", "kdown", "kup", "repeat_end"]
+    ed.items = em.replace_loop_start(ed.items, 1, em.build_loop(loop_kind="cond", kind="var", name="적"))
+    ed.refresh_tree()
     ed.v_name.set("동안")
     assert ed.on_save()
     assert gui.app.library["동안"].events[1]["cond"] == {"kind": "var", "name": "적"}
+
+
+def test_flow_dialog_keeps_legacy_screen_condition(gui):
+    from gui import ConditionDialog
+    ed, _ = _open_condition(gui)
+    px = {"kind": "pixel", "x": 3, "y": 4, "color": "#102030"}
+    d = ConditionDialog(ed, {"type": "if_start", "dt": 0, "cond": px}, mode="if")
+    assert d.kinds == ("var", "group", "image", "pixel") and d.v_kind.get() == "pixel"
+    d._on_ok()
+    assert {k: d.result["cond"][k] for k in px} == px    # 한 점은 1x1 범위로 정규화
+    d = ConditionDialog(ed, mode="cond")                 # 여러 조건의 하위 조건은 변수만
+    assert d.kinds == ("var",)
 
 
 def test_group_condition_dialog(gui, monkeypatch):
@@ -1033,7 +1066,7 @@ def test_group_condition_dialog(gui, monkeypatch):
     d.v_kind.set("group"); d._on_kind()
     gui.root.update()
     assert d.f_group.winfo_ismapped()
-    subs = iter([{"cond": {"kind": "pixel", "x": 1, "y": 1, "color": "#000000"}},
+    subs = iter([{"cond": {"kind": "var", "name": "a"}},
                  {"cond": {"kind": "var", "name": "v"}}, None, None])
     opened = []
 
@@ -1066,7 +1099,7 @@ def test_group_condition_dialog(gui, monkeypatch):
     d3.v_kind.set("var"); d3.v_var.set("v")
     d3._on_ok()
     assert d3.result == {"cond": {"kind": "var", "name": "v"}}
-    assert em.describe({"type": "if_start", "cond": d.result["cond"]}).startswith("[색")
+    assert em.describe({"type": "if_start", "cond": d.result["cond"]}).startswith("[변수 'a']")
 
 
 def test_infinite_repeat_summary(gui, monkeypatch):
@@ -1075,6 +1108,6 @@ def test_infinite_repeat_summary(gui, monkeypatch):
     gui.on_add()
     ed = gui.editor
     ed.insert_items(em.build_items("tap", key="a"))
-    monkeypatch.setattr("gui.simpledialog.askinteger", lambda *a, **k: 0)
-    ed.on_wrap_repeat()
+    monkeypatch.setattr("gui.ConditionDialog.ask", classmethod(lambda cls, *a, **k: em.build_loop(count="0")))
+    ed.on_add_loop()
     assert ed.items[0]["count"] == 0 and "무한 반복 포함" in ed.summary.cget("text")
