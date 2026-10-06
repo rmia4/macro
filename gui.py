@@ -137,9 +137,13 @@ class Gui:
 
         row = ttk.Frame(box)
         row.pack(fill="x", pady=(6, 0))
+        self.macro_settings_buttons = []
         for text, cmd in (("+ 추가", self.on_add), ("편집", self.on_edit), ("복제", self.on_duplicate),
                           ("삭제", self.on_delete), ("새로고침", self.reload)):
-            ttk.Button(row, text=text, command=cmd).pack(side="left", padx=(0, 4))
+            button = ttk.Button(row, text=text, command=cmd)
+            button.pack(side="left", padx=(0, 4))
+            self.macro_settings_buttons.append(button)
+        self._update_macro_settings_buttons()
 
         ttk.Label(self.root, foreground="#666", padding=(8, 0), wraplength=740,
                   text=f"{HOTKEY_PLAY.upper()}: 선택한 매크로 재생/중지 · 매크로별 시작 핫키: 그 매크로 재생/중지 · "
@@ -279,14 +283,20 @@ class Gui:
         self.editor = EditorWindow(self, name)
 
     def on_add(self) -> None:
+        if self.macros_enabled:
+            return
         self.open_editor(None)
 
     def on_edit(self) -> None:
+        if self.macros_enabled:
+            return
         name = self.selected()
         if name is not None:
             self.open_editor(name)
 
     def on_duplicate(self) -> None:
+        if self.macros_enabled:
+            return
         name = self.selected()
         if name is None:
             return
@@ -297,6 +307,8 @@ class Gui:
             self.refresh_list(select=new)
 
     def on_delete(self) -> None:
+        if self.macros_enabled:
+            return
         name = self.selected()
         if name is None:
             return
@@ -319,6 +331,7 @@ class Gui:
                 self.cancel_countdown()
             self.app.stop_play()
         self._update_power_button()
+        self._update_macro_settings_buttons()
         self._flash_until = time.monotonic() + FLASH_SECONDS
         self.settings["macros_enabled"] = self.macros_enabled
         self.settings.save()
@@ -426,6 +439,11 @@ class Gui:
             self.btn_power.configure(text=f"● 매크로 실행 가능 ({key})", bg="#2e7d32", activebackground="#388e3c")
         else:
             self.btn_power.configure(text=f"○ 매크로 실행 불가 ({key})", bg="#757575", activebackground="#8a8a8a")
+
+    def _update_macro_settings_buttons(self) -> None:
+        state = ["disabled"] if self.macros_enabled else ["!disabled"]
+        for button in self.macro_settings_buttons:
+            button.state(state)
 
     def set_toggle_hotkey(self, text: str) -> str | None:
         """전체 실행 전환 키 변경. 문제가 있으면 오류 메시지를 반환."""

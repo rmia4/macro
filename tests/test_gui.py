@@ -59,6 +59,31 @@ def test_list_shows_library(gui):
     assert gui.tree.item("alpha")["values"][:4] == ["alpha", "F6", "∞", 6]
 
 
+def test_macro_settings_buttons_follow_enable_state(gui):
+    assert all(button.instate(["disabled"]) for button in gui.macro_settings_buttons)
+    gui.toggle_macros_enabled()
+    assert all(button.instate(["!disabled"]) for button in gui.macro_settings_buttons)
+    gui.tree.selection_set("alpha")
+    gui.macro_settings_buttons[1].invoke()
+    assert gui.editor is not None and gui.editor.old_name == "alpha"
+    gui.editor.close()
+    gui.hotkey_bindings()[gui.toggle_hotkey]()
+    pump(gui)
+    assert all(button.instate(["disabled"]) for button in gui.macro_settings_buttons)
+
+
+@pytest.mark.parametrize("action", ["on_add", "on_edit", "on_duplicate", "on_delete"])
+def test_macro_settings_blocked_when_enabled(gui, monkeypatch, action):
+    gui.tree.selection_set("alpha")
+    confirmations = []
+    monkeypatch.setattr("gui.messagebox.askyesno", lambda *a, **k: confirmations.append(a) or True)
+    for button in gui.macro_settings_buttons:
+        button.invoke()
+    getattr(gui, action)()  # 더블클릭과 Delete 키도 같은 콜백을 사용한다
+    assert gui.editor is None and set(gui.app.library) == {"alpha", "beta"}
+    assert confirmations == [] and gui.shown == []
+
+
 def test_play_selected_and_stop(gui):
     gui.on_play()
     assert gui.shown  # 선택 없음 안내
@@ -99,6 +124,7 @@ def test_countdown_cancel(gui):
 
 
 def test_duplicate_and_delete(gui, monkeypatch, tmp_path):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     gui.tree.selection_set("alpha")
     gui.on_duplicate()
     assert "alpha 복사" in gui.app.library and gui.app.library["alpha 복사"].hotkey is None
@@ -123,6 +149,7 @@ def test_hotkey_calls_run_on_tk_thread(gui):
 
 # ---- 기록 화면 ----
 def test_add_opens_editor_and_records(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     gui.on_add()
     ed = gui.editor
     assert ed is not None and ed.v_name.get() == "새 매크로"
@@ -146,6 +173,7 @@ def test_add_opens_editor_and_records(gui):
 
 
 def test_editor_insert_edit_delete_move(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     gui.on_add()
     ed = gui.editor
     import editor_model as em
@@ -166,6 +194,7 @@ def test_editor_insert_edit_delete_move(gui):
 
 
 def test_editor_groups_moves_and_edits_path(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     gui.tree.selection_set("beta")
     gui.on_edit()
     ed = gui.editor
@@ -182,6 +211,7 @@ def test_editor_groups_moves_and_edits_path(gui):
 
 
 def test_editor_save_new_with_hotkey_and_options(gui, tmp_path):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -201,6 +231,7 @@ def test_editor_save_new_with_hotkey_and_options(gui, tmp_path):
 
 
 def test_editor_save_validation_errors(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     gui.on_add()
     ed = gui.editor
     ed.v_name.set("beta")       # 이미 있는 이름
@@ -217,6 +248,7 @@ def test_editor_save_validation_errors(gui):
 
 
 def test_editor_rename_existing(gui, tmp_path):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     gui.tree.selection_set("beta")
     gui.on_edit()
     ed = gui.editor
@@ -227,6 +259,7 @@ def test_editor_rename_existing(gui, tmp_path):
 
 
 def test_editor_test_play(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -243,6 +276,7 @@ def test_editor_test_play(gui):
 
 
 def test_editor_close_asks_when_dirty(gui, monkeypatch):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -255,6 +289,7 @@ def test_editor_close_asks_when_dirty(gui, monkeypatch):
 
 
 def test_editor_pick_position_window_space(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     gui.on_add()
     ed = gui.editor
     gui.app.backend.cursor = (150, 90)
@@ -303,6 +338,7 @@ def test_event_dialog_fields_follow_kind(gui):
 
 
 def test_no_selection_does_nothing(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     gui.tree.selection_remove(gui.tree.selection())
     for fn in (gui.on_edit, gui.on_duplicate, gui.on_delete):
         fn()
@@ -344,6 +380,7 @@ def test_event_dialog_cursor_option_and_path(gui):
 
 
 def test_editor_record_button_countdown_shown_in_editor(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     gui.on_add()
     ed = gui.editor
     gui.delay.set("3")
@@ -374,6 +411,7 @@ def test_global_enable_toggle(gui):
 
 
 def test_editor_combo_hotkey_save_and_binding(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -421,6 +459,7 @@ def test_toggle_hotkey_binding_and_change(gui):
 
 
 def test_editor_rejects_toggle_hotkey(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -430,6 +469,7 @@ def test_editor_rejects_toggle_hotkey(gui):
 
 
 def test_editor_undo_redo(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -461,6 +501,7 @@ def test_editor_undo_redo(gui):
 
 
 def test_editor_undo_shortcut_ignored_in_entry(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -475,6 +516,7 @@ def test_editor_undo_shortcut_ignored_in_entry(gui):
 
 
 def test_max_minutes_field_saved(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -513,6 +555,7 @@ def test_settings_persist_across_restart(tmp_path):
     g = gui_mod.Gui(root, app, Settings(path))
     root.update()
     assert not g.macros_enabled and g.delay.get() == "7" and "실행 불가" in g.btn_power.cget("text")
+    assert all(button.instate(["!disabled"]) for button in g.macro_settings_buttons)
     assert root.geometry().startswith("800x600")
     g.close()
 
@@ -575,6 +618,7 @@ def test_overlay_position_change_and_off(gui):
 
 
 def test_overlay_shows_editor_recording(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     gui.on_add()
     gui.editor.toggle_record(immediate=True)
     pump(gui)
@@ -582,6 +626,7 @@ def test_overlay_shows_editor_recording(gui):
 
 
 def test_editor_relative_recording_flag(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     gui.on_add()
     ed = gui.editor
     ed.v_opts["mouse_mode"].set("relative")
@@ -637,6 +682,7 @@ def test_small_dialogs_centered_on_parent(gui):
 
 
 def test_editor_first_open_centered(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     gui.root.geometry("1000x700+100+50")
     gui.root.update()
     gui.settings["editor_geometry"] = ""
@@ -649,6 +695,7 @@ def test_editor_first_open_centered(gui):
 
 
 def test_editor_repeat_block_ui(gui, monkeypatch):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -687,6 +734,7 @@ def test_editor_repeat_block_ui(gui, monkeypatch):
 
 
 def test_editor_wrap_overlapping_selection_shows_error(gui):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -723,6 +771,8 @@ class Ev:
 
 
 def _open_condition(gui):
+    if gui.macros_enabled:
+        gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     pytest.importorskip("cv2")
     from gui import ConditionDialog
     gui.grabber = ScreenGrabber()
@@ -803,6 +853,7 @@ def test_condition_dialog_color_range_pick_and_window_coords(gui):
 
 
 def test_editor_condition_edit_and_assets_lifecycle(gui, tmp_path):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     import shutil
     ed, d = _open_condition(gui)
     d.on_crop()
@@ -913,6 +964,7 @@ def test_click_and_break_dialogs(gui):
 
 
 def test_edit_routes_condition_modes(gui, monkeypatch):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     import editor_model as em
     seen = []
     import gui as gui_mod
@@ -1018,6 +1070,7 @@ def test_group_condition_dialog(gui, monkeypatch):
 
 
 def test_infinite_repeat_summary(gui, monkeypatch):
+    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
