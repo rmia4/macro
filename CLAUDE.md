@@ -12,7 +12,7 @@
 | `player.py` | 재생기: 시간표(origin+cum), 지터, 보간, 창 포커스 제한, 반복/분기/탈출, 조건 대기, 안전 해제. `PlayOptions`/`set_option`/`options_*_dict` |
 | `recorder.py` | `RecorderCore`(순수) + `Recorder`(pynput, relative 시 Raw Input) |
 | `profiles.py` | 매크로 JSON 스키마 검증(`Macro.from_dict`), `blocks()` 반복·분기 구조, 저장/목록/경로 |
-| `vision.py` | 화면 조건: 이미지(템플릿 매칭)/범위 색 판정, `MssGrabber`, `dominant_color`, PNG 입출력(한글 경로 위해 imdecode/tofile) |
+| `vision.py` | 화면 조건: 이미지(템플릿 매칭)/범위 색 판정, `MssGrabber`, `dominant_color`. OpenCV 없이 numpy 로 구현: `match_template`(FFT, TM_CCOEFF_NORMED 동일), PNG `encode_png`/`decode_png`(zlib) — exe 용량 때문에 cv2 쓰지 말 것 |
 | `input_backend.py` | Windows API만: SendInput(스캔코드), DPI, 창 찾기, 클릭 통과, `RawMouseListener`. 로직 넣지 말 것 |
 | `keys.py` | 키 이름↔스캔코드/VK, 핫키 파싱(`parse_hotkey`: 1~2키, `ctrl+f1`), tk 키 이름 변환 |
 | `hotkeys.py` | 전역 핫키 디스패처(조합·auto-repeat·suppress), 제어 키 F8/F9/F10 |

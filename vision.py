@@ -14,6 +14,8 @@ template 은 매크로별 이미지 폴더(assets_dir) 안의 파일 이름이�
 from __future__ import annotations
 
 import re
+import struct
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -125,20 +127,20 @@ class Vision:
         self.assets_dir = Path(assets_dir) if assets_dir else None
         self.grabber = grabber or MssGrabber()
         self._templates: dict[str, object] = {}
+        self._fft_cache: dict[str, dict] = {}  # 템플릿별 FFT (같은 영역을 반복해서 찾을 때 재사용)
 
     def template(self, name: str):
-        """템플릿 이미지(BGR). 한글 경로에서도 읽을 수 있게 imdecode 를 쓴다."""
+        """템플릿 이미지(BGR)."""
         if name not in self._templates:
-            import cv2
-            import numpy as np
             if self.assets_dir is None:
                 raise FileNotFoundError(f"이미지 폴더가 없어 '{name}' 을(를) 찾을 수 없습니다 (먼저 매크로를 저장하세요)")
             path = self.assets_dir / name
             if not path.is_file():
                 raise FileNotFoundError(f"조건 이미지가 없습니다: {path}")
-            img = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
-            if img is None:
-                raise ValueError(f"이미지를 읽을 수 없습니다: {path}")
+            try:
+                img = load_png(path)
+            except ValueError as e:
+                raise ValueError(f"이미지를 읽을 수 없습니다: {path} ({e})") from None
             self._templates[name] = img
         return self._templates[name]
 
@@ -177,7 +179,7 @@ class Vision:
         return Match(share >= cond.get("ratio", DEFAULT_RATIO), round(share, 4))
 
     def _check_image(self, cond: dict, origin) -> Match:
-        import cv2
+        import numpy as np
         tpl = self.template(cond["template"])
         th, tw = tpl.shape[:2]
         if cond.get("region"):
@@ -192,10 +194,10 @@ class Vision:
         if x1 - x0 < tw or y1 - y0 < th:
             return Match(False, 0.0)  # 영역이 이미지보다 작다
         shot = self.grabber.grab(x0, y0, x1 - x0, y1 - y0)
-        result = cv2.matchTemplate(shot, tpl, cv2.TM_CCOEFF_NORMED)
-        _, score, _, loc = cv2.minMaxLoc(result)
-        score = float(max(0.0, min(1.0, score)))
-        pos = (x0 + loc[0] + tw // 2, y0 + loc[1] + th // 2)
+        result = match_template(shot, tpl, self._fft_cache.setdefault(cond["template"], {}))
+        ly, lx = np.unravel_index(int(np.argmax(result)), result.shape)
+        score = float(max(0.0, min(1.0, result[ly, lx])))
+        pos = (x0 + int(lx) + tw // 2, y0 + int(ly) + th // 2)
         return Match(score >= cond.get("threshold", DEFAULT_THRESHOLD), round(score, 4), pos)
 
 
@@ -214,23 +216,223 @@ def dominant_color(img, tolerance: int = DEFAULT_TOLERANCE) -> tuple[str, float]
     return f"#{r:02x}{g:02x}{b:02x}", round(share, 4)
 
 
+def _fast_len(n: int) -> int:
+    """n 이상인 가장 작은 2·3·5 의 곱 (FFT 가 빠른 길이)."""
+    best = 1 << max(0, (n - 1).bit_length())
+    p5 = 1
+    while p5 < best:
+        p35 = p5
+        while p35 < best:
+            v = p35
+            while v < n:
+                v *= 2
+            best = min(best, v)
+            p35 *= 3
+        p5 *= 5
+    return best
+
+
+def _box_sum(a, h: int, w: int):
+    """2차원 배열에서 모든 (h, w) 창의 합 -> (H-h+1, W-w+1) float64."""
+    import numpy as np
+    c = np.cumsum(a, axis=0, dtype=np.float64)
+    r = c[h - 1:].copy()
+    r[1:] -= c[:-h]
+    c = np.cumsum(r, axis=1)
+    out = c[:, w - 1:].copy()
+    out[:, 1:] -= c[:, :-w]
+    return out
+
+
+def match_template(img, tpl, cache: dict | None = None):
+    """OpenCV matchTemplate(TM_CCOEFF_NORMED) 와 같은 정규화 상관계수 맵 (numpy FFT 로 계산).
+
+    img (H, W, C), tpl (h, w, C) -> (H-h+1, W-w+1) float64. 평균은 채널별로 빼고 합은 모든 채널에 걸쳐 구한다.
+    분모가 0(영역이나 템플릿이 단색)인 위치는 0 이다.
+    cache: 같은 템플릿을 반복해서 찾을 때 템플릿 쪽 FFT 를 재사용할 dict (템플릿마다 따로).
+    """
+    import numpy as np
+    img = np.asarray(img)
+    tpl = np.asarray(tpl)
+    if img.ndim == 2:
+        img = img[:, :, None]
+    if tpl.ndim == 2:
+        tpl = tpl[:, :, None]
+    H, W = img.shape[:2]
+    h, w = tpl.shape[:2]
+    oh, ow = H - h + 1, W - w + 1
+    if oh <= 0 or ow <= 0:
+        raise ValueError("이미지가 템플릿보다 작습니다")
+    # 채널을 앞으로 (FFT·누적합이 연속 메모리에서 빠르다)
+    planes = np.ascontiguousarray(np.moveaxis(img, 2, 0), dtype=np.float64)
+    fh, fw = _fast_len(H), _fast_len(W)
+
+    key = (fh, fw)
+    if cache is not None and key in cache:
+        ft, t_norm2 = cache[key]
+    else:
+        t = np.moveaxis(tpl, 2, 0).astype(np.float64)
+        t -= t.mean(axis=(1, 2), keepdims=True)
+        t_norm2 = float((t * t).sum())
+        # 상관 = 뒤집은 템플릿과의 합성곱
+        ft = np.fft.rfft2(t[:, ::-1, ::-1], s=(fh, fw))
+        if cache is not None:
+            cache[key] = (ft, t_norm2)
+
+    # 분자: sum(T' * I) — T' 의 합이 0 이므로 창 평균을 뺄 필요가 없다
+    fi = np.fft.rfft2(planes, s=(fh, fw))
+    num = np.fft.irfft2((fi * ft).sum(axis=0), s=(fh, fw))[h - 1:H, w - 1:W]
+
+    # 분모: 창마다 sum((I - 평균)^2) = sum(I^2) - sum(I)^2 / n  (모든 채널 합)
+    var = _box_sum((planes * planes).sum(axis=0), h, w)
+    for p in planes:
+        var -= _box_sum(p, h, w) ** 2 / (h * w)
+    denom = np.sqrt(np.maximum(var, 0) * t_norm2)
+    out = np.zeros((oh, ow))
+    ok = denom > 1e-6 * max(1.0, t_norm2)
+    out[ok] = num[ok] / denom[ok]
+    return np.clip(out, -1.0, 1.0)
+
+
+_PNG_SIG = b"\x89PNG\r\n\x1a\n"
+_PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}  # 색 형식 -> 채널 수
+
+
+def _png_chunk(kind: bytes, data: bytes) -> bytes:
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+
+def encode_png(img) -> bytes:
+    """BGR(또는 회색) uint8 이미지 -> PNG 바이트 (필터 없음)."""
+    import numpy as np
+    a = np.asarray(img)
+    if a.dtype != np.uint8:
+        raise ValueError("uint8 이미지만 저장할 수 있습니다")
+    if a.ndim == 2:
+        color, rows = 0, a
+    elif a.ndim == 3 and a.shape[2] == 3:
+        color, rows = 2, a[:, :, ::-1]  # BGR -> RGB
+    else:
+        raise ValueError("BGR 또는 회색 이미지만 저장할 수 있습니다")
+    h, w = a.shape[:2]
+    raw = np.zeros((h, 1 + rows[0].size), dtype=np.uint8)  # 각 줄 앞에 필터 0
+    raw[:, 1:] = np.ascontiguousarray(rows).reshape(h, -1)
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, color, 0, 0, 0)
+    return (_PNG_SIG + _png_chunk(b"IHDR", ihdr) + _png_chunk(b"IDAT", zlib.compress(raw.tobytes(), 6))
+            + _png_chunk(b"IEND", b""))
+
+
+def _unfilter(data: bytes, h: int, stride: int, bpp: int):
+    import numpy as np
+    buf = np.frombuffer(data, dtype=np.uint8)
+    if buf.size < h * (stride + 1):
+        raise ValueError("PNG 데이터가 잘렸습니다")
+    buf = buf[:h * (stride + 1)].reshape(h, stride + 1)
+    out = np.zeros((h, stride), dtype=np.uint8)
+    prev = np.zeros(stride, dtype=np.uint8)
+    for y in range(h):
+        ft, line = buf[y, 0], buf[y, 1:]
+        if ft == 0:
+            cur = line.copy()
+        elif ft == 1:  # Sub: 왼쪽 픽셀 누적 (바이트 위치 % bpp 별로 독립)
+            pad = (-stride) % bpp
+            lanes = np.concatenate([line, np.zeros(pad, np.uint8)]).reshape(-1, bpp).astype(np.uint64)
+            cur = (lanes.cumsum(axis=0) & 0xFF).astype(np.uint8).reshape(-1)[:stride]
+        elif ft == 2:  # Up
+            cur = line + prev
+        elif ft in (3, 4):  # Average / Paeth: 픽셀 순서대로 계산 (외부에서 만든 PNG 용)
+            cur = np.zeros(stride, dtype=np.int32)
+            ln, up = line.astype(np.int32), prev.astype(np.int32)
+            for i in range(stride):
+                a = cur[i - bpp] if i >= bpp else 0
+                b = up[i]
+                if ft == 3:
+                    cur[i] = (ln[i] + ((a + b) >> 1)) & 0xFF
+                else:
+                    c = up[i - bpp] if i >= bpp else 0
+                    p = a + b - c
+                    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                    pred = a if pa <= pb and pa <= pc else (b if pb <= pc else c)
+                    cur[i] = (ln[i] + pred) & 0xFF
+            cur = cur.astype(np.uint8)
+        else:
+            raise ValueError(f"알 수 없는 PNG 필터 {ft}")
+        out[y] = prev = cur
+    return out
+
+
+def decode_png(data: bytes):
+    """PNG 바이트 -> BGR uint8 이미지. 투명도는 버리고 16비트는 8비트로 줄인다 (OpenCV IMREAD_COLOR 와 같음)."""
+    import numpy as np
+    if not data.startswith(_PNG_SIG):
+        raise ValueError("PNG 파일이 아닙니다")
+    pos, ihdr, plte, idat = 8, None, None, []
+    while pos + 8 <= len(data):
+        length, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + length]
+        if len(body) != length:
+            raise ValueError("PNG 데이터가 잘렸습니다")
+        if kind == b"IHDR":
+            ihdr = struct.unpack(">IIBBBBB", body)
+        elif kind == b"PLTE":
+            plte = np.frombuffer(body, dtype=np.uint8).reshape(-1, 3)
+        elif kind == b"IDAT":
+            idat.append(body)
+        elif kind == b"IEND":
+            break
+        pos += 12 + length
+    if ihdr is None or not idat:
+        raise ValueError("PNG 구조가 올바르지 않습니다")
+    w, h, depth, color, _, _, interlace = ihdr
+    if color not in _PNG_CHANNELS or depth not in (1, 2, 4, 8, 16) or w == 0 or h == 0:
+        raise ValueError("지원하지 않는 PNG 형식입니다")
+    if interlace:
+        raise ValueError("인터레이스 PNG 는 지원하지 않습니다")
+    ch = _PNG_CHANNELS[color]
+    if depth < 8 and ch != 1:
+        raise ValueError("지원하지 않는 PNG 형식입니다")
+    try:
+        raw = zlib.decompress(b"".join(idat))
+    except zlib.error as e:
+        raise ValueError(f"PNG 압축 해제 실패: {e}") from None
+    bits = depth * ch
+    stride = (w * bits + 7) // 8
+    rows = _unfilter(raw, h, stride, max(1, bits // 8))
+    if depth < 8:
+        px = np.unpackbits(rows, axis=1).reshape(h, -1, depth)[:, :w]
+        px = (px * (1 << np.arange(depth - 1, -1, -1, dtype=np.uint8))).sum(axis=2).astype(np.uint8)
+        if color == 0:
+            px = (px.astype(np.uint16) * 255 // ((1 << depth) - 1)).astype(np.uint8)
+        px = px[:, :, None]
+    elif depth == 16:
+        px = rows.reshape(h, w, ch, 2)[..., 0]  # 상위 바이트
+    else:
+        px = rows.reshape(h, w, ch)
+    if color == 3:
+        if plte is None:
+            raise ValueError("팔레트가 없는 PNG 입니다")
+        rgb = plte[np.minimum(px[:, :, 0], len(plte) - 1)]
+    elif color in (0, 4):
+        rgb = np.repeat(px[:, :, :1], 3, axis=2)
+    else:
+        rgb = px[:, :, :3]
+    return np.ascontiguousarray(rgb[:, :, ::-1])  # RGB -> BGR
+
+
+def load_png(path: str | Path):
+    """PNG 파일 -> BGR 이미지 (한글 경로 지원)."""
+    return decode_png(Path(path).read_bytes())
+
+
 def save_png(img, path: str | Path) -> None:
     """BGR 이미지를 PNG 로 저장 (한글 경로 지원)."""
-    import cv2
-    ok, buf = cv2.imencode(".png", img)
-    if not ok:
-        raise ValueError("PNG 인코딩 실패")
-    buf.tofile(str(path))
+    Path(path).write_bytes(encode_png(img))
 
 
 def png_base64(img) -> str:
     """tk.PhotoImage(data=...) 용 PNG base64 문자열."""
     import base64
-    import cv2
-    ok, buf = cv2.imencode(".png", img)
-    if not ok:
-        raise ValueError("PNG 인코딩 실패")
-    return base64.b64encode(buf.tobytes()).decode("ascii")
+    return base64.b64encode(encode_png(img)).decode("ascii")
 
 
 def conditions_in(events) -> list[dict]:

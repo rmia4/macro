@@ -152,7 +152,7 @@ pip install -r requirements-dev.txt && python -m pytest tests
 - 조건 이미지는 `macros/<매크로 이름>/`에 PNG로 저장되며, 이름 변경·복제·삭제 시 함께 처리된다.
   기록 화면에서는 임시 폴더에서 작업하므로 저장 전 테스트 재생에도 새 이미지가 쓰이고, 저장하지 않고 닫으면 버려진다.
   재생 시작 전에 이미지가 모두 있는지 확인한다. 좌표는 매크로의 좌표 기준(화면/창)을 따른다.
-- 필요 패키지: `mss`, `opencv-python-headless`, `numpy` (requirements.txt).
+- 필요 패키지: `mss`, `numpy` (requirements.txt). 이미지 찾기와 PNG 입출력은 numpy 로 직접 구현해 OpenCV 가 필요 없다.
 
 ### 조건 분기 · 반복 탈출 · 이미지 클릭
 조건(이미지/범위 색, 반대로) 설정과 `지금 찾아보기`는 조건 대기와 같다.

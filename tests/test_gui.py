@@ -723,7 +723,6 @@ class Ev:
 
 
 def _open_condition(gui):
-    pytest.importorskip("cv2")
     from gui import ConditionDialog
     gui.grabber = ScreenGrabber()
     gui.delay.set("0")

@@ -33,5 +33,7 @@ PyInstaller.__main__.run([
     # 쓰지 않는 무거운 모듈 제외 (용량 절감)
     "--exclude-module", "matplotlib",
     "--exclude-module", "pytest",
+    # 테스트 비교용으로만 설치된 OpenCV 가 섞여 들어가지 않게
+    "--exclude-module", "cv2",
 ])
 print(f"완료: dist/{NAME}.exe")
