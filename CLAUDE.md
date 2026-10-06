@@ -41,6 +41,7 @@
 python -m pytest -q tests                        # tkinter 없으면 GUI 테스트 skip
 xvfb-run -a python3.12 -m pytest -q tests        # (Linux 클라우드) tkinter 있는 3.12 + 가상 디스플레이로 GUI 포함 전체
 ```
+- **작업 후 테스트는 영향 범위만**: 바꾼 모듈과 그 모듈을 쓰는 곳의 테스트 파일(필요하면 `-k`로 해당 테스트)만 돌린다. 예) `player.py`만 고쳤으면 `tests/test_player.py tests/test_flow.py`. 전체 실행은 여러 모듈에 걸친 큰 변경이나 병합·릴리스 전에만.
 - 클라우드 환경: 기본 python3.11엔 tkinter 없음 → `/usr/bin/python3.12`(필요 시 `pip install --break-system-packages pytest opencv-python-headless mss numpy pynput`, `apt-get install python3-tk`).
 - 실제 Windows 동작은 CI(`Build Windows exe`)에서만 검증된다. Windows 전용 차이(창 테두리, 콘솔 인코딩 cp1252 등)에 주의.
 
