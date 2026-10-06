@@ -12,15 +12,18 @@ import re
 import keys
 import vision
 from hotkeys import CONTROL_KEYS
-from profiles import BUTTONS, MAX_REPEAT, block_pairs, blocks, macro_path
+from profiles import BUTTONS, MAX_REPEAT, block_pairs, blocks, macro_path, var_scopes
 
 EVENT_LABELS = {"move": "마우스 이동", "mdown": "마우스 누름", "mup": "마우스 뗌",
                 "scroll": "스크롤", "kdown": "키 누름", "kup": "키 뗌", "wait": "지연",
                 "path": "마우스 이동 경로", "rmove": "마우스 상대 이동", "relpath": "상대 이동 경로",
                 "repeat_start": "🔁 반복 시작", "repeat_end": "🔁 반복 끝",
                 "wait_until": "🔍 조건 대기", "if_start": "❓ 만약", "else": "↪ 아니면",
-                "if_end": "❓ 분기 끝", "break_if": "⏹ 반복 탈출", "click_image": "🖱 이미지 클릭"}
-BLOCK_MARKERS = ("repeat_start", "repeat_end", "if_start", "else", "if_end")
+                "if_end": "❓ 분기 끝", "break_if": "⏹ 반복 탈출", "click_image": "🖱 이미지 클릭",
+                "set_var": "📌 변수 저장", "while_start": "🔂 동안 반복", "while_end": "🔂 동안 반복 끝"}
+BLOCK_MARKERS = ("repeat_start", "repeat_end", "if_start", "else", "if_end", "while_start", "while_end")
+_BLOCK_OPEN = ("repeat_start", "if_start", "while_start")
+_BLOCK_CLOSE = ("repeat_end", "if_end", "while_end")
 
 # 추가 가능한 종류 (tap/click 은 누름+뗌 두 개의 이벤트를 만든다)
 ADD_KINDS = [("tap", "키 입력 (누르고 떼기)"), ("kdown", "키 누름"), ("kup", "키 뗌"),
@@ -33,6 +36,7 @@ REPEAT_START_KINDS = [("repeat_start", "반복 시작")]
 REPEAT_END_KINDS = [("repeat_end", "반복 끝")]
 ELSE_KINDS = [("else", "아니면")]
 IF_END_KINDS = [("if_end", "분기 끝")]
+WHILE_END_KINDS = [("while_end", "동안 반복 끝")]
 
 # 종류별 입력 필드 (cursor: 좌표 대신 현재 커서 위치에서 입력 가능)
 KIND_FIELDS = {
@@ -41,6 +45,7 @@ KIND_FIELDS = {
     "mup": {"button", "pos", "cursor"}, "move": {"pos"}, "scroll": {"pos", "cursor", "scroll"},
     "wait": set(), "path": {"pos", "duration"}, "rmove": {"delta"}, "relpath": {"duration", "scale"},
     "repeat_start": {"count"}, "repeat_end": set(), "else": set(), "if_end": set(),
+    "while_end": set(),
 }
 GROUPED = {"move": "path", "rmove": "relpath"}  # 연속되면 묶이는 이벤트 -> 묶음 항목 종류
 DEFAULT_HOLD_MS = {"tap": 50, "click": 60}
@@ -104,7 +109,7 @@ def item_duration(item: dict) -> float:
 
 def expanded_duration(items: list[dict]) -> float:
     """반복 구간을 펼쳤을 때의 실행 시간. 한 바퀴 = 구간 안 이벤트들 + '반복 끝' 지연.
-    무한 반복이 있으면 inf. 조건 분기·조건 대기는 판정 결과를 알 수 없어 모든 항목을 그대로 더한 추정값."""
+    무한 반복이 있으면 inf. 조건 분기·조건 대기·동안 반복은 판정 결과를 알 수 없어 모든 항목을 1회씩 더한 추정값."""
     stack = [[0.0, 1]]  # [누적 시간, 반복 횟수]
     for it in items:
         if it["type"] == "repeat_start":
@@ -128,16 +133,16 @@ def depths(items: list[dict]) -> list[int]:
     out, d = [], 0
     for it in items:
         typ = it["type"]
-        if typ in ("repeat_end", "if_end"):
+        if typ in _BLOCK_CLOSE:
             d = max(0, d - 1)
         out.append(max(0, d - 1) if typ == "else" else d)
-        if typ in ("repeat_start", "if_start"):
+        if typ in _BLOCK_OPEN:
             d += 1
     return out
 
 
 def block_partner(items: list[dict], i: int) -> int | None:
-    """반복 시작/끝 표시의 짝 인덱스."""
+    """반복 시작/끝(동안 반복 포함) 표시의 짝 인덱스."""
     try:
         pairs = block_pairs(items)
     except ValueError:
@@ -152,7 +157,7 @@ def block_members(items: list[dict], i: int) -> set[int]:
         b = blocks(items)
     except ValueError:
         return {i}
-    for start, end in b.repeat.items():
+    for start, end in {**b.repeat, **b.while_end}.items():
         if i in (start, end):
             return {start, end}
     for start, end in b.if_end.items():
@@ -186,6 +191,12 @@ def wrap_if(items: list[dict], selected: list[int], cond: dict, with_else: bool 
     return _wrap(items, selected, {"type": "if_start", "cond": cond, "dt": 0.0}, tail)
 
 
+def wrap_while(items: list[dict], selected: list[int], cond: dict) -> tuple[list[dict], list[int]]:
+    """선택 범위를 '동안 반복 [조건]' ~ '동안 반복 끝'으로 감싼다."""
+    vision.validate_condition(cond)
+    return _wrap(items, selected, {"type": "while_start", "cond": cond, "dt": 0.0}, [{"type": "while_end", "dt": 0.0}])
+
+
 def _wrap(items, selected, start: dict, tail: list[dict]) -> tuple[list[dict], list[int]]:
     if not selected:
         return items + [start] + tail, [len(items), len(items) + len(tail)]
@@ -207,6 +218,18 @@ def event_count(items: list[dict]) -> int:
     return sum(len(i["points"]) if "points" in i else 1 for i in items)
 
 
+def scope_text(items: list[dict], i: int) -> str:
+    """i 번째 '변수 저장'의 초기화 시점 설명. 구조가 잘못되었으면 빈 문자열."""
+    try:
+        loop = var_scopes(items).get(items[i]["name"])
+    except (ValueError, KeyError):
+        return ""
+    if loop is None:
+        return "재생 회차마다 초기화"
+    kind = "동안 반복" if items[loop]["type"] == "while_start" else "반복"
+    return f"#{loop + 1} {kind}의 회차마다 초기화"
+
+
 def describe(item: dict) -> str:
     typ = item["type"]
     if typ in ("kdown", "kup"):
@@ -226,7 +249,11 @@ def describe(item: dict) -> str:
         dx, dy = item.get("offset", [0, 0])
         shift = f" ({dx:+g}, {dy:+g})" if dx or dy else ""
         return f"'{item['cond']['template']}'{shift} {item.get('button', 'left')} 클릭 · {limit} · 초과 시 {after}"
-    if typ in ("else", "if_end"):
+    if typ == "while_start":
+        return f"{vision.describe_condition(item['cond'])} 인 동안"
+    if typ == "set_var":
+        return f"{item['name']} = [{vision.describe_condition(item['cond'])}]"
+    if typ in ("else", "if_end", "while_end"):
         return ""
     if typ == "wait_until":
         timeout = item.get("timeout", 10)
@@ -360,10 +387,15 @@ def rescale_relpath(points: list, duration: float, scale: float) -> list:
 
 def build_condition(*, kind="image", template="", region=None, threshold_pct="85",
                     x="0", y="0", w=None, h=None, color="#000000", tolerance="20", ratio_pct="50",
-                    negate=False) -> dict:
+                    negate=False, name="", conds=None) -> dict:
     """조건. 이미지 region: None(화면 전체) 또는 [x, y, w, h]. 색: (x, y)에서 w x h 범위
-    (w, h 가 None 이면 한 점). 값은 문자열도 허용. 잘못되면 ValueError."""
-    if kind == "image":
+    (w, h 가 None 이면 한 점). 변수: name. 여러 조건(all/any): conds(잎 조건 목록).
+    값은 문자열도 허용. 잘못되면 ValueError."""
+    if kind == "var":
+        cond = {"kind": "var", "name": str(name).strip()}
+    elif kind in vision.GROUP_KINDS:
+        cond = {"kind": kind, "conds": list(conds or [])}
+    elif kind == "image":
         cond = {"kind": "image", "template": str(template).strip(),
                 "threshold": _int(threshold_pct, "일치도 기준(%)", 1) / 100}
         if region is not None:
@@ -401,10 +433,23 @@ def build_wait_until(*, delay_ms="0", timeout_s="10", on_timeout="stop", interva
 
 
 def build_check(kind_event: str, *, delay_ms="0", **cond_kw) -> dict:
-    """판정 한 번 하는 항목: 'if_start'(만약) 또는 'break_if'(반복 탈출)."""
-    if kind_event not in ("if_start", "break_if"):
+    """판정 한 번 하는 항목: 'if_start'(만약), 'break_if'(반복 탈출), 'while_start'(동안 반복)."""
+    if kind_event not in ("if_start", "break_if", "while_start"):
         raise ValueError(f"알 수 없는 종류: {kind_event}")
     return {"type": kind_event, "dt": _int(delay_ms, "앞 지연(ms)", 0) / 1000, "cond": build_condition(**cond_kw)}
+
+
+def build_set_var(*, target="", delay_ms="0", **cond_kw) -> dict:
+    """변수 저장 항목: 조건을 한 번 판정해 결과(참/거짓)를 변수 target 에 저장."""
+    target = str(target).strip()
+    vision.validate_var_name(target)
+    return {"type": "set_var", "dt": _int(delay_ms, "앞 지연(ms)", 0) / 1000, "name": target,
+            "cond": build_condition(**cond_kw)}
+
+
+def variables_in(items: list[dict]) -> list[str]:
+    """'변수 저장'으로 만드는 변수 이름 (처음 나온 순서)."""
+    return list(dict.fromkeys(i["name"] for i in items if i.get("type") == "set_var" and i.get("name")))
 
 
 def build_click_image(*, delay_ms="0", button="left", offset_x="0", offset_y="0", hold_ms="60",
@@ -440,7 +485,8 @@ def item_fields(item: dict) -> dict:
 
 def has_positional(items: list[dict]) -> bool:
     """좌표가 저장된 항목이 있는지 (있으면 좌표 기준을 바꿀 수 없다)."""
-    return any(i["type"] == "path" or (i["type"] in POSITIONAL and "x" in i) or "cond" in i for i in items)
+    return any(i["type"] == "path" or (i["type"] in POSITIONAL and "x" in i) or vision.conditions_in([i])
+               for i in items)
 
 
 def unique_name(base: str, existing) -> str:
@@ -489,6 +535,10 @@ def validate_for_save(name: str, hotkey: str | None, items: list[dict],
     err = block_error(items)
     if err:
         errors.append(f"반복 구간: {err}")
+    if not err:
+        undefined = sorted(vision.variables_used(items) - set(variables_in(items)))
+        if undefined:
+            errors.append(f"변수: 저장하는 '변수 저장' 항목이 없습니다: {', '.join(undefined)}")
     if available_templates is not None:
         missing = sorted(vision.templates_in(items) - available_templates)
         if missing:

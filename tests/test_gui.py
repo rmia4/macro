@@ -916,7 +916,8 @@ def test_edit_routes_condition_modes(gui, monkeypatch):
     import editor_model as em
     seen = []
     import gui as gui_mod
-    monkeypatch.setattr(gui_mod.ConditionDialog, "ask", classmethod(lambda cls, ed, item=None, mode="wait": seen.append(mode)))
+    monkeypatch.setattr(gui_mod.ConditionDialog, "ask",
+                        classmethod(lambda cls, ed, item=None, mode="wait", parent=None: seen.append(mode)))
     gui.on_add()
     ed = gui.editor
     px = {"kind": "pixel", "x": 1, "y": 1, "color": "#000000"}
@@ -928,6 +929,92 @@ def test_edit_routes_condition_modes(gui, monkeypatch):
         ed.tree.selection_set(str(i))
         ed.on_edit()
     assert seen == ["wait", "if", "break", "click"]
+    ed.items = [em.build_set_var(target="v", kind="pixel"), {"type": "while_start", "cond": px, "dt": 0},
+                {"type": "while_end", "dt": 0}]
+    ed.refresh_tree()
+    for i in (0, 1):
+        ed.tree.selection_set(str(i))
+        ed.on_edit()
+    assert seen[4:] == ["set_var", "while"]
+
+
+def test_while_and_set_var_dialogs(gui):
+    import editor_model as em
+    from gui import ConditionDialog
+    ed, _ = _open_condition(gui)
+    ed.insert_items(em.build_items("tap", key="a", delay_ms=100))
+    # 변수 저장: 범위 색 판정 결과를 '적' 에 저장
+    ed.tree.selection_set([])
+    d = ConditionDialog(ed, mode="set_var")
+    d.v_name.set("적")
+    d.v_kind.set("pixel"); d._on_kind()
+    d.v_px.set("5"); d.v_py.set("6")
+    d._on_ok()
+    assert d.result["type"] == "set_var" and d.result["name"] == "적" and d.result["cond"]["kind"] == "pixel"
+    ed.items.insert(0, d.result)
+    ed.refresh_tree()
+    assert "재생 회차마다 초기화" in ed.tree.item("0")["values"][3]
+    # 동안 반복: 변수 조건으로 키 입력을 감싼다
+    ed.tree.selection_set(["1", "2"])
+    d = ConditionDialog(ed, mode="while")
+    assert "적" in d.var_box.cget("values")
+    d.v_kind.set("var"); d._on_kind()
+    gui.root.update()
+    assert d.f_var.winfo_ismapped() and not d.f_test.winfo_ismapped()
+    d._on_ok()
+    assert d.error.cget("text")                     # 변수 이름이 비어 있음
+    d.v_var.set("적")
+    d._on_ok()
+    ed.wrap_while(d.result["cond"])
+    assert [i["type"] for i in ed.items] == ["set_var", "while_start", "kdown", "kup", "while_end"]
+    assert ed.tree.item("2")["values"][2] == "│ 키 누름"
+    ed.v_name.set("동안")
+    assert ed.on_save()
+    assert gui.app.library["동안"].events[1]["cond"] == {"kind": "var", "name": "적"}
+
+
+def test_group_condition_dialog(gui, monkeypatch):
+    import editor_model as em
+    from gui import ConditionDialog
+    ed, _ = _open_condition(gui)
+    d = ConditionDialog(ed, mode="if")
+    d.v_kind.set("group"); d._on_kind()
+    gui.root.update()
+    assert d.f_group.winfo_ismapped()
+    subs = iter([{"cond": {"kind": "pixel", "x": 1, "y": 1, "color": "#000000"}},
+                 {"cond": {"kind": "var", "name": "v"}}, None, None])
+    opened = []
+
+    def fake_ask(cls, editor, item=None, mode="wait", parent=None):
+        opened.append((mode, parent, item))
+        return next(subs)
+    monkeypatch.setattr(ConditionDialog, "ask", classmethod(fake_ask))
+    d.on_sub_add()
+    d._on_ok()
+    assert "2개 이상" in d.error.cget("text")
+    d.on_sub_add()
+    d.on_sub_add()                                   # 취소
+    assert opened[0][:2] == ("cond", d.top) and d.sub_list.size() == 2
+    d.sub_list.selection_set(1)
+    d.on_sub_edit()                                  # 취소 -> 그대로
+    assert opened[-1][2] == {"cond": {"kind": "var", "name": "v"}}
+    d.v_group_op.set("any")
+    d._on_ok()
+    assert d.result["cond"]["kind"] == "any" and len(d.result["cond"]["conds"]) == 2
+    # 수정으로 다시 열면 여러 조건 상태가 복원된다
+    d2 = ConditionDialog(ed, {"type": "if_start", "dt": 0, "cond": d.result["cond"]}, mode="if")
+    assert d2.v_kind.get() == "group" and d2.v_group_op.get() == "any" and d2.sub_list.size() == 2
+    d2.sub_list.selection_set(0)
+    d2.on_sub_delete()
+    assert d2.sub_list.size() == 1
+    # 조건 하나 고르기(mode=cond)에는 '여러 조건' 선택지가 없고 지연 칸도 없다
+    d3 = ConditionDialog(ed, mode="cond")
+    gui.root.update()
+    assert not d3._common_has_rows
+    d3.v_kind.set("var"); d3.v_var.set("v")
+    d3._on_ok()
+    assert d3.result == {"cond": {"kind": "var", "name": "v"}}
+    assert em.describe({"type": "if_start", "cond": d.result["cond"]}).startswith("[색")
 
 
 def test_infinite_repeat_summary(gui, monkeypatch):

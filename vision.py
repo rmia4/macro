@@ -7,6 +7,9 @@
            "ratio": 0.5, "negate": false}
           범위 [x, y, w, h] 안에서 color(채널별 ±tolerance)인 픽셀의 비율이 ratio 이상이면 충족.
           w, h 를 생략하면 (x, y) 한 점만 본다.
+  변수:   {"kind": "var", "name": "보스", "negate": false}  저장된 판정 결과(참/거짓). 없으면 거짓.
+  복합:   {"kind": "all" | "any", "conds": [잎 조건 2개 이상], "negate": false}
+          all = 모두 맞을 때(그리고), any = 하나라도 맞을 때(또는). 안에는 이미지/색/변수만 (중첩 없음).
 
 좌표는 매크로의 좌표 기준(화면/창)을 따르며, 판정할 때 origin(창 좌상단)을 더해 화면 좌표로 바꾼다.
 template 은 매크로별 이미지 폴더(assets_dir) 안의 파일 이름이다. 주 모니터만 대상으로 한다.
@@ -17,7 +20,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-COND_KINDS = ("image", "pixel")
+SCREEN_KINDS = ("image", "pixel")
+LEAF_KINDS = SCREEN_KINDS + ("var",)
+GROUP_KINDS = ("all", "any")
+COND_KINDS = LEAF_KINDS + GROUP_KINDS
+VAR_RE = re.compile(r"^\w{1,20}$")
 DEFAULT_THRESHOLD = 0.85
 DEFAULT_TOLERANCE = 20
 DEFAULT_RATIO = 0.5
@@ -29,16 +36,31 @@ def _num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
-def validate_condition(cond) -> None:
+def validate_var_name(name) -> None:
+    if not isinstance(name, str) or not VAR_RE.match(name):
+        raise ValueError(f"잘못된 변수 이름: {name!r} (글자·숫자·_ 1~20자)")
+
+
+def validate_condition(cond, _leaf_only: bool = False) -> None:
     """조건 구조 검증 (파일 존재 여부는 보지 않는다). 잘못되면 ValueError."""
     if not isinstance(cond, dict):
         raise ValueError("조건(cond)은 객체여야 합니다")
     kind = cond.get("kind")
     if kind not in COND_KINDS:
         raise ValueError(f"알 수 없는 조건 종류: {kind!r}")
+    if _leaf_only and kind in GROUP_KINDS:
+        raise ValueError("여러 조건 안에 여러 조건을 넣을 수 없습니다")
     if not isinstance(cond.get("negate", False), bool):
         raise ValueError("negate 는 true/false 여야 합니다")
-    if kind == "image":
+    if kind == "var":
+        validate_var_name(cond.get("name"))
+    elif kind in GROUP_KINDS:
+        conds = cond.get("conds")
+        if not isinstance(conds, list) or len(conds) < 2:
+            raise ValueError("여러 조건에는 조건이 2개 이상 필요합니다")
+        for c in conds:
+            validate_condition(c, _leaf_only=True)
+    elif kind == "image":
         name = cond.get("template")
         if not isinstance(name, str) or not _TEMPLATE_RE.match(name) or name.strip(".") == "png":
             raise ValueError(f"잘못된 이미지 파일 이름: {name!r} (같은 폴더의 .png 파일 이름)")
@@ -75,6 +97,12 @@ def parse_color(text: str) -> tuple[int, int, int]:
 
 def describe_condition(cond: dict) -> str:
     neg = " 아님" if cond.get("negate") else ""
+    if cond.get("kind") == "var":
+        return f"변수 '{cond.get('name')}'{neg}"
+    if cond.get("kind") in GROUP_KINDS:
+        joiner = " 그리고 " if cond["kind"] == "all" else " 또는 "
+        text = joiner.join(f"[{describe_condition(c)}]" for c in cond.get("conds", []))
+        return f"({text}){neg}" if neg else text
     if cond.get("kind") == "image":
         th = round(cond.get("threshold", DEFAULT_THRESHOLD) * 100)
         where = " 영역 [{}, {}, {}, {}]".format(*cond["region"]) if cond.get("region") else " 화면 전체"
@@ -233,8 +261,43 @@ def png_base64(img) -> str:
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
+def leaf_conditions(cond: dict) -> list[dict]:
+    """복합 조건을 펼친 잎 조건들 (이미지/색/변수)."""
+    if cond.get("kind") in GROUP_KINDS:
+        return [c for c in cond.get("conds", []) if isinstance(c, dict)]
+    return [cond]
+
+
 def conditions_in(events) -> list[dict]:
-    return [ev["cond"] for ev in events if isinstance(ev, dict) and isinstance(ev.get("cond"), dict)]
+    """화면을 봐야 하는 잎 조건(이미지/색)들. 변수 조건은 제외."""
+    return [c for ev in events if isinstance(ev, dict) and isinstance(ev.get("cond"), dict)
+            for c in leaf_conditions(ev["cond"]) if c.get("kind") in SCREEN_KINDS]
+
+
+def variables_used(events) -> set[str]:
+    """조건에서 읽는 변수 이름."""
+    return {c["name"] for ev in events if isinstance(ev, dict) and isinstance(ev.get("cond"), dict)
+            for c in leaf_conditions(ev["cond"]) if c.get("kind") == "var" and isinstance(c.get("name"), str)}
+
+
+def evaluate(cond: dict, check_leaf, variables: dict) -> Match:
+    """조건 판정. check_leaf(이미지/색 조건) -> Match. 변수는 variables 에서 (없으면 거짓).
+    여러 조건은 결과가 정해지면 나머지를 보지 않는다. 반환하는 Match 는 위치·점수를 마지막 판정에서 가져온다."""
+    kind = cond["kind"]
+    if kind == "var":
+        m = Match(bool(variables.get(cond["name"], False)), 1.0)
+    elif kind in GROUP_KINDS:
+        want_all = kind == "all"
+        for c in cond["conds"]:  # 마지막으로 본 조건의 결과가 곧 전체 결과
+            sub = evaluate(c, check_leaf, variables)
+            m = Match(sub.matched, sub.score, sub.pos)
+            if sub.matched != want_all:
+                break
+    else:
+        return check_leaf(cond)  # negate 는 판정기가 반영
+    if cond.get("negate"):
+        m.matched = not m.matched
+    return m
 
 
 def templates_in(events) -> set[str]:

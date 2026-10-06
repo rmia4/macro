@@ -668,11 +668,13 @@ class EditorWindow:
         flow.pack(fill="x", pady=(4, 0))
         ttk.Label(flow, text="흐름:").pack(side="left")
         ttk.Button(flow, text="🔁 반복 구간", command=self.on_wrap_repeat).pack(side="left", padx=2)
+        ttk.Button(flow, text="🔂 동안 반복", command=self.on_add_while).pack(side="left", padx=2)
         screen = ttk.Frame(left)
         screen.pack(fill="x", pady=(4, 0))
-        ttk.Label(screen, text="화면:").pack(side="left")
+        ttk.Label(screen, text="조건:").pack(side="left")
         for text, cmd in (("🔍 조건 대기", self.on_add_condition), ("❓ 조건 분기", self.on_add_branch),
-                          ("🖱 이미지 클릭", self.on_add_click), ("⏹ 반복 탈출", self.on_add_break)):
+                          ("🖱 이미지 클릭", self.on_add_click), ("⏹ 반복 탈출", self.on_add_break),
+                          ("📌 변수 저장", self.on_add_set_var)):
             ttk.Button(screen, text=text, command=cmd).pack(side="left", padx=2)
         edit = ttk.Frame(left)
         edit.pack(fill="x", pady=(4, 0))
@@ -743,9 +745,12 @@ class EditorWindow:
     def refresh_tree(self, select: list[int] | None = None) -> None:
         self.tree.delete(*self.tree.get_children())
         for i, (it, depth) in enumerate(zip(self.items, em.depths(self.items))):
+            detail = em.describe(it)
+            if it["type"] == "set_var":
+                scope = em.scope_text(self.items, i)
+                detail += f" · {scope}" if scope else ""
             self.tree.insert("", "end", iid=str(i), values=(
-                i + 1, round(it.get("dt", 0) * 1000), "│ " * depth + em.EVENT_LABELS[it["type"]],
-                em.describe(it)))
+                i + 1, round(it.get("dt", 0) * 1000), "│ " * depth + em.EVENT_LABELS[it["type"]], detail))
         shown = [str(i) for i in (select or []) if self.tree.exists(str(i))]
         if shown:
             self.tree.selection_set(shown)
@@ -809,8 +814,8 @@ class EditorWindow:
         if len(sel) != 1:
             return
         i = sel[0]
-        mode = {"wait_until": "wait", "if_start": "if", "break_if": "break", "click_image": "click"}.get(
-            self.items[i]["type"])
+        mode = {"wait_until": "wait", "if_start": "if", "break_if": "break", "click_image": "click",
+                "set_var": "set_var", "while_start": "while"}.get(self.items[i]["type"])
         if mode:
             result = ConditionDialog.ask(self, self.items[i], mode=mode)
             if result:
@@ -822,7 +827,7 @@ class EditorWindow:
             return
         kinds = {"path": em.PATH_KINDS, "relpath": em.RELPATH_KINDS, "repeat_start": em.REPEAT_START_KINDS,
                  "repeat_end": em.REPEAT_END_KINDS, "else": em.ELSE_KINDS,
-                 "if_end": em.IF_END_KINDS}.get(self.items[i]["type"], em.EDIT_KINDS)
+                 "if_end": em.IF_END_KINDS, "while_end": em.WHILE_END_KINDS}.get(self.items[i]["type"], em.EDIT_KINDS)
         result = EventDialog.ask(self.top, kinds, item=self.items[i], pick=self.pick_position)
         if result:
             self._snapshot()
@@ -921,6 +926,26 @@ class EditorWindow:
         result = ConditionDialog.ask(self, mode="if")
         if result:
             self.wrap_if(result["cond"], result.get("with_else", False))
+
+    def on_add_set_var(self) -> None:
+        result = ConditionDialog.ask(self, mode="set_var")
+        if result:
+            self.insert_items([result])
+
+    def on_add_while(self) -> None:
+        result = ConditionDialog.ask(self, mode="while")
+        if result:
+            self.wrap_while(result["cond"])
+
+    def wrap_while(self, cond: dict) -> None:
+        try:
+            items, select = em.wrap_while(self.items, self.selected_indices(), cond)
+        except ValueError as e:
+            messagebox.showerror("동안 반복", str(e), parent=self.top)
+            return
+        self._snapshot()
+        self.items = items
+        self._changed(select)
 
     def wrap_if(self, cond: dict, with_else: bool = False) -> None:
         try:
@@ -1300,29 +1325,39 @@ def search_region_around(rect, screen_w: int, screen_h: int) -> tuple[int, int, 
 
 
 class ConditionDialog:
-    """조건 대기 추가/수정. result: 편집 항목 (취소 시 None)."""
+    """조건을 쓰는 항목의 추가/수정. result: 편집 항목 (취소 시 None).
+    mode="cond" 는 '여러 조건' 안의 조건 하나만 고르는 용도로, result 는 {"cond": 조건}."""
 
-    TITLES = {"wait": "조건 대기", "if": "조건 분기 (만약)", "break": "반복 탈출", "click": "이미지 클릭"}
+    TITLES = {"wait": "조건 대기", "if": "조건 분기 (만약)", "break": "반복 탈출", "click": "이미지 클릭",
+              "set_var": "변수 저장", "while": "동안 반복", "cond": "조건"}
+    KIND_TEXT = (("image", "이미지"), ("pixel", "범위 색"), ("var", "변수"), ("group", "여러 조건"))
 
-    def __init__(self, editor: "EditorWindow", item: dict | None = None, mode: str = "wait") -> None:
-        """mode: wait(조건 대기) | if(조건 분기) | break(반복 탈출) | click(이미지 클릭)."""
+    def __init__(self, editor: "EditorWindow", item: dict | None = None, mode: str = "wait", parent=None) -> None:
+        """mode: wait(조건 대기) | if(조건 분기) | break(반복 탈출) | click(이미지 클릭)
+        | set_var(변수 저장) | while(동안 반복) | cond(여러 조건 안의 조건 하나)."""
         self.editor, self.gui = editor, editor.gui
         self.mode = mode
+        self.parent = parent or editor.top
         self.editing = item is not None
         self.result: dict | None = None
         self._modal = False
         cond = (item or {}).get("cond", {"kind": "image"})
         region = cond.get("region")
-        self.top = tk.Toplevel(editor.top)
+        self.top = tk.Toplevel(self.parent)
         self.top.withdraw()
         self.top.title(f"{self.TITLES[mode]} {'수정' if item else '추가'}")
-        self.top.transient(editor.top)
+        self.top.transient(self.parent)
         self.top.resizable(False, False)
 
         def var(value) -> tk.StringVar:
             return tk.StringVar(self.top, value=str(value))
 
-        self.v_kind = tk.StringVar(self.top, value=cond.get("kind", "image"))
+        group = cond.get("kind") in vision.GROUP_KINDS
+        self.v_kind = tk.StringVar(self.top, value="group" if group else cond.get("kind", "image"))
+        self.v_group_op = tk.StringVar(self.top, value=cond["kind"] if group else "all")
+        self.sub_conds: list[dict] = [dict(c) for c in cond.get("conds", [])] if group else []
+        self.v_var = tk.StringVar(self.top, value=cond.get("name", "") if cond.get("kind") == "var" else "")
+        self.v_name = tk.StringVar(self.top, value=(item or {}).get("name", ""))
         self.v_negate = tk.BooleanVar(self.top, value=bool(cond.get("negate")))
         self.v_delay = var(round((item or {}).get("dt", 0) * 1000))
         self.v_timeout = var(f"{(item or {}).get('timeout', 10):g}")
@@ -1346,7 +1381,7 @@ class ConditionDialog:
         self._build()
         self._on_kind()
         self._update_thumb()
-        center_on_parent(self.top, editor.top)
+        center_on_parent(self.top, self.parent)
 
     def _build(self) -> None:
         f = ttk.Frame(self.top, padding=10)
@@ -1356,17 +1391,30 @@ class ConditionDialog:
         intro = {"wait": "조건이 맞을 때까지 기다린 뒤 다음 이벤트로 진행합니다.",
                  "if": "조건이 맞으면 '만약' 구간을, 아니면 '아니면' 구간(있을 때)을 실행합니다. 선택한 이벤트를 감쌉니다.",
                  "break": "조건이 맞으면 가장 안쪽 반복 구간을 끝냅니다 (구간 밖이면 이번 회차를 끝냄).",
-                 "click": "이미지가 나타날 때까지 기다렸다가, 찾은 위치(+보정)를 클릭합니다."}[self.mode]
+                 "click": "이미지가 나타날 때까지 기다렸다가, 찾은 위치(+보정)를 클릭합니다.",
+                 "set_var": "조건을 한 번 판정해 결과(참/거짓)를 변수에 저장합니다. 이후 조건에서 '변수'로 씁니다. "
+                            "변수는 저장·사용 위치를 모두 감싸는 가장 안쪽 반복의 회차마다 거짓으로 초기화됩니다.",
+                 "while": "조건이 맞는 동안 구간을 반복합니다 (매 회차 시작 전에 판정). 선택한 이벤트를 감쌉니다.",
+                 "cond": "'여러 조건'에 넣을 조건 하나를 고릅니다."}[self.mode]
         ttk.Label(f, text=intro, wraplength=440).pack(anchor="w", pady=(0, 4))
+        if self.mode == "set_var":
+            nrow = ttk.Frame(f)
+            nrow.pack(fill="x", pady=(0, 4))
+            ttk.Label(nrow, text="변수 이름").pack(side="left")
+            ttk.Combobox(nrow, textvariable=self.v_name, width=18,
+                         values=em.variables_in(self.editor.items)).pack(side="left", padx=4)
         if self.mode != "click":
             row = ttk.Frame(f)
             row.pack(fill="x")
             ttk.Label(row, text="조건").pack(side="left")
-            for val, text in (("image", "이미지가 보일 때"), ("pixel", "범위의 색이 맞을 때")):
+            for val, text in self.KIND_TEXT:
+                if val == "group" and self.mode == "cond":
+                    continue  # 여러 조건은 중첩하지 않는다
                 ttk.Radiobutton(row, text=text, value=val, variable=self.v_kind,
                                 command=self._on_kind).pack(side="left", padx=4)
             neg = {"wait": "반대로 (조건이 '아닐' 때까지 대기)", "if": "반대로 (조건이 '아닐' 때 실행)",
-                   "break": "반대로 (조건이 '아닐' 때 탈출)"}[self.mode]
+                   "break": "반대로 (조건이 '아닐' 때 탈출)", "set_var": "반대로 (조건이 '아닐' 때 참으로 저장)",
+                   "while": "반대로 (조건이 '아닌' 동안 반복)", "cond": "반대로 (조건이 '아닐' 때 충족)"}[self.mode]
             ttk.Checkbutton(f, text=neg, variable=self.v_negate).pack(anchor="w", pady=2)
         else:
             self.v_kind.set("image")
@@ -1420,6 +1468,30 @@ class ConditionDialog:
         ttk.Label(crow, text="이 색의 비율 ≥ (%)").pack(side="left")
         ttk.Entry(crow, textvariable=self.v_ratio, width=4).pack(side="left", padx=2)
 
+        # 변수
+        self.f_var = ttk.LabelFrame(f, text="변수", padding=6)
+        ttk.Label(self.f_var, text="'변수 저장'으로 저장한 값이 참이면 충족").pack(side="left")
+        self.var_box = ttk.Combobox(self.f_var, textvariable=self.v_var, width=18,
+                                    values=em.variables_in(self.editor.items))
+        self.var_box.pack(side="left", padx=6)
+
+        # 여러 조건
+        self.f_group = ttk.LabelFrame(f, text="여러 조건", padding=6)
+        orow = ttk.Frame(self.f_group)
+        orow.pack(fill="x")
+        for val, text in (("all", "모두 맞을 때 (그리고)"), ("any", "하나라도 맞을 때 (또는)")):
+            ttk.Radiobutton(orow, text=text, value=val, variable=self.v_group_op).pack(side="left", padx=(0, 8))
+        lrow = ttk.Frame(self.f_group)
+        lrow.pack(fill="x", pady=(6, 0))
+        self.sub_list = tk.Listbox(lrow, height=4, width=48, activestyle="none", exportselection=False)
+        self.sub_list.pack(side="left", fill="x", expand=True)
+        self.sub_list.bind("<Double-Button-1>", lambda e: self.on_sub_edit())
+        sbtn = ttk.Frame(lrow)
+        sbtn.pack(side="left", padx=(6, 0))
+        for text, cmd in (("추가…", self.on_sub_add), ("수정", self.on_sub_edit), ("삭제", self.on_sub_delete)):
+            ttk.Button(sbtn, text=text, width=7, command=cmd).pack(fill="x", pady=1)
+        self._refresh_subs()
+
         # 이미지 클릭 설정
         self.f_click = ttk.LabelFrame(f, text="클릭", padding=6)
         ttk.Label(self.f_click, text="버튼").pack(side="left")
@@ -1434,7 +1506,8 @@ class ConditionDialog:
         # 공통: 앞 지연 (+ 대기형이면 최대 대기·확인 간격·초과 시 동작)
         waits = self.mode in ("wait", "click")
         self.f_common = ttk.LabelFrame(f, text="대기" if waits else "실행", padding=6)
-        rows = [("앞 지연(ms)", self.v_delay)] if (self.editing or self.mode != "if") else []
+        wraps = self.mode in ("if", "while")  # 선택 범위를 감싸는 종류는 감쌀 때 지연을 받지 않는다
+        rows = [] if self.mode == "cond" else [("앞 지연(ms)", self.v_delay)] if (self.editing or not wraps) else []
         if waits:
             rows += [("최대 대기(초, 0=무제한)", self.v_timeout), ("확인 간격(ms)", self.v_interval)]
         for r, (label, v) in enumerate(rows):
@@ -1462,15 +1535,18 @@ class ConditionDialog:
         self.top.bind("<Escape>", lambda e: self.top.destroy())
 
     def _on_kind(self) -> None:
-        image = self.v_kind.get() == "image"
-        for w in (self.f_image, self.f_pixel, self.f_click, self.f_common, self.f_test, self.error, self.f_buttons):
+        kind = self.v_kind.get()
+        for w in (self.f_image, self.f_pixel, self.f_var, self.f_group, self.f_click, self.f_common,
+                  self.f_test, self.error, self.f_buttons):
             w.pack_forget()
-        (self.f_image if image else self.f_pixel).pack(fill="x", pady=4)
+        {"image": self.f_image, "pixel": self.f_pixel, "var": self.f_var,
+         "group": self.f_group}[kind].pack(fill="x", pady=4)
         if self.mode == "click":
             self.f_click.pack(fill="x", pady=4)
         if self._common_has_rows:
             self.f_common.pack(fill="x", pady=4)
-        self.f_test.pack(fill="x", pady=4)
+        if kind != "var":  # 변수만으로는 화면을 볼 것이 없다
+            self.f_test.pack(fill="x", pady=4)
         self.error.pack(anchor="w")
         self.f_buttons.pack(pady=(8, 0))
         state = ["disabled"] if self.v_full.get() else ["!disabled"]
@@ -1501,9 +1577,45 @@ class ConditionDialog:
         except (ValueError, tk.TclError):
             self.swatch.configure(bg="#ffffff")
 
+    # ---- 여러 조건 ----
+    def _refresh_subs(self, select: int | None = None) -> None:
+        self.sub_list.delete(0, "end")
+        for c in self.sub_conds:
+            self.sub_list.insert("end", vision.describe_condition(c))
+        if select is not None and 0 <= select < len(self.sub_conds):
+            self.sub_list.selection_set(select)
+
+    def _sub_selected(self) -> int | None:
+        sel = self.sub_list.curselection()
+        return sel[0] if sel else None
+
+    def on_sub_add(self) -> None:
+        result = ConditionDialog.ask(self.editor, mode="cond", parent=self.top)
+        self._regrab()
+        if result:
+            self.sub_conds.append(result["cond"])
+            self._refresh_subs(len(self.sub_conds) - 1)
+
+    def on_sub_edit(self) -> None:
+        i = self._sub_selected()
+        if i is None:
+            return
+        result = ConditionDialog.ask(self.editor, {"cond": self.sub_conds[i]}, mode="cond", parent=self.top)
+        self._regrab()
+        if result:
+            self.sub_conds[i] = result["cond"]
+            self._refresh_subs(i)
+
+    def on_sub_delete(self) -> None:
+        i = self._sub_selected()
+        if i is None:
+            return
+        del self.sub_conds[i]
+        self._refresh_subs(min(i, len(self.sub_conds) - 1))
+
     # ---- 화면 작업 ----
     def _screen_windows(self):
-        return [self.top, self.editor.top, self.gui.root]
+        return list(dict.fromkeys([self.top, self.parent, self.editor.top, self.gui.root]))
 
     def on_crop(self, region_only: bool = False) -> None:
         def action(restore):
@@ -1582,13 +1694,20 @@ class ConditionDialog:
             return
         self.error.configure(text="")
 
+        cond = item["cond"]
+
         def action(restore):
             try:
-                m = vision.Vision(self.editor.assets_dir, self.gui.get_grabber()).check(item["cond"], origin)
-                measure = "색 비율" if item["cond"]["kind"] == "pixel" else "일치도"
-                text = f"{'✔ 충족' if m.matched else '✘ 불충족'} · {measure} {m.score * 100:.0f}%"
+                checker = vision.Vision(self.editor.assets_dir, self.gui.get_grabber())
+                m = vision.evaluate(cond, lambda c: checker.check(c, origin), {})
+                text = "✔ 충족" if m.matched else "✘ 불충족"
+                if cond["kind"] in vision.SCREEN_KINDS:
+                    measure = "색 비율" if cond["kind"] == "pixel" else "일치도"
+                    text += f" · {measure} {m.score * 100:.0f}%"
                 if m.pos:
                     text += f" · 찾은 위치 ({m.pos[0] - origin[0]}, {m.pos[1] - origin[1]})"
+                if vision.variables_used([item]):
+                    text += " · 변수는 거짓으로 가정"
                 self.test_label.configure(text=text, foreground="#2e7d32" if m.matched else "#c62828")
             except Exception as e:
                 self.test_label.configure(text=f"오류: {e}", foreground="#c62828")
@@ -1604,23 +1723,40 @@ class ConditionDialog:
                 pass
 
     # ---- 결과 ----
-    def _build_item(self) -> dict:
-        if self.v_kind.get() == "image" and not self.v_template.get():
+    def _cond_kw(self) -> dict:
+        kind = self.v_kind.get()
+        if kind == "var":
+            if not self.v_var.get().strip():
+                raise ValueError("변수 이름을 고르거나 입력하세요")
+            return dict(kind="var", name=self.v_var.get(), negate=self.v_negate.get())
+        if kind == "group":
+            if len(self.sub_conds) < 2:
+                raise ValueError("'추가…'로 조건을 2개 이상 넣으세요")
+            return dict(kind=self.v_group_op.get(), conds=self.sub_conds, negate=self.v_negate.get())
+        if kind == "image" and not self.v_template.get():
             raise ValueError("먼저 '화면에서 잘라내기'로 찾을 이미지를 지정하세요")
         region = None if self.v_full.get() else [v.get() for v in self.v_region]
-        cond_kw = dict(kind=self.v_kind.get(), template=self.v_template.get(), region=region,
-                       threshold_pct=self.v_threshold.get(), x=self.v_px.get(), y=self.v_py.get(),
-                       w=self.v_pw.get(), h=self.v_ph.get(), ratio_pct=self.v_ratio.get(),
-                       color=self.v_color.get(), tolerance=self.v_tol.get(), negate=self.v_negate.get())
+        return dict(kind=kind, template=self.v_template.get(), region=region,
+                    threshold_pct=self.v_threshold.get(), x=self.v_px.get(), y=self.v_py.get(),
+                    w=self.v_pw.get(), h=self.v_ph.get(), ratio_pct=self.v_ratio.get(),
+                    color=self.v_color.get(), tolerance=self.v_tol.get(), negate=self.v_negate.get())
+
+    def _build_item(self) -> dict:
+        cond_kw = self._cond_kw()
         wait_kw = dict(timeout_s=self.v_timeout.get(), on_timeout=self.v_on_timeout.get(),
                        interval_ms=self.v_interval.get())
         delay = self.v_delay.get()
+        if self.mode == "cond":
+            return {"cond": em.build_condition(**cond_kw)}
+        if self.mode == "set_var":
+            return em.build_set_var(target=self.v_name.get(), delay_ms=delay, **cond_kw)
         if self.mode == "wait":
             return em.build_wait_until(delay_ms=delay, **wait_kw, **cond_kw)
         if self.mode == "click":
             return em.build_click_image(delay_ms=delay, button=self.v_button.get(), offset_x=self.v_off_x.get(),
                                         offset_y=self.v_off_y.get(), hold_ms=self.v_hold.get(), **wait_kw, **cond_kw)
-        item = em.build_check("if_start" if self.mode == "if" else "break_if", delay_ms=delay, **cond_kw)
+        kind_event = {"if": "if_start", "break": "break_if", "while": "while_start"}[self.mode]
+        item = em.build_check(kind_event, delay_ms=delay, **cond_kw)
         if self.mode == "if" and not self.editing:
             item["with_else"] = self.v_with_else.get()  # 감쌀 때만 쓰는 값 (저장되지 않음)
         return item
@@ -1634,8 +1770,8 @@ class ConditionDialog:
         self.top.destroy()
 
     @classmethod
-    def ask(cls, editor: "EditorWindow", item: dict | None = None, mode: str = "wait") -> dict | None:
-        dlg = cls(editor, item, mode)
+    def ask(cls, editor: "EditorWindow", item: dict | None = None, mode: str = "wait", parent=None) -> dict | None:
+        dlg = cls(editor, item, mode, parent)
         dlg._modal = True
         dlg.top.grab_set()
         dlg.top.wait_window()

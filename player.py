@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 import keys
-from profiles import Macro, blocks
-from vision import conditions_in
+from profiles import Macro, blocks, var_scopes
+from vision import conditions_in, evaluate
 
 
 @dataclass
@@ -30,6 +30,8 @@ class PlayOptions:
     max_minutes: float = 0.0      # 최대 실행 시간(분). 0 = 제한 없음
     focus_poll: float = 0.1
 
+
+MIN_WHILE_LAP = 0.01  # 동안 반복 한 바퀴의 최소 시간(초)
 
 _MIN = {"repeat": 0, "speed": 0.01, "loop_delay": 0, "time_jitter": 0, "pos_jitter": 0,
         "approach_duration": 0, "min_key_hold": 0, "focus_poll": 0.01, "max_minutes": 0}
@@ -101,6 +103,7 @@ class Player:
         self._held_buttons: set[str] = set()
         self.vision = vision
         self.last_match = None  # 마지막 조건 판정 결과 (표시용)
+        self.variables: dict[str, bool] = {}  # 변수 저장 결과 (범위가 되는 반복의 회차마다 초기화)
         self._offset = (0, 0)
         self._origin = 0.0
         self._win = (0, 0)
@@ -166,6 +169,12 @@ class Player:
         bl = blocks(events)
         ends = bl.repeat                                 # 반복 시작 -> 끝
         starts = {end: start for start, end in ends.items()}
+        while_starts = {end: start for start, end in bl.while_end.items()}
+        scoped: dict[int | None, list[str]] = {}         # 반복 시작 -> 그 회차마다 초기화할 변수
+        for name, loop in var_scopes(events, bl).items():
+            scoped.setdefault(loop, []).append(name)
+        self.variables = {}
+        lap_cum: dict[int, float] = {}                   # 동안 반복 -> 이번 회차 시작 시각(cum)
         first = next((e for e in events if "x" in e), None)
         self._roll_offset()
         if o.mouse_mode == "relative":
@@ -202,17 +211,34 @@ class Player:
                 elif typ == "click_image" and not self._click_found(ev):
                     return False
                 self._origin = self._clock() - cum  # 대기한 만큼 이후 시간표를 뒤로 민다
-            elif typ in ("if_start", "break_if"):
-                self.last_match = self.vision.check(ev["cond"], self._win)
+            elif typ in ("if_start", "break_if", "while_start"):
+                self._check(ev["cond"])
+            elif typ == "set_var":
+                self.variables[ev["name"]] = self._check(ev["cond"]).matched
             elif not self._dispatch(ev):
                 return False
             self.event_index = i
             if typ == "repeat_start":
                 remaining[ends[i]] = ev["count"] - 1 if ev["count"] > 0 else -1  # -1 = 무한
+                self._reset_vars(scoped.get(i))
             elif typ == "repeat_end" and remaining.get(i, 0) != 0:
                 if remaining[i] > 0:
                     remaining[i] -= 1
-                i = starts[i] + 1  # 구간 처음으로 (반복 시작 표시는 다시 실행하지 않음)
+                start = starts[i]
+                i = start + 1  # 구간 처음으로 (반복 시작 표시는 다시 실행하지 않음)
+                self._reset_vars(scoped.get(start))
+                continue
+            elif typ == "while_start":
+                if not self.last_match.matched:
+                    i = bl.while_end[i] + 1  # 조건이 맞지 않으면 동안 반복 끝 다음으로
+                    continue
+                lap_cum[i] = cum
+                self._reset_vars(scoped.get(i))
+            elif typ == "while_end":
+                start = while_starts[i]
+                # 한 바퀴에 지연이 없어도 CPU 를 독점하지 않도록 최소 간격을 둔다
+                cum = max(cum, lap_cum.get(start, cum) + MIN_WHILE_LAP)
+                i = start  # 다시 조건 판정
                 continue
             elif typ == "if_start" and not self.last_match.matched:
                 i = (bl.if_else.get(i, bl.if_end[i])) + 1  # 아니면 구간(없으면 분기 끝 다음)으로
@@ -221,14 +247,26 @@ class Player:
                 i = bl.else_end[i] + 1  # '만약' 구간을 실행하고 왔으면 '아니면' 구간은 건너뛴다
                 continue
             elif typ == "break_if" and self.last_match.matched:
-                start = bl.parent_repeat.get(i)
+                start = bl.parent_loop.get(i)
                 if start is None:
                     return True  # 반복 구간 밖이면 이번 회차 종료
+                if start in bl.while_end:
+                    i = bl.while_end[start] + 1
+                    continue
                 remaining[ends[start]] = 0
                 i = ends[start] + 1
                 continue
             i += 1
         return True
+
+    def _reset_vars(self, names) -> None:
+        for name in names or ():
+            self.variables.pop(name, None)
+
+    def _check(self, cond: dict):
+        """조건 판정 (변수·여러 조건 포함). 결과는 last_match 에도 남긴다."""
+        self.last_match = evaluate(cond, lambda c: self.vision.check(c, self._win), self.variables)
+        return self.last_match
 
     def _wait_until(self, cum: float) -> bool:
         while True:
@@ -249,8 +287,7 @@ class Player:
         while True:
             if not self._wait_focus(macro):
                 return "stopped"
-            self.last_match = self.vision.check(ev["cond"], self._win)
-            if self.last_match.matched:
+            if self._check(ev["cond"]).matched:
                 return "ok"
             waited = self._clock() - start
             if timeout > 0 and waited >= timeout:

@@ -101,4 +101,4 @@ def test_blocks_structure():
            {"type": "else"}, {"type": "if_end"}, {"type": "repeat_end"}]
     b = blocks(evs)
     assert b.repeat == {0: 5} and b.if_end == {1: 4} and b.if_else == {1: 3} and b.else_end == {3: 4}
-    assert b.parent_repeat[2] == 0 and 0 not in b.parent_repeat
+    assert b.parent_loop[2] == 0 and 0 not in b.parent_loop

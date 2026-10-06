@@ -15,8 +15,10 @@ EVENT_TYPES = {"move", "rmove", "mdown", "mup", "scroll", "kdown", "kup", "wait"
                "wait_until",                  # 화면 조건이 맞을 때까지 대기
                "if_start", "else", "if_end",  # 조건 분기
                "break_if",                    # 조건이 맞으면 가장 안쪽 반복 구간 종료
-               "click_image"}                 # 이미지를 찾아 그 위치를 클릭
-COND_EVENTS = {"wait_until", "if_start", "break_if", "click_image"}
+               "click_image",                 # 이미지를 찾아 그 위치를 클릭
+               "set_var",                     # 조건 판정 결과(참/거짓)를 변수에 저장
+               "while_start", "while_end"}    # 조건이 맞는 동안 반복
+COND_EVENTS = {"wait_until", "if_start", "break_if", "click_image", "set_var", "while_start"}
 ON_TIMEOUT = ("stop", "continue")
 MAX_REPEAT = 100000
 BUTTONS = {"left", "right", "middle", "x1", "x2"}
@@ -88,30 +90,40 @@ def _is_num(v) -> bool:
 
 @dataclass
 class Blocks:
-    """반복 구간/조건 분기 구조 (모두 인덱스)."""
+    """반복 구간/조건 분기/동안 반복 구조 (모두 인덱스)."""
     repeat: dict[int, int] = field(default_factory=dict)      # 반복 시작 -> 반복 끝
+    while_end: dict[int, int] = field(default_factory=dict)   # 동안 반복 -> 동안 반복 끝
     if_end: dict[int, int] = field(default_factory=dict)      # 만약 -> 분기 끝
     if_else: dict[int, int] = field(default_factory=dict)     # 만약 -> 아니면 (있을 때만)
     else_end: dict[int, int] = field(default_factory=dict)    # 아니면 -> 분기 끝
-    parent_repeat: dict[int, int] = field(default_factory=dict)  # 인덱스 -> 가장 안쪽 반복 시작
+    parent_loop: dict[int, int] = field(default_factory=dict)  # 인덱스 -> 가장 안쪽 반복(반복 구간/동안 반복) 시작
+    loops: dict[int, tuple[int, ...]] = field(default_factory=dict)  # 인덱스 -> 감싸는 반복 시작들 (바깥 -> 안)
 
 
-_OPEN = {"repeat_start": "반복 시작", "if_start": "만약"}
-_CLOSE = {"repeat_end": ("repeat_start", "반복 끝"), "if_end": ("if_start", "분기 끝")}
+_OPEN = {"repeat_start": "반복 시작", "if_start": "만약", "while_start": "동안 반복"}
+_CLOSE = {"repeat_end": ("repeat_start", "반복 끝"), "if_end": ("if_start", "분기 끝"),
+          "while_end": ("while_start", "동안 반복 끝")}
+_LOOP_OPEN = ("repeat_start", "while_start")
 
 
 def blocks(events: list) -> Blocks:
-    """반복/분기 구조를 분석한다. 짝이 맞지 않거나 엇갈리면 ValueError."""
+    """반복/분기 구조를 분석한다. 짝이 맞지 않거나 엇갈리면 ValueError.
+    반복 시작/끝 표시 자신은 그 반복의 바깥에 속한다."""
     b = Blocks()
     stack: list[int] = []   # 열린 블록의 시작 인덱스
-    repeats: list[int] = []
+    repeats: list[int] = []  # 열린 반복(반복 구간/동안 반복)
     for i, ev in enumerate(events):
         typ = ev.get("type") if isinstance(ev, dict) else None
-        if repeats:
-            b.parent_repeat[i] = repeats[-1]
+        if typ in ("repeat_end", "while_end") and repeats:
+            outer = repeats[:-1]  # 끝 표시는 자기 반복의 바깥
+        else:
+            outer = repeats
+        b.loops[i] = tuple(outer)
+        if outer:
+            b.parent_loop[i] = outer[-1]
         if typ in _OPEN:
             stack.append(i)
-            if typ == "repeat_start":
+            if typ in _LOOP_OPEN:
                 repeats.append(i)
         elif typ == "else":
             if not stack or events[stack[-1]]["type"] != "if_start":
@@ -127,6 +139,9 @@ def blocks(events: list) -> Blocks:
             if typ == "repeat_end":
                 b.repeat[start] = i
                 repeats.pop()
+            elif typ == "while_end":
+                b.while_end[start] = i
+                repeats.pop()
             else:
                 b.if_end[start] = i
                 if start in b.if_else:
@@ -138,8 +153,32 @@ def blocks(events: list) -> Blocks:
 
 
 def block_pairs(events: list) -> dict[int, int]:
-    """반복 구간의 시작 인덱스 -> 끝 인덱스. 구조가 잘못되면 ValueError."""
-    return blocks(events).repeat
+    """반복 구간·동안 반복의 시작 인덱스 -> 끝 인덱스. 구조가 잘못되면 ValueError."""
+    b = blocks(events)
+    return {**b.repeat, **b.while_end}
+
+
+def var_scopes(events: list, b: Blocks | None = None) -> dict[str, int | None]:
+    """변수 이름 -> 초기화 기준 반복의 시작 인덱스 (None = 재생 회차마다).
+
+    변수를 저장하는 곳과 조건에서 읽는 곳을 모두 감싸는 반복 중 가장 안쪽 것의 회차마다 초기화한다.
+    """
+    b = b or blocks(events)
+    chains: dict[str, tuple[int, ...]] = {}
+    for i, ev in enumerate(events):
+        names = set(vision.variables_used([ev]))
+        if ev.get("type") == "set_var" and isinstance(ev.get("name"), str):
+            names.add(ev["name"])
+        for name in names:
+            chain = b.loops.get(i, ())
+            if name not in chains:
+                chains[name] = chain
+            else:
+                old, n = chains[name], 0
+                while n < min(len(old), len(chain)) and old[n] == chain[n]:
+                    n += 1
+                chains[name] = old[:n]
+    return {name: (chain[-1] if chain else None) for name, chain in chains.items()}
 
 
 def _validate_events(events: list) -> None:
@@ -190,6 +229,11 @@ def _validate_events(events: list) -> None:
                 raise MacroFormatError(f"{where}: on_timeout 은 stop 또는 continue 입니다")
             if not _is_num(ev.get("interval", 0.1)) or ev.get("interval", 0.1) < 0.01:
                 raise MacroFormatError(f"{where}: interval 은 0.01초 이상이어야 합니다")
+        if typ == "set_var":
+            try:
+                vision.validate_var_name(ev.get("name"))
+            except ValueError as e:
+                raise MacroFormatError(f"{where}: {e}") from None
         if typ == "repeat_start":
             count = ev.get("count")
             if not isinstance(count, int) or isinstance(count, bool) or not 0 <= count <= MAX_REPEAT:
