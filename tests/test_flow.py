@@ -212,3 +212,20 @@ def test_validate_for_save_reports_undefined_variable():
     assert any("ghost" in e for e in errors)
     items = [em.build_set_var(target="ghost", kind="pixel")] + items
     assert em.validate_for_save("m", None, items, {}, None) == []
+
+
+def test_build_loop_and_replace_loop_start():
+    rep = em.build_loop(count="3", delay_ms="10")
+    assert rep == {"type": "repeat_start", "count": 3, "dt": 0.01}
+    with pytest.raises(ValueError):
+        em.build_loop(count="x")
+    wh = em.build_loop(loop_kind="cond", kind="var", name="a")
+    assert wh["type"] == "while_start" and wh["cond"] == VAR("a")
+    items, _ = em.wrap_repeat(em.build_items("tap", key="a"), [0, 1], 2)
+    items[-1]["dt"] = 0.5
+    out = em.replace_loop_start(items, 0, wh)
+    assert [i["type"] for i in out] == ["while_start", "kdown", "kup", "while_end"] and out[-1]["dt"] == 0.5
+    assert items[-1]["type"] == "repeat_end"                     # 원본은 그대로
+    same = em.replace_loop_start(items, 0, em.build_loop(count="7"))
+    assert same[0]["count"] == 7 and same[-1]["type"] == "repeat_end"
+    assert em.uses_screen({"kind": "any", "conds": [VAR("a"), PIX]}) and not em.uses_screen(VAR("a"))

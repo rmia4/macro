@@ -32,7 +32,6 @@ ADD_KINDS = [("tap", "키 입력 (누르고 떼기)"), ("kdown", "키 누름"), 
 EDIT_KINDS = [k for k in ADD_KINDS if k[0] not in ("tap", "click")]
 PATH_KINDS = [("path", "마우스 이동 경로")]  # 경로 항목 수정 전용
 RELPATH_KINDS = [("relpath", "상대 이동 경로")]
-REPEAT_START_KINDS = [("repeat_start", "반복 시작")]
 REPEAT_END_KINDS = [("repeat_end", "반복 끝")]
 ELSE_KINDS = [("else", "아니면")]
 IF_END_KINDS = [("if_end", "분기 끝")]
@@ -437,6 +436,31 @@ def build_check(kind_event: str, *, delay_ms="0", **cond_kw) -> dict:
     if kind_event not in ("if_start", "break_if", "while_start"):
         raise ValueError(f"알 수 없는 종류: {kind_event}")
     return {"type": kind_event, "dt": _int(delay_ms, "앞 지연(ms)", 0) / 1000, "cond": build_condition(**cond_kw)}
+
+
+def build_loop(*, loop_kind="count", delay_ms="0", count="2", **cond_kw) -> dict:
+    """반복문 시작 항목: loop_kind == "count" 면 횟수 반복(repeat_start), 그 밖에는 동안 반복(while_start)."""
+    if loop_kind == "count":
+        return build_items("repeat_start", delay_ms=delay_ms, count=count)[0]
+    return build_check("while_start", delay_ms=delay_ms, **cond_kw)
+
+
+_LOOP_END = {"repeat_start": "repeat_end", "while_start": "while_end"}
+
+
+def replace_loop_start(items: list[dict], i: int, new: dict) -> list[dict]:
+    """반복문 시작 항목 i 를 new 로 바꾼다. 종류(횟수/동안)가 바뀌면 짝이 되는 끝 표시도 바꾼다."""
+    out = list(items)
+    end = block_partner(items, i) if items[i]["type"] != new["type"] else None
+    out[i] = new
+    if end is not None:
+        out[end] = dict(out[end], type=_LOOP_END[new["type"]])
+    return out
+
+
+def uses_screen(cond: dict | None) -> bool:
+    """조건이 화면(이미지/범위 색)을 보는지. 흐름 제어 항목의 예전 조건 호환 판단용."""
+    return bool(cond) and any(c.get("kind") in vision.SCREEN_KINDS for c in vision.leaf_conditions(cond))
 
 
 def build_set_var(*, target="", delay_ms="0", **cond_kw) -> dict:
