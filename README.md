@@ -3,20 +3,30 @@
 Steam 싱글 플레이 게임의 반복 작업(클릭·드래그·키·스크롤)을 녹화하고 재생한다. 현재 **1단계(MVP)**.
 
 ## 실행 파일 (.exe)
-Python 없이 `MacroTool.exe` 하나로 실행할 수 있다. 매크로(`macros/`)와 설정(`settings.json`)은 **exe와 같은 폴더**에
-만들어지므로, exe는 쓰기 가능한 폴더(예: `문서\MacroTool\`)에 두고 쓴다. 게임이 관리자 권한이면 exe도
+Python 없이 실행할 수 있다. 배포는 **폴더째**(zip)이며, 압축을 풀면 다음처럼 된다.
+```
+MacroTool/
+  MacroTool.exe   ← 이것을 실행
+  _internal/      ← 실행에 필요한 파일 (지우거나 옮기지 말 것)
+```
+`MacroTool.exe`만 따로 꺼내면 실행되지 않으니 폴더째 쓰기 가능한 곳(예: `문서\MacroTool\`)에 둔다.
+매크로(`macros/`)와 설정(`settings.json`)은 **exe와 같은 폴더**에 만들어진다. 게임이 관리자 권한이면 exe도
 "관리자 권한으로 실행"한다. 오류로 종료되면 같은 폴더에 `crash.log`가 남는다.
 
-- **GitHub에서 받기**: 저장소 Actions 탭 → `Build Windows exe` → 최근 실행 → Artifacts의 `MacroTool-windows`.
-  `v1.0` 같은 태그를 푸시하면 Releases에도 올라간다. (Windows에서 테스트 → 빌드 → exe 자가진단까지 자동 실행)
+- **GitHub에서 받기**: 저장소 Actions 탭 → `Build Windows exe` → 최근 실행 → Artifacts의 `MacroTool-windows`
+  (받은 zip 안의 `MacroTool` 폴더를 사용). `v1.2.0` 같은 태그를 푸시하면 Releases에 `MacroTool-windows.zip`이 올라간다.
+  (Windows에서 테스트 → 빌드 → exe 자가진단까지 자동 실행)
 - **직접 빌드** (Windows):
   ```
   pip install -r requirements.txt pyinstaller
-  python build.py          # -> dist\MacroTool.exe
-  dist\MacroTool.exe --selftest   # 점검 결과를 dist\selftest.log 에 기록
+  python build.py          # -> dist\MacroTool-windows\MacroTool\MacroTool.exe, dist\MacroTool-windows.zip
+  dist\MacroTool-windows\MacroTool\MacroTool.exe --selftest   # 점검 결과를 같은 폴더의 selftest.log 에 기록
   ```
 - 처음 실행 시 Windows SmartScreen이 "알 수 없는 게시자" 경고를 띄울 수 있다(서명되지 않은 exe). `추가 정보 → 실행`.
-  일부 백신은 키 입력 자동화 프로그램을 의심 파일로 분류할 수 있다.
+- 백신 오탐: 키 입력 후킹·입력 자동화·화면 캡처를 하는 프로그램이라 백신이 의심 파일로 분류할 수 있다
+  (예: Defender `Trojan:Win32/Bearfoos.A!ml`, 끝의 `!ml`은 머신러닝 추정 탐지). 이를 줄이려고 단일 exe 대신 폴더 배포,
+  직접 컴파일한 PyInstaller 부트로더(CI), exe 버전 정보·아이콘을 쓴다. 그래도 걸리면 폴더를 Defender 제외 목록에 넣거나
+  https://www.microsoft.com/wdsi/filesubmission 에 오탐으로 제출한다.
 
 ## 설치 / 실행 (소스)
 ```

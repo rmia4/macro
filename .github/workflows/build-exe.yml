@@ -22,7 +22,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt pyinstaller
+          pip install -r requirements-dev.txt
+          # 부트로더를 소스에서 직접 컴파일 (미리 빌드된 부트로더는 악성코드도 많이 써서 백신 오탐이 잦다)
+          pip install --no-binary pyinstaller pyinstaller
+        env:
+          PYINSTALLER_COMPILE_BOOTLOADER: "1"
+
+      - name: Check bootloader was compiled
+        run: python -c "import PyInstaller, pathlib, time; p = pathlib.Path(PyInstaller.__file__).parent / 'bootloader' / 'Windows-64bit-intel' / 'runw.exe'; age = time.time() - p.stat().st_mtime; print(p, p.stat().st_size, 'bytes', int(age), 's old'); assert age < 3600, 'prebuilt bootloader'"
 
       - name: Run tests (Windows)
         run: python -m pytest -q tests
@@ -33,19 +40,22 @@ jobs:
       - name: Self-test built exe
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath dist\MacroTool.exe -ArgumentList "--selftest" -Wait -PassThru
-          Get-Content dist\selftest.log
+          $dir = "dist\MacroTool-windows\MacroTool"
+          $p = Start-Process -FilePath "$dir\MacroTool.exe" -ArgumentList "--selftest" -Wait -PassThru
+          Get-Content "$dir\selftest.log"
+          Remove-Item "$dir\selftest.log"  # 배포 폴더에 남기지 않는다
           if ($p.ExitCode -ne 0) { exit 1 }
+          (Get-Item "$dir\MacroTool.exe").VersionInfo | Format-List FileDescription, FileVersion, ProductName
 
       - name: Upload exe
         uses: actions/upload-artifact@v4
         with:
           name: MacroTool-windows
-          path: dist/MacroTool.exe
+          path: dist/MacroTool-windows/
           if-no-files-found: error
 
       - name: Publish release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/MacroTool.exe
+          files: dist/MacroTool-windows.zip
