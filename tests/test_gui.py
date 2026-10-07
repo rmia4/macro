@@ -1231,3 +1231,22 @@ def test_image_variable_dialog_and_condition(gui):
     assert ed.on_save()
     saved = gui.app.library["이미지변수"].events
     assert [e["type"] for e in saved] == ["set_image", "if_start", "set_image", "if_end"]
+
+
+def test_editor_buttons_fit_in_pane(gui):
+    ed, d = _open_condition(gui)
+    d.top.destroy()
+    ed.top.geometry("{}x{}".format(*ed.top.minsize()))   # 가장 작은 창 크기에서도 잘리지 않아야 한다
+    ed.top.update()
+
+    def buttons(w):
+        for c in w.winfo_children():
+            if isinstance(c, tk.ttk.Button):
+                yield c
+            yield from buttons(c)
+    for b in buttons(ed.top):
+        pane = b.master.master  # 버튼 줄의 부모 (왼쪽 영역)
+        if b.winfo_ismapped() and pane.winfo_ismapped():
+            right = b.winfo_rootx() + b.winfo_width()
+            assert right <= pane.winfo_rootx() + pane.winfo_width(), b.cget("text")
+            assert b.winfo_width() >= b.winfo_reqwidth(), b.cget("text")

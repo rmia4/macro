@@ -688,14 +688,17 @@ class EditorWindow:
         flow = ttk.Frame(left)
         flow.pack(fill="x", pady=(4, 0))
         ttk.Label(flow, text="흐름:").pack(side="left")
-        ttk.Button(flow, text="🔁 while", command=self.on_add_loop).pack(side="left", padx=2)
-        screen = ttk.Frame(left)
-        screen.pack(fill="x", pady=(4, 0))
-        ttk.Label(screen, text="조건:").pack(side="left")
-        for text, cmd in (("🔍 await", self.on_add_condition), ("❓ if", self.on_add_branch),
-                          ("🖱 이미지 클릭", self.on_add_click), ("⏹ break", self.on_add_break),
-                          ("📌 const", self.on_add_set_var), ("🖼 이미지 변수", self.on_add_set_image)):
-            ttk.Button(screen, text=text, command=cmd).pack(side="left", padx=2)
+        for row, label, buttons in (
+                (flow, None, (("🔁 while", self.on_add_loop), ("❓ if", self.on_add_branch),
+                              ("⏹ break", self.on_add_break))),
+                (ttk.Frame(left), "조건:", (("🔍 await", self.on_add_condition), ("🖱 이미지 클릭", self.on_add_click))),
+                (ttk.Frame(left), "변수:", (("📌 const", self.on_add_set_var),
+                                           ("🖼 이미지 변수", self.on_add_set_image)))):
+            if label:
+                row.pack(fill="x", pady=(4, 0))
+                ttk.Label(row, text=label).pack(side="left")
+            for text, cmd in buttons:
+                ttk.Button(row, text=text, command=cmd).pack(side="left", padx=2)
         edit = ttk.Frame(left)
         edit.pack(fill="x", pady=(4, 0))
         for text, cmd in (("수정", self.on_edit), ("삭제", self.on_delete),
