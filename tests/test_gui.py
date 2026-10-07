@@ -1185,3 +1185,49 @@ def test_editor_add_buttons_limit_kinds(gui, monkeypatch):
     assert seen == [(["tap", "kdown", "kup"], "tap"),
                     (["click", "mdown", "mup", "move", "rmove", "scroll"], "click"), (["wait"], "wait")]
     assert sum(len(v) for v in em.ADD_GROUPS.values()) == len(em.ADD_KINDS)  # 남는 종류 없음 → 기타 버튼 없음
+
+
+def test_image_variable_dialog_and_condition(gui):
+    from gui import ConditionDialog, ImageVarDialog
+    ed, _ = _open_condition(gui)
+    def texts(w):
+        yield from (t for c in w.winfo_children() for t in [str(c.cget("text")) if isinstance(c, tk.ttk.Button) else ""]
+                    + list(texts(c)))
+    assert "🖼 이미지 변수" in set(texts(ed.top))
+    d = ImageVarDialog(ed)                               # 잘라낸 이미지에 이름 붙이기
+    d._on_ok()
+    assert d.result is None and d.error.cget("text")     # 이름·이미지 없음
+    d.v_name.set("버튼")
+    d._pick(crop=True)
+    d.selector.on_press(Ev(420, 300)); d.selector.on_release(Ev(480, 330))
+    d._on_ok()
+    item = d.result
+    assert item["type"] == "set_image" and item["name"] == "버튼" and (ed.assets_dir / item["template"]).is_file()
+    ed.insert_items([item])
+    d = ImageVarDialog(ed)                               # 재생 중 캡처
+    d.v_name.set("처음"); d.v_source.set("capture"); d._on_source()
+    gui.root.update()
+    assert d.f_capture.winfo_ismapped() and not d.f_file.winfo_ismapped()
+    d._pick(crop=False)
+    d.selector.on_press(Ev(10, 20)); d.selector.on_release(Ev(60, 50))
+    d._on_ok()
+    assert d.result["capture"] == [10, 20, 50, 30]
+    ed.insert_items([d.result])
+    assert ed.tree.item("1")["values"][2] == "🖼 이미지 변수"
+    # 조건에서 이미지 변수 고르기
+    d = ConditionDialog(ed, mode="if")
+    d.v_image_var.set("버튼")
+    assert d.v_image_src.get() == "var" and d._thumb is not None   # 파일로 지정한 변수는 미리보기
+    d.v_image_var.set("처음")
+    assert d.thumb.cget("text") == "(재생 중 캡처)"
+    d._on_ok()
+    assert d.result["cond"]["image_var"] == "처음" and "template" not in d.result["cond"]
+    ed.wrap_if(d.result["cond"])
+    at = [it["type"] for it in ed.items].index("if_start")
+    d = ConditionDialog(ed, ed.items[at], mode="if")     # 수정 시 이미지 변수 선택이 유지된다
+    assert d.v_image_src.get() == "var" and d.v_image_var.get() == "처음"
+    d.top.destroy()
+    ed.v_name.set("이미지변수")
+    assert ed.on_save()
+    saved = gui.app.library["이미지변수"].events
+    assert [e["type"] for e in saved] == ["set_image", "if_start", "set_image", "if_end"]

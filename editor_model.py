@@ -20,7 +20,8 @@ EVENT_LABELS = {"move": "마우스 이동", "mdown": "마우스 누름", "mup": 
                 "repeat_start": "🔁 반복 시작", "repeat_end": "🔁 반복 끝",
                 "wait_until": "🔍 await", "if_start": "❓ if", "else": "↪ else",
                 "if_end": "❓ if 끝", "break_if": "⏹ break", "click_image": "🖱 이미지 클릭",
-                "set_var": "📌 const", "while_start": "🔂 while", "while_end": "🔂 while 끝"}
+                "set_var": "📌 const", "while_start": "🔂 while", "while_end": "🔂 while 끝",
+                "set_image": "🖼 이미지 변수"}
 BLOCK_MARKERS = ("repeat_start", "repeat_end", "if_start", "else", "if_end", "while_start", "while_end")
 _BLOCK_OPEN = ("repeat_start", "if_start", "while_start")
 _BLOCK_CLOSE = ("repeat_end", "if_end", "while_end")
@@ -250,11 +251,17 @@ def describe(item: dict) -> str:
         after = "중지" if item.get("on_timeout", "stop") == "stop" else "계속"
         dx, dy = item.get("offset", [0, 0])
         shift = f" ({dx:+g}, {dy:+g})" if dx or dy else ""
-        return f"'{item['cond']['template']}'{shift} {item.get('button', 'left')} 클릭 · {limit} · 초과 시 {after}"
+        cond = item["cond"]
+        what = vision.image_label(cond) if "image_var" in cond else f"'{cond['template']}'"
+        return f"{what}{shift} {item.get('button', 'left')} 클릭 · {limit} · 초과 시 {after}"
     if typ == "while_start":
         return f"{vision.describe_condition(item['cond'])} 인 동안"
     if typ == "set_var":
         return f"{item['name']} = [{vision.describe_condition(item['cond'])}]"
+    if typ == "set_image":
+        if "template" in item:
+            return f"{item['name']} = 이미지 '{item['template']}'"
+        return "{} = 재생 중 화면 캡처 [{}, {}, {}, {}]".format(item["name"], *item["capture"])
     if typ in ("else", "if_end", "while_end"):
         return ""
     if typ == "wait_until":
@@ -389,17 +396,17 @@ def rescale_relpath(points: list, duration: float, scale: float) -> list:
 
 def build_condition(*, kind="image", template="", region=None, threshold_pct="85",
                     x="0", y="0", w=None, h=None, color="#000000", tolerance="20", ratio_pct="50",
-                    negate=False, name="", conds=None) -> dict:
-    """조건. 이미지 region: None(화면 전체) 또는 [x, y, w, h]. 색: (x, y)에서 w x h 범위
-    (w, h 가 None 이면 한 점). 변수: name. 여러 조건(all/any): conds(잎 조건 목록).
+                    negate=False, name="", conds=None, image_var="") -> dict:
+    """조건. 이미지: template(파일) 또는 image_var(이미지 변수, 주면 이쪽), region: None(화면 전체) 또는 [x, y, w, h].
+    색: (x, y)에서 w x h 범위 (w, h 가 None 이면 한 점). 변수: name. 여러 조건(all/any): conds(잎 조건 목록).
     값은 문자열도 허용. 잘못되면 ValueError."""
     if kind == "var":
         cond = {"kind": "var", "name": str(name).strip()}
     elif kind in vision.GROUP_KINDS:
         cond = {"kind": kind, "conds": list(conds or [])}
     elif kind == "image":
-        cond = {"kind": "image", "template": str(template).strip(),
-                "threshold": _int(threshold_pct, "일치도 기준(%)", 1) / 100}
+        source = {"image_var": str(image_var).strip()} if str(image_var).strip() else {"template": str(template).strip()}
+        cond = {"kind": "image", **source, "threshold": _int(threshold_pct, "일치도 기준(%)", 1) / 100}
         if region is not None:
             cond["region"] = [_int(region[0], "영역 X"), _int(region[1], "영역 Y"),
                               _int(region[2], "영역 너비", 1), _int(region[3], "영역 높이", 1)]
@@ -474,6 +481,41 @@ def build_set_var(*, target="", delay_ms="0", **cond_kw) -> dict:
             "cond": build_condition(**cond_kw)}
 
 
+def build_set_image(*, target="", delay_ms="0", source="file", template="",
+                    x="0", y="0", w="1", h="1") -> dict:
+    """이미지 변수 항목: source == "file" 이면 잘라낸 이미지 파일 template 을, "capture" 면 재생 중
+    그 시점의 화면 [x, y, w, h] 를 캡처해 변수 target 에 담는다."""
+    target = str(target).strip()
+    vision.validate_var_name(target)
+    item = {"type": "set_image", "dt": _int(delay_ms, "앞 지연(ms)", 0) / 1000, "name": target}
+    if source == "file":
+        if not str(template).strip():
+            raise ValueError("먼저 '화면에서 잘라내기'로 이미지를 지정하세요")
+        item["template"] = str(template).strip()
+        vision.validate_template_name(item["template"])
+    else:
+        item["capture"] = [_int(x, "X"), _int(y, "Y"), _int(w, "너비", 1), _int(h, "높이", 1)]
+    return item
+
+
+def image_variables_in(items: list[dict]) -> list[str]:
+    """'이미지 변수'로 만드는 이미지 변수 이름 (처음 나온 순서)."""
+    return list(dict.fromkeys(i["name"] for i in items if i.get("type") == "set_image" and i.get("name")))
+
+
+def image_defs(items: list[dict]) -> dict[str, str]:
+    """파일로 지정한 이미지 변수 이름 -> 파일 이름 (같은 이름이면 마지막 것). '지금 찾아보기'용.
+    재생 중 캡처하는 변수는 편집 화면에서 알 수 없어 빠진다."""
+    out: dict[str, str] = {}
+    for it in items:
+        if it.get("type") == "set_image":
+            if "template" in it:
+                out[it["name"]] = it["template"]
+            else:
+                out.pop(it["name"], None)
+    return out
+
+
 def variables_in(items: list[dict]) -> list[str]:
     """'변수 저장'으로 만드는 변수 이름 (처음 나온 순서)."""
     return list(dict.fromkeys(i["name"] for i in items if i.get("type") == "set_var" and i.get("name")))
@@ -513,7 +555,7 @@ def item_fields(item: dict) -> dict:
 def has_positional(items: list[dict]) -> bool:
     """좌표가 저장된 항목이 있는지 (있으면 좌표 기준을 바꿀 수 없다)."""
     return any(i["type"] == "path" or (i["type"] in POSITIONAL and "x" in i) or vision.conditions_in([i])
-               for i in items)
+               or "capture" in i for i in items)
 
 
 def unique_name(base: str, existing) -> str:
@@ -566,6 +608,9 @@ def validate_for_save(name: str, hotkey: str | None, items: list[dict],
         undefined = sorted(vision.variables_used(items) - set(variables_in(items)))
         if undefined:
             errors.append(f"변수: 지정하는 'const' 항목이 없습니다: {', '.join(undefined)}")
+        undefined = sorted(vision.image_vars_used(items) - set(image_variables_in(items)))
+        if undefined:
+            errors.append(f"이미지 변수: 지정하는 '이미지 변수' 항목이 없습니다: {', '.join(undefined)}")
     if available_templates is not None:
         missing = sorted(vision.templates_in(items) - available_templates)
         if missing:

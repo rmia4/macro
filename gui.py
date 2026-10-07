@@ -694,7 +694,7 @@ class EditorWindow:
         ttk.Label(screen, text="조건:").pack(side="left")
         for text, cmd in (("🔍 await", self.on_add_condition), ("❓ if", self.on_add_branch),
                           ("🖱 이미지 클릭", self.on_add_click), ("⏹ break", self.on_add_break),
-                          ("📌 const", self.on_add_set_var)):
+                          ("📌 const", self.on_add_set_var), ("🖼 이미지 변수", self.on_add_set_image)):
             ttk.Button(screen, text=text, command=cmd).pack(side="left", padx=2)
         edit = ttk.Frame(left)
         edit.pack(fill="x", pady=(4, 0))
@@ -838,6 +838,13 @@ class EditorWindow:
         i = sel[0]
         mode = {"wait_until": "wait", "if_start": "if", "break_if": "break", "click_image": "click",
                 "set_var": "set_var", "repeat_start": "loop", "while_start": "loop"}.get(self.items[i]["type"])
+        if self.items[i]["type"] == "set_image":
+            result = ImageVarDialog.ask(self, self.items[i])
+            if result:
+                self._snapshot()
+                self.items[i] = result
+                self._changed([i])
+            return
         if mode:
             result = ConditionDialog.ask(self, self.items[i], mode=mode)
             if result:
@@ -957,6 +964,11 @@ class EditorWindow:
 
     def on_add_set_var(self) -> None:
         result = ConditionDialog.ask(self, mode="set_var")
+        if result:
+            self.insert_items([result])
+
+    def on_add_set_image(self) -> None:
+        result = ImageVarDialog.ask(self)
         if result:
             self.insert_items([result])
 
@@ -1457,6 +1469,8 @@ class ConditionDialog:
         self.v_on_timeout = tk.StringVar(self.top, value=(item or {}).get("on_timeout", "stop"))
         self.v_interval = var(round((item or {}).get("interval", 0.1) * 1000))
         self.v_template = tk.StringVar(self.top, value=cond.get("template", ""))
+        self.v_image_src = tk.StringVar(self.top, value="var" if cond.get("image_var") else "file")
+        self.v_image_var = tk.StringVar(self.top, value=cond.get("image_var", ""))
         self.v_full = tk.BooleanVar(self.top, value=item is not None and cond.get("kind") == "image" and not region)
         self.v_region = [var(v) for v in (region or [0, 0, 0, 0])]
         self.v_threshold = var(round(cond.get("threshold", vision.DEFAULT_THRESHOLD) * 100))
@@ -1521,6 +1535,15 @@ class ConditionDialog:
 
         # 이미지
         self.f_image = ttk.LabelFrame(f, text="이미지", padding=6)
+        src = ttk.Frame(self.f_image)
+        src.pack(fill="x", pady=(0, 6))
+        ttk.Label(src, text="찾을 이미지").pack(side="left")
+        for val, text in (("file", "잘라낸 이미지"), ("var", "이미지 변수")):
+            ttk.Radiobutton(src, text=text, value=val, variable=self.v_image_src,
+                            command=self._on_image_src).pack(side="left", padx=(4, 0))
+        ttk.Combobox(src, textvariable=self.v_image_var, width=14,
+                     values=em.image_variables_in(self.editor.items)).pack(side="left", padx=4)
+        self.v_image_var.trace_add("write", lambda *a: (self.v_image_src.set("var"), self._on_image_src()))
         top = ttk.Frame(self.f_image)
         top.pack(fill="x")
         self.thumb = tk.Label(top, text="(이미지 없음)", width=24, height=4, relief="sunken", bg="#eeeeee")
@@ -1667,20 +1690,21 @@ class ConditionDialog:
             return em.uses_screen({"kind": "all", "conds": self.sub_conds})
         return kind in vision.SCREEN_KINDS
 
+    def _on_image_src(self) -> None:
+        if self.v_image_src.get() == "var" and all(v.get().strip() in ("", "0") for v in self.v_region[2:]):
+            self.v_full.set(True)  # 검색 영역을 정하지 않았으면 화면 전체에서 찾는다
+            self._on_kind()
+        self._update_thumb()
+
     def _update_thumb(self) -> None:
-        name = self.v_template.get()
-        path = self.editor.assets_dir / name if name else None
-        if not path or not path.is_file():
-            self.thumb.configure(image="", text="(이미지 없음)" if not name else f"(파일 없음: {name})")
-            self._thumb = None
-            return
-        try:
-            img = tk.PhotoImage(master=self.top, file=str(path))
-            factor = max(1, -(-img.width() // 170), -(-img.height() // 64))
-            self._thumb = img.subsample(factor) if factor > 1 else img
-            self.thumb.configure(image=self._thumb, text="", width=170, height=64)
-        except tk.TclError:
-            self.thumb.configure(image="", text=f"(미리보기 불가: {name})")
+        if self.v_image_src.get() == "var":
+            var = self.v_image_var.get().strip()
+            name = em.image_defs(self.editor.items).get(var)
+            missing = "(이미지 변수를 고르세요)" if not var else f"(파일 없음: {name})" if name else "(재생 중 캡처)"
+        else:
+            name = self.v_template.get()
+            missing = "(이미지 없음)" if not name else f"(파일 없음: {name})"
+        self._thumb = show_thumb(self.thumb, self.top, self.editor.assets_dir / name if name else None, missing)
 
     def _update_swatch(self) -> None:
         color = self.v_color.get().strip()
@@ -1761,6 +1785,7 @@ class ConditionDialog:
             name = self.editor.new_template_name()
             vision.save_png(shot[y:y + h, x:x + w], self.editor.assets_dir / name)
             self.v_template.set(name)
+            self.v_image_src.set("file")
             self._update_thumb()
             area = search_region_around(rect, sw, sh)
         for v, value in zip(self.v_region, (area[0] - ox, area[1] - oy, area[2], area[3])):
@@ -1812,6 +1837,8 @@ class ConditionDialog:
         def action(restore):
             try:
                 checker = vision.Vision(self.editor.assets_dir, self.gui.get_grabber())
+                for var, tpl in em.image_defs(self.editor.items).items():
+                    checker.set_image(var, checker.template(tpl))
                 defs = em.variable_defs(self.editor.items)
                 with checker.frame(cond, origin, defs):
                     m = vision.evaluate(cond, lambda c: checker.check(c, origin), defs)
@@ -1823,6 +1850,8 @@ class ConditionDialog:
                     text += f" · 찾은 위치 ({m.pos[0] - origin[0]}, {m.pos[1] - origin[1]})"
                 if vision.variables_used([item]) - set(defs):
                     text += " · 지정 안 된 변수는 거짓으로 가정"
+                if vision.image_vars_used([item]) - set(checker.images):
+                    text += " · 재생 중 캡처하는 이미지 변수는 거짓으로 가정"
                 self.test_label.configure(text=text, foreground="#2e7d32" if m.matched else "#c62828")
             except Exception as e:
                 self.test_label.configure(text=f"오류: {e}", foreground="#c62828")
@@ -1848,10 +1877,14 @@ class ConditionDialog:
             if len(self.sub_conds) < 2:
                 raise ValueError("'추가…'로 조건을 2개 이상 넣으세요")
             return dict(kind=self.v_group_op.get(), conds=self.sub_conds, negate=self.v_negate.get())
-        if kind == "image" and not self.v_template.get():
+        by_var = kind == "image" and self.v_image_src.get() == "var"
+        if by_var and not self.v_image_var.get().strip():
+            raise ValueError("이미지 변수를 고르거나 입력하세요")
+        if kind == "image" and not by_var and not self.v_template.get():
             raise ValueError("먼저 '화면에서 잘라내기'로 찾을 이미지를 지정하세요")
         region = None if self.v_full.get() else [v.get() for v in self.v_region]
-        return dict(kind=kind, template=self.v_template.get(), region=region,
+        return dict(kind=kind, template=self.v_template.get(), image_var=self.v_image_var.get() if by_var else "",
+                    region=region,
                     threshold_pct=self.v_threshold.get(), x=self.v_px.get(), y=self.v_py.get(),
                     w=self.v_pw.get(), h=self.v_ph.get(), ratio_pct=self.v_ratio.get(),
                     color=self.v_color.get(), tolerance=self.v_tol.get(), negate=self.v_negate.get())
@@ -1894,6 +1927,161 @@ class ConditionDialog:
         dlg.top.grab_set()
         dlg.top.wait_window()
         return dlg.result
+
+
+class ImageVarDialog:
+    """이미지 변수 항목 추가/수정. 잘라낸 이미지 파일을 이름으로 담거나(여러 조건에서 재사용),
+    재생 중 그 시점의 화면 영역을 캡처해 담는다. result: 편집 항목 (취소 시 None)."""
+
+    def __init__(self, editor: "EditorWindow", item: dict | None = None) -> None:
+        self.editor, self.gui = editor, editor.gui
+        self.result: dict | None = None
+        self._modal = False
+        item = item or {}
+        self.top = tk.Toplevel(editor.top)
+        self.top.withdraw()
+        self.top.title(f"이미지 변수 {'수정' if item else '추가'}")
+        self.top.transient(editor.top)
+        self.top.resizable(False, False)
+        self.v_name = tk.StringVar(self.top, value=item.get("name", ""))
+        self.v_source = tk.StringVar(self.top, value="capture" if "capture" in item else "file")
+        self.v_template = tk.StringVar(self.top, value=item.get("template", ""))
+        self.v_rect = [tk.StringVar(self.top, value=str(v)) for v in item.get("capture", [0, 0, 1, 1])]
+        self.v_delay = tk.StringVar(self.top, value=str(round(item.get("dt", 0) * 1000)))
+        self._thumb = None
+        self._build()
+        self._on_source()
+        center_on_parent(self.top, editor.top)
+
+    def _build(self) -> None:
+        f = ttk.Frame(self.top, padding=10)
+        f.pack(fill="both")
+        ttk.Label(f, text="이미지에 이름을 붙여 둡니다. 이미지 조건·이미지 클릭에서 '이미지 변수'로 골라 찾습니다. "
+                          "지정 전에 쓰이면 찾지 못한 것(거짓)으로 봅니다.", wraplength=440).pack(anchor="w", pady=(0, 4))
+        nrow = ttk.Frame(f)
+        nrow.pack(fill="x", pady=(0, 4))
+        ttk.Label(nrow, text="변수 이름").pack(side="left")
+        ttk.Combobox(nrow, textvariable=self.v_name, width=18,
+                     values=em.image_variables_in(self.editor.items)).pack(side="left", padx=4)
+        row = ttk.Frame(f)
+        row.pack(fill="x")
+        ttk.Label(row, text="이미지").pack(side="left")
+        for val, text in (("file", "잘라낸 이미지 (고정)"), ("capture", "재생 중 화면 캡처")):
+            ttk.Radiobutton(row, text=text, value=val, variable=self.v_source,
+                            command=self._on_source).pack(side="left", padx=4)
+
+        self.f_file = ttk.LabelFrame(f, text="잘라낸 이미지", padding=6)
+        self.thumb = tk.Label(self.f_file, text="(이미지 없음)", width=24, height=4, relief="sunken", bg="#eeeeee")
+        self.thumb.pack(side="left")
+        btns = ttk.Frame(self.f_file)
+        btns.pack(side="left", padx=8)
+        ttk.Button(btns, text="📷 화면에서 잘라내기", command=lambda: self._pick(crop=True)).pack(fill="x")
+        ttk.Label(btns, textvariable=self.v_template, foreground="#555").pack(anchor="w", pady=4)
+
+        self.f_capture = ttk.LabelFrame(f, text="재생 중 화면 캡처", padding=6)
+        ttk.Label(self.f_capture, text="재생 중 이 항목에 도달한 순간 아래 영역을 캡처해 담습니다 "
+                                       "(예: 처음 화면을 기억해 두고, 바뀌면 break).",
+                  wraplength=420).pack(anchor="w")
+        reg = ttk.Frame(self.f_capture)
+        reg.pack(fill="x", pady=(6, 0))
+        ttk.Button(reg, text="영역 드래그", command=lambda: self._pick(crop=False)).pack(side="left", padx=(0, 8))
+        for label, v in zip(("X", "Y", "너비", "높이"), self.v_rect):
+            ttk.Label(reg, text=label).pack(side="left", padx=(0, 1))
+            ttk.Entry(reg, textvariable=v, width=6).pack(side="left", padx=(0, 6))
+
+        self.f_common = ttk.Frame(f)
+        ttk.Label(self.f_common, text="앞 지연(ms)").pack(side="left")
+        ttk.Entry(self.f_common, textvariable=self.v_delay, width=8).pack(side="left", padx=6)
+        self.error = ttk.Label(f, foreground="#c62828", wraplength=420)
+        self.f_buttons = ttk.Frame(f)
+        ttk.Button(self.f_buttons, text="확인", command=self._on_ok).pack(side="left", padx=4)
+        ttk.Button(self.f_buttons, text="취소", command=self.top.destroy).pack(side="left")
+        self.top.bind("<Escape>", lambda e: self.top.destroy())
+
+    def _on_source(self) -> None:
+        for w in (self.f_file, self.f_capture, self.f_common, self.error, self.f_buttons):
+            w.pack_forget()
+        (self.f_file if self.v_source.get() == "file" else self.f_capture).pack(fill="x", pady=4)
+        self.f_common.pack(fill="x", pady=4)
+        self.error.pack(anchor="w")
+        self.f_buttons.pack(pady=(8, 0))
+        self._update_thumb()
+
+    def _update_thumb(self) -> None:
+        name = self.v_template.get()
+        self._thumb = show_thumb(self.thumb, self.top, self.editor.assets_dir / name if name else None,
+                                 "(이미지 없음)" if not name else f"(파일 없음: {name})")
+
+    def _pick(self, crop: bool) -> None:
+        """crop: 이미지를 잘라 파일로 저장 / 아니면 재생 중 캡처할 영역만 고른다."""
+        def action(restore):
+            grabber = self.gui.get_grabber()
+            sw, sh = grabber.screen_size()
+            shot = grabber.grab(0, 0, sw, sh)
+            hint = "담을 이미지를 드래그해서 잘라내세요" if crop else "재생 중 캡처할 영역을 드래그하세요"
+            self.selector = RegionSelector(self.gui.root, shot,
+                                           lambda rect: self._on_region(rect, shot, crop, restore), hint + " · Esc 취소")
+        self.gui.run_screen_action(list(dict.fromkeys([self.top, self.editor.top, self.gui.root])), "화면 캡처", action)
+
+    def _on_region(self, rect, shot, crop: bool, restore) -> None:
+        restore()
+        if self._modal and self.top.winfo_exists():
+            try:
+                self.top.grab_set()
+            except tk.TclError:
+                pass
+        if rect is None:
+            return
+        x, y, w, h = rect
+        if crop:
+            name = self.editor.new_template_name()
+            vision.save_png(shot[y:y + h, x:x + w], self.editor.assets_dir / name)
+            self.v_template.set(name)
+            self._update_thumb()
+        else:
+            try:
+                ox, oy = self.editor.coord_origin()
+            except ValueError as e:
+                self.error.configure(text=str(e))
+                return
+            for v, value in zip(self.v_rect, (x - ox, y - oy, w, h)):
+                v.set(str(value))
+        self.error.configure(text="")
+
+    def _on_ok(self) -> None:
+        x, y, w, h = (v.get() for v in self.v_rect)
+        try:
+            self.result = em.build_set_image(target=self.v_name.get(), delay_ms=self.v_delay.get(),
+                                             source=self.v_source.get(), template=self.v_template.get(),
+                                             x=x, y=y, w=w, h=h)
+        except ValueError as e:
+            self.error.configure(text=str(e))
+            return
+        self.top.destroy()
+
+    @classmethod
+    def ask(cls, editor: "EditorWindow", item: dict | None = None) -> dict | None:
+        dlg = cls(editor, item)
+        dlg._modal = True
+        dlg.top.grab_set()
+        dlg.top.wait_window()
+        return dlg.result
+
+
+def show_thumb(label, master, path, missing: str):
+    """label 에 path 이미지의 축소본을 보인다 (없으면 missing 문구). 돌려준 PhotoImage 는 호출한 쪽이 붙잡아 둔다."""
+    if path is None or not path.is_file():
+        label.configure(image="", text=missing)
+        return None
+    try:
+        img = tk.PhotoImage(master=master, file=str(path))
+    except tk.TclError:
+        label.configure(image="", text=f"(미리보기 불가: {path.name})")
+        return None
+    factor = max(1, -(-img.width() // 170), -(-img.height() // 64))
+    thumb = img.subsample(factor) if factor > 1 else img
+    label.configure(image=thumb, text="", width=170, height=64)
+    return thumb
 
 
 def overlay_xy(position: str, screen_w: int, screen_h: int, w: int, h: int, margin: int = 12) -> tuple[int, int]:

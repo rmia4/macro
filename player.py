@@ -142,10 +142,14 @@ class Player:
             if ev["type"] in ("kdown", "kup") and not keys.is_known(ev["key"]):
                 raise ValueError(f"알 수 없는 키: {ev['key']}")
         conds = conditions_in(macro.events)
-        if conds:  # 입력을 보내기 전에 화면 인식 준비가 되었는지 확인
+        images = [ev for ev in macro.events if ev["type"] == "set_image"]
+        if conds or images:  # 입력을 보내기 전에 화면 인식 준비가 되었는지 확인
             if self.vision is None:
                 raise ValueError("화면 조건 이벤트가 있지만 화면 인식을 사용할 수 없습니다")
             self.vision.preload(conds)
+            for ev in images:
+                if "template" in ev:
+                    self.vision.template(ev["template"])
         self.opt = dataclasses.replace(self.options)
         self._stop.clear()
         self._deadline = self._clock() + self.opt.max_minutes * 60 if self.opt.max_minutes > 0 else None
@@ -172,6 +176,8 @@ class Player:
         starts = {end: start for start, end in ends.items()}
         while_starts = {end: start for start, end in bl.while_end.items()}
         self.variables = {}
+        if self.vision is not None and hasattr(self.vision, "clear_images"):
+            self.vision.clear_images()  # 이미지 변수도 회차마다 비운다
         lap_cum: dict[int, float] = {}                   # 동안 반복 -> 이번 회차 시작 시각(cum)
         first = next((e for e in events if "x" in e), None)
         self._roll_offset()
@@ -213,6 +219,11 @@ class Player:
                 self._check(ev["cond"])
             elif typ == "set_var":
                 self.variables[ev["name"]] = ev["cond"]  # 지금 판정하지 않고, 변수가 쓰일 때 판정한다
+            elif typ == "set_image":
+                if "template" in ev:
+                    self.vision.set_image(ev["name"], self.vision.template(ev["template"]))
+                elif not self.vision.capture_image(ev["name"], ev["capture"], self._win):
+                    self._log(f"이미지 변수 '{ev['name']}': 캡처 영역이 화면 밖이라 비워 둡니다")
             elif not self._dispatch(ev):
                 return False
             self.event_index = i

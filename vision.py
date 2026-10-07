@@ -3,6 +3,7 @@
 조건 형식 (매크로 JSON 의 이벤트 안에 들어간다):
   이미지: {"kind": "image", "template": "확인버튼.png", "region": [x, y, w, h] | null,
            "threshold": 0.85, "negate": false}
+          template 대신 "image_var": "이름" 이면 '이미지 변수'(set_image)에 담긴 이미지를 찾는다 (미지정이면 거짓).
   색:     {"kind": "pixel", "x": 100, "y": 200, "w": 30, "h": 10, "color": "#ff0000", "tolerance": 20,
            "ratio": 0.5, "negate": false}
           범위 [x, y, w, h] 안에서 color(채널별 ±tolerance)인 픽셀의 비율이 ratio 이상이면 충족.
@@ -51,6 +52,24 @@ def validate_var_name(name) -> None:
         raise ValueError(f"잘못된 변수 이름: {name!r} (글자·숫자·_ 1~20자)")
 
 
+def validate_template_name(name) -> None:
+    if not isinstance(name, str) or not _TEMPLATE_RE.match(name) or name.strip(".") == "png":
+        raise ValueError(f"잘못된 이미지 파일 이름: {name!r} (같은 폴더의 .png 파일 이름)")
+
+
+def validate_rect(rect, label: str = "영역") -> None:
+    if (not isinstance(rect, list) or len(rect) != 4
+            or not all(isinstance(v, int) and not isinstance(v, bool) for v in rect) or rect[2] <= 0 or rect[3] <= 0):
+        raise ValueError(f"{label}은 [x, y, 너비, 높이] 정수여야 합니다")
+
+
+def image_label(cond: dict) -> str:
+    """이미지 조건이 찾는 이미지 이름 (파일 또는 이미지 변수)."""
+    if "image_var" in cond:
+        return f"이미지 변수 '{cond['image_var']}'"
+    return f"이미지 '{cond.get('template')}'"
+
+
 def validate_condition(cond, _leaf_only: bool = False) -> None:
     """조건 구조 검증 (파일 존재 여부는 보지 않는다). 잘못되면 ValueError."""
     if not isinstance(cond, dict):
@@ -71,9 +90,12 @@ def validate_condition(cond, _leaf_only: bool = False) -> None:
         for c in conds:
             validate_condition(c, _leaf_only=True)
     elif kind == "image":
-        name = cond.get("template")
-        if not isinstance(name, str) or not _TEMPLATE_RE.match(name) or name.strip(".") == "png":
-            raise ValueError(f"잘못된 이미지 파일 이름: {name!r} (같은 폴더의 .png 파일 이름)")
+        if ("template" in cond) == ("image_var" in cond):
+            raise ValueError("이미지 조건에는 template(파일) 또는 image_var(이미지 변수) 중 하나가 필요합니다")
+        if "image_var" in cond:
+            validate_var_name(cond["image_var"])
+        else:
+            validate_template_name(cond["template"])
         region = cond.get("region")
         if region is not None and (not isinstance(region, list) or len(region) != 4
                                    or not all(isinstance(v, int) and not isinstance(v, bool) for v in region)
@@ -116,7 +138,7 @@ def describe_condition(cond: dict) -> str:
     if cond.get("kind") == "image":
         th = round(cond.get("threshold", DEFAULT_THRESHOLD) * 100)
         where = " 영역 [{}, {}, {}, {}]".format(*cond["region"]) if cond.get("region") else " 화면 전체"
-        return f"이미지 '{cond.get('template')}' ≥{th}%{where}{neg}"
+        return f"{image_label(cond)} ≥{th}%{where}{neg}"
     color = f"{cond.get('color')} ±{cond.get('tolerance', DEFAULT_TOLERANCE)}"
     if "w" in cond:
         ratio = round(cond.get("ratio", DEFAULT_RATIO) * 100)
@@ -287,6 +309,8 @@ class Vision:
         self._last_pos: dict = {}   # 조건 키 -> 마지막으로 찾은 왼쪽 위 (화면 좌표)
         self._last_full: dict = {}  # 조건 키 -> (영역 모양, 화면 crc, 점수, 왼쪽 위) 지난 전체 검색
         self._frame: _Frame | None = None
+        self.images: dict[str, tuple[str, object]] = {}  # 이미지 변수 이름 -> (캐시 키, 이미지)
+        self._image_keys: dict[str, str] = {}            # 이미지 변수 이름 -> 마지막 캐시 키 (바뀌면 캐시 정리)
 
     def template(self, name: str):
         """템플릿 이미지(BGR)."""
@@ -306,8 +330,47 @@ class Vision:
     def preload(self, conditions) -> None:
         """재생 시작 전에 이미지가 모두 있는지 확인 (없으면 입력을 보내기 전에 실패)."""
         for cond in conditions:
-            if cond.get("kind") == "image":
+            if cond.get("kind") == "image" and "template" in cond:
                 self.template(cond["template"])
+
+    # ---- 이미지 변수 ----
+    def set_image(self, name: str, img) -> None:
+        """이미지 변수에 이미지를 담는다. 같은 이미지면 지난 판정 캐시를 그대로 쓴다."""
+        import numpy as np
+        img = np.ascontiguousarray(img)
+        key = f"@{name}:{img.shape}:{zlib.crc32(img)}"
+        old = self._image_keys.get(name)
+        if old is not None and old != key:
+            self._forget(old)
+        self._image_keys[name] = key
+        self.images[name] = (key, img)
+
+    def capture_image(self, name: str, rect, origin: tuple[int, int] = (0, 0)) -> bool:
+        """화면의 rect [x, y, w, h] (+origin) 을 캡처해 이미지 변수에 담는다. 화면 밖이면 지정을 지우고 False."""
+        import numpy as np
+        x, y, w, h = rect
+        r = self._clip(x + origin[0], y + origin[1], w, h, 1, 1)
+        if r is None:
+            self.images.pop(name, None)
+            return False
+        x0, y0, x1, y1 = r
+        self.set_image(name, np.array(self._grabber().grab(x0, y0, x1 - x0, y1 - y0), copy=True))
+        return True
+
+    def clear_images(self) -> None:
+        """이미지 변수 지정을 모두 비운다 (재생 회차마다). 판정 캐시는 같은 이미지가 다시 담길 때 쓰려고 남긴다."""
+        self.images = {}
+
+    def _forget(self, key: str) -> None:
+        for cache in (self._fft_cache, self._small, self._last_pos, self._last_full):
+            for k in [k for k in cache if k[0] == key]:
+                del cache[k]
+
+    def _source(self, cond: dict):
+        """이미지 조건이 찾을 (캐시 키, 이미지). 이미지 변수가 지정되지 않았으면 None."""
+        if "image_var" in cond:
+            return self.images.get(cond["image_var"])
+        return cond["template"], self.template(cond["template"])
 
     @contextmanager
     def frame(self, cond: dict | None = None, origin: tuple[int, int] = (0, 0), variables: dict | None = None):
@@ -349,7 +412,10 @@ class Vision:
             if "w" not in cond:
                 return x, y, x + 1, y + 1
             return self._clip(x, y, cond["w"], cond["h"], 1, 1)
-        th, tw = self.template(cond["template"]).shape[:2]
+        src = self._source(cond)
+        if src is None:
+            return None
+        th, tw = src[1].shape[:2]
         return self._image_rect(cond, origin, tw, th)
 
     def _clip(self, x, y, w, h, min_w, min_h):
@@ -401,8 +467,10 @@ class Vision:
 
     def _check_image(self, cond: dict, origin) -> Match:
         import numpy as np
-        name = cond["template"]
-        tpl = self.template(name)
+        src = self._source(cond)
+        if src is None:
+            return Match(False, 0.0)  # 지정되지 않은 이미지 변수
+        name, tpl = src
         th, tw = tpl.shape[:2]
         threshold = cond.get("threshold", DEFAULT_THRESHOLD)
         rect = self._image_rect(cond, origin, tw, th)
@@ -794,7 +862,20 @@ def evaluate(cond: dict, check_leaf, variables: dict, _seen: frozenset = frozens
 
 
 def templates_in(events) -> set[str]:
-    """이벤트(또는 편집 항목)가 쓰는 조건 이미지 파일 이름."""
-    return {c["template"] for c in conditions_in(events) if c.get("kind") == "image" and c.get("template")}
+    """이벤트(또는 편집 항목)가 쓰는 이미지 파일 이름 (조건 + 파일로 지정하는 이미지 변수)."""
+    out = {c["template"] for c in conditions_in(events) if c.get("kind") == "image" and c.get("template")}
+    return out | {ev["template"] for ev in events
+                  if isinstance(ev, dict) and ev.get("type") == "set_image" and ev.get("template")}
+
+
+def needs_vision(events) -> bool:
+    """재생에 화면 인식이 필요한지 (화면 조건 또는 이미지 변수)."""
+    return bool(conditions_in(events)) or any(isinstance(ev, dict) and ev.get("type") == "set_image" for ev in events)
+
+
+def image_vars_used(events) -> set[str]:
+    """조건에서 찾는 이미지 변수 이름."""
+    return {c["image_var"] for c in conditions_in(events)
+            if c.get("kind") == "image" and isinstance(c.get("image_var"), str)}
 
 

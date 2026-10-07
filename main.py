@@ -16,7 +16,7 @@ from player import PlayOptions, Player, options_from_dict, options_to_dict, set_
 from profiles import Macro, delete_macro, list_macros, load_macro, macro_path, save_macro
 from paths import app_dir, is_frozen, resource_path
 from recorder import Recorder
-from vision import Vision, conditions_in
+from vision import Vision, needs_vision
 
 MACROS_DIR = app_dir() / "macros"
 
@@ -115,7 +115,7 @@ class App:
             if not macro.events:
                 raise ValueError("이벤트가 없습니다")
             vision = None
-            if conditions_in(macro.events):
+            if needs_vision(macro.events):
                 vision = self._vision_factory(assets_dir or self.assets_dir(name))
             player = self._player_factory(self.backend, options, log=self.log, vision=vision)
             self._player = player

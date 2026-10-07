@@ -16,7 +16,8 @@ EVENT_TYPES = {"move", "rmove", "mdown", "mup", "scroll", "kdown", "kup", "wait"
                "if_start", "else", "if_end",  # 조건 분기
                "break_if",                    # 조건이 맞으면 가장 안쪽 반복 구간 종료
                "click_image",                 # 이미지를 찾아 그 위치를 클릭
-               "set_var",                     # 조건 판정 결과(참/거짓)를 변수에 저장
+               "set_var",                     # 조건을 변수에 지정 (쓰일 때 판정)
+               "set_image",                   # 이미지 변수: 파일(template) 또는 재생 중 화면 캡처(capture)
                "while_start", "while_end"}    # 조건이 맞는 동안 반복
 COND_EVENTS = {"wait_until", "if_start", "break_if", "click_image", "set_var", "while_start"}
 ON_TIMEOUT = ("stop", "continue")
@@ -209,6 +210,17 @@ def _validate_events(events: list) -> None:
         if typ == "set_var":
             try:
                 vision.validate_var_name(ev.get("name"))
+            except ValueError as e:
+                raise MacroFormatError(f"{where}: {e}") from None
+        if typ == "set_image":
+            try:
+                vision.validate_var_name(ev.get("name"))
+                if ("template" in ev) == ("capture" in ev):
+                    raise ValueError("이미지 변수에는 template(파일) 또는 capture(캡처 영역) 중 하나가 필요합니다")
+                if "template" in ev:
+                    vision.validate_template_name(ev["template"])
+                else:
+                    vision.validate_rect(ev["capture"], "캡처 영역")
             except ValueError as e:
                 raise MacroFormatError(f"{where}: {e}") from None
         if typ == "repeat_start":

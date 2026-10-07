@@ -7,8 +7,8 @@
 | 파일 | 역할 |
 |---|---|
 | `main.py` | 진입점(기본 GUI, `--cli` REPL, `--selftest`), `App`: 라이브러리·녹화·재생 상태, 저장/이름변경/삭제(+이미지 폴더) |
-| `gui.py` | tkinter 화면 전부: `Gui`(메인 목록), `EditorWindow`(기록 화면), `EventDialog`(키 입력으로 지정, 마우스 이동의 이동 녹화), `ConditionDialog`(wait/if/break/click/set_var/loop(횟수·동안 반복) + 여러 조건의 하위 조건용 cond 모드, 모드별 선택지 `KINDS_BY_MODE`), `RegionSelector`, `HotkeyCaptureDialog`, `Overlay`, `center_on_parent` |
-| `editor_model.py` | 기록 화면의 **순수 로직**: 이벤트↔편집 항목(dt 기반) 변환, 이동 경로 묶기(path/relpath), 항목 생성(build_*), 구간 감싸기(wrap_repeat/wrap_if/wrap_while), 반복문(build_loop/replace_loop_start), 변수 지정 모음(variable_defs), 저장 검증 |
+| `gui.py` | tkinter 화면 전부: `Gui`(메인 목록), `EditorWindow`(기록 화면), `EventDialog`(키 입력으로 지정, 마우스 이동의 이동 녹화), `ConditionDialog`(wait/if/break/click/set_var/loop(횟수·동안 반복) + 여러 조건의 하위 조건용 cond 모드, 모드별 선택지 `KINDS_BY_MODE`, 이미지 조건의 파일/이미지 변수 선택), `ImageVarDialog`(set_image: 파일 또는 재생 중 캡처 영역), `show_thumb`, `RegionSelector`, `HotkeyCaptureDialog`, `Overlay`, `center_on_parent` |
+| `editor_model.py` | 기록 화면의 **순수 로직**: 이벤트↔편집 항목(dt 기반) 변환, 이동 경로 묶기(path/relpath), 항목 생성(build_*), 구간 감싸기(wrap_repeat/wrap_if/wrap_while), 반복문(build_loop/replace_loop_start), 변수 지정 모음(variable_defs), 이미지 변수(build_set_image/image_variables_in/image_defs), 저장 검증 |
 | `player.py` | 재생기: 시간표(origin+cum), 지터, 보간, 창 포커스 제한, 반복/분기/탈출, 조건 대기, 안전 해제. `PlayOptions`/`set_option`/`options_*_dict` |
 | `recorder.py` | `RecorderCore`(순수) + `Recorder`(pynput, relative 시 Raw Input) |
 | `profiles.py` | 매크로 JSON 스키마 검증(`Macro.from_dict`), `blocks()` 반복·분기 구조, 저장/목록/경로 |
@@ -25,7 +25,9 @@
 - **블록**: repeat_start(count, 0=무한)/repeat_end, while_start(cond)/while_end, if_start(cond)/else/if_end는 `profiles.blocks()`로 검증·해석(`parent_loop`=가장 안쪽 반복, `loops`=감싸는 반복 체인; 시작/끝 표시는 자기 반복 바깥). 재생은 인덱스 점프(반복 시작 표시는 재실행 안 함, while_end는 while_start로 돌아가 재판정).
 - **조건/변수**: cond = image/pixel/var 잎 또는 all/any(잎만, 중첩 없음). `set_var`는 판정하지 않고 변수에 조건을 **지정**만 한다(`Player.variables[이름] = cond`). 변수 조건은 **쓰일 때마다** `vision.evaluate`가 지정된 조건을 판정(미지정·자기 참조 = 거짓, bool 값도 허용). 지정은 재생 회차마다 비운다. `vision.conditions_in`은 화면 잎 조건만 반환(변수만 쓰면 vision 불필요).
 - **조건 선택지**(`KINDS_BY_MODE`): 반복문·만약·반복 탈출·조건 대기·변수 저장 모두 이미지/범위 색/변수/여러 조건을 바로 고른다(반복문은 + 횟수). 여러 조건의 하위(cond 모드)는 이미지/범위 색/변수. 이미지 클릭은 이미지만.
-- **이벤트 타입**: move, rmove(dx,dy), mdown/mup/scroll(x,y 생략=현재 커서), kdown/kup, wait, repeat_*, wait_until, if_start/else/if_end, break_if, click_image, set_var(name, cond), while_start/while_end. 새 타입 추가 시: profiles 검증 → player → editor_model(라벨·describe·depths·KIND_FIELDS) → gui(on_edit 라우팅) → 테스트.
+- **이미지 변수**: `set_image(name, template | capture=[x,y,w,h])`. 이미지 조건은 `template` 대신 `image_var`로 참조. `Vision.images`(이름 -> (캐시 키, 이미지))에 담기며 `set_image`/`capture_image`/`clear_images`(Player 가 회차마다). 캐시 키는 `@이름:모양:crc` 라 이미지가 바뀌면 `_forget`으로 옛 캐시 정리. 미지정 = 거짓. `vision.needs_vision`(화면 조건 또는 set_image)으로 재생 시 vision 생성, `templates_in`은 set_image 파일 포함.
+- **UI 이름**: 흐름·조건 항목은 while/await/if(else, if 끝)/break/const 로 표시(이벤트 타입 이름은 그대로).
+- **이벤트 타입**: move, rmove(dx,dy), mdown/mup/scroll(x,y 생략=현재 커서), kdown/kup, wait, repeat_*, wait_until, if_start/else/if_end, break_if, click_image, set_var(name, cond), set_image(name, template|capture), while_start/while_end. 새 타입 추가 시: profiles 검증 → player → editor_model(라벨·describe·depths·KIND_FIELDS) → gui(on_edit 라우팅) → 테스트.
 - **좌표**: 매크로별 `coord_space` screen/window(창 클라이언트 좌상단 기준). 조건 좌표도 동일.
 - **이미지 자산**: `macros/<이름>/*.png`. 기록 화면은 임시 폴더에서 작업하고 저장 시 `App.store(..., assets=)`로 반영. 이름변경/복제/삭제 시 폴더도 처리.
 - **안전**: 재생 중 예외·중단 시 `finally`에서 눌린 키/버튼 전부 해제. 조건 이미지 누락은 입력 보내기 전에 실패.
