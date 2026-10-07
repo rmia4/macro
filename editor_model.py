@@ -18,9 +18,9 @@ EVENT_LABELS = {"move": "마우스 이동", "mdown": "마우스 누름", "mup": 
                 "scroll": "스크롤", "kdown": "키 누름", "kup": "키 뗌", "wait": "지연",
                 "path": "마우스 이동 경로", "rmove": "마우스 상대 이동", "relpath": "상대 이동 경로",
                 "repeat_start": "🔁 반복 시작", "repeat_end": "🔁 반복 끝",
-                "wait_until": "🔍 조건 대기", "if_start": "❓ 만약", "else": "↪ 아니면",
-                "if_end": "❓ 분기 끝", "break_if": "⏹ 반복 탈출", "click_image": "🖱 이미지 클릭",
-                "set_var": "📌 변수 저장", "while_start": "🔂 동안 반복", "while_end": "🔂 동안 반복 끝"}
+                "wait_until": "🔍 await", "if_start": "❓ if", "else": "↪ else",
+                "if_end": "❓ if 끝", "break_if": "⏹ break", "click_image": "🖱 이미지 클릭",
+                "set_var": "📌 const", "while_start": "🔂 while", "while_end": "🔂 while 끝"}
 BLOCK_MARKERS = ("repeat_start", "repeat_end", "if_start", "else", "if_end", "while_start", "while_end")
 _BLOCK_OPEN = ("repeat_start", "if_start", "while_start")
 _BLOCK_CLOSE = ("repeat_end", "if_end", "while_end")
@@ -37,9 +37,9 @@ ADD_GROUPS = {"key": [k for k in ADD_KINDS if k[0] in ("tap", "kdown", "kup")],
 PATH_KINDS = [("path", "마우스 이동 경로")]  # 경로 항목 수정 전용
 RELPATH_KINDS = [("relpath", "상대 이동 경로")]
 REPEAT_END_KINDS = [("repeat_end", "반복 끝")]
-ELSE_KINDS = [("else", "아니면")]
-IF_END_KINDS = [("if_end", "분기 끝")]
-WHILE_END_KINDS = [("while_end", "동안 반복 끝")]
+ELSE_KINDS = [("else", "else")]
+IF_END_KINDS = [("if_end", "if 끝")]
+WHILE_END_KINDS = [("while_end", "while 끝")]
 
 # 종류별 입력 필드 (cursor: 좌표 대신 현재 커서 위치에서 입력 가능)
 KIND_FIELDS = {
@@ -239,7 +239,7 @@ def describe(item: dict) -> str:
     if typ == "wait":
         return ""
     if typ == "repeat_start":
-        return f"×{item['count']}회 반복" if item["count"] > 0 else "무한 반복 (반복 탈출로 종료)"
+        return f"×{item['count']}회 반복" if item["count"] > 0 else "무한 반복 (break로 종료)"
     if typ == "if_start":
         return f"{vision.describe_condition(item['cond'])} 이면"
     if typ == "break_if":
@@ -565,7 +565,7 @@ def validate_for_save(name: str, hotkey: str | None, items: list[dict],
     if not err:
         undefined = sorted(vision.variables_used(items) - set(variables_in(items)))
         if undefined:
-            errors.append(f"변수: 저장하는 '변수 저장' 항목이 없습니다: {', '.join(undefined)}")
+            errors.append(f"변수: 지정하는 'const' 항목이 없습니다: {', '.join(undefined)}")
     if available_templates is not None:
         missing = sorted(vision.templates_in(items) - available_templates)
         if missing:

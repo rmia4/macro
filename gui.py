@@ -688,13 +688,13 @@ class EditorWindow:
         flow = ttk.Frame(left)
         flow.pack(fill="x", pady=(4, 0))
         ttk.Label(flow, text="흐름:").pack(side="left")
-        ttk.Button(flow, text="🔁 반복문 추가", command=self.on_add_loop).pack(side="left", padx=2)
+        ttk.Button(flow, text="🔁 while", command=self.on_add_loop).pack(side="left", padx=2)
         screen = ttk.Frame(left)
         screen.pack(fill="x", pady=(4, 0))
         ttk.Label(screen, text="조건:").pack(side="left")
-        for text, cmd in (("🔍 조건 대기", self.on_add_condition), ("❓ 조건 분기", self.on_add_branch),
-                          ("🖱 이미지 클릭", self.on_add_click), ("⏹ 반복 탈출", self.on_add_break),
-                          ("📌 변수 저장", self.on_add_set_var)):
+        for text, cmd in (("🔍 await", self.on_add_condition), ("❓ if", self.on_add_branch),
+                          ("🖱 이미지 클릭", self.on_add_click), ("⏹ break", self.on_add_break),
+                          ("📌 const", self.on_add_set_var)):
             ttk.Button(screen, text=text, command=cmd).pack(side="left", padx=2)
         edit = ttk.Frame(left)
         edit.pack(fill="x", pady=(4, 0))
@@ -964,7 +964,7 @@ class EditorWindow:
         try:
             items, select = em.wrap_while(self.items, self.selected_indices(), cond)
         except ValueError as e:
-            messagebox.showerror("동안 반복", str(e), parent=self.top)
+            messagebox.showerror("while", str(e), parent=self.top)
             return
         self._snapshot()
         self.items = items
@@ -974,7 +974,7 @@ class EditorWindow:
         try:
             items, select = em.wrap_if(self.items, self.selected_indices(), cond, with_else)
         except ValueError as e:
-            messagebox.showerror("조건 분기", str(e), parent=self.top)
+            messagebox.showerror("if", str(e), parent=self.top)
             return
         self._snapshot()
         self.items = items
@@ -1411,8 +1411,8 @@ class ConditionDialog:
     """조건을 쓰는 항목의 추가/수정. result: 편집 항목 (취소 시 None).
     mode="cond" 는 '여러 조건' 안의 조건 하나만 고르는 용도로, result 는 {"cond": 조건}."""
 
-    TITLES = {"wait": "조건 대기", "if": "조건 분기 (만약)", "break": "반복 탈출", "click": "이미지 클릭",
-              "set_var": "변수 저장", "loop": "반복문", "cond": "조건"}
+    TITLES = {"wait": "await", "if": "if", "break": "break", "click": "이미지 클릭",
+              "set_var": "const", "loop": "while", "cond": "조건"}
     KIND_TEXT = {"count": "횟수", "image": "이미지", "pixel": "범위 색", "var": "변수", "group": "여러 조건"}
     SCREEN_KINDS = ("image", "pixel", "var", "group")
     KINDS_BY_MODE = {"loop": ("count",) + SCREEN_KINDS, "if": SCREEN_KINDS, "break": SCREEN_KINDS,
@@ -1483,7 +1483,7 @@ class ConditionDialog:
             ttk.Label(f, text="독점 전체 화면 게임에서는 화면을 읽지 못할 수 있습니다 (창 모드 권장).",
                       foreground="#777777").pack(anchor="w", pady=(0, 6))
         self.intros = {"wait": "조건이 맞을 때까지 기다린 뒤 다음 이벤트로 진행합니다.",
-                 "if": "조건이 맞으면 '만약' 구간을, 아니면 '아니면' 구간(있을 때)을 실행합니다. 선택한 이벤트를 감쌉니다.",
+                 "if": "조건이 맞으면 'if' 구간을, 아니면 'else' 구간(있을 때)을 실행합니다. 선택한 이벤트를 감쌉니다.",
                  "break": "조건이 맞으면 가장 안쪽 반복 구간을 끝냅니다 (구간 밖이면 이번 회차를 끝냄).",
                  "click": "이미지가 나타날 때까지 기다렸다가, 찾은 위치(+보정)를 클릭합니다.",
                  "set_var": "조건을 변수에 지정합니다. 여기서는 판정하지 않고, 이후 조건에서 '변수'로 쓰일 때마다 "
@@ -1517,7 +1517,7 @@ class ConditionDialog:
         self.f_count = ttk.LabelFrame(f, text="횟수", padding=6)
         ttk.Label(self.f_count, text="반복 횟수").pack(side="left")
         ttk.Entry(self.f_count, textvariable=self.v_count, width=8).pack(side="left", padx=6)
-        ttk.Label(self.f_count, text="(0 = 무한, '반복 탈출'로 끝냄)", foreground="#555").pack(side="left")
+        ttk.Label(self.f_count, text="(0 = 무한, 'break'로 끝냄)", foreground="#555").pack(side="left")
 
         # 이미지
         self.f_image = ttk.LabelFrame(f, text="이미지", padding=6)
@@ -1570,12 +1570,12 @@ class ConditionDialog:
 
         # 변수
         self.f_var = ttk.LabelFrame(f, text="변수", padding=6)
-        ttk.Label(self.f_var, text="'변수 저장'으로 지정한 조건을 지금 판정해 참이면 충족").pack(side="left")
+        ttk.Label(self.f_var, text="'const'로 지정한 조건을 지금 판정해 참이면 충족").pack(side="left")
         self.var_box = ttk.Combobox(self.f_var, textvariable=self.v_var, width=18,
                                     values=em.variables_in(self.editor.items))
         self.var_box.pack(side="left", padx=6)
         if not em.variables_in(self.editor.items):
-            ttk.Label(self.f_var, text="먼저 📌 변수 저장으로 화면 판정 조건을 지정하세요",
+            ttk.Label(self.f_var, text="먼저 📌 const로 화면 판정 조건을 지정하세요",
                       foreground="#c62828").pack(side="left")
 
         # 여러 조건
@@ -1623,7 +1623,7 @@ class ConditionDialog:
             ttk.Radiobutton(ot, text="재생 중지", value="stop", variable=self.v_on_timeout).pack(side="left")
             ttk.Radiobutton(ot, text="계속 진행", value="continue", variable=self.v_on_timeout).pack(side="left", padx=6)
         if self.mode == "if" and not self.editing:
-            ttk.Checkbutton(self.f_common, text="'아니면' 구간도 만들기 (조건이 맞지 않을 때 실행)",
+            ttk.Checkbutton(self.f_common, text="'else' 구간도 만들기 (조건이 맞지 않을 때 실행)",
                             variable=self.v_with_else).grid(row=len(rows) + 1, column=0, columnspan=2, sticky="w")
         self._common_has_rows = bool(rows) or waits or (self.mode == "if" and not self.editing)
 

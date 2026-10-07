@@ -783,7 +783,7 @@ def _open_condition(gui):
 
 def test_condition_dialog_crop_find_and_save(gui, tmp_path):
     ed, d = _open_condition(gui)
-    assert d.top.title() == "조건 대기 추가"                            # 실험 표시 없음
+    assert d.top.title() == "await 추가"                            # 실험 표시 없음
     d._on_ok()
     assert d.result is None and "잘라내기" in d.error.cget("text")      # 이미지 없이 확인 불가
     d.on_crop()                                                          # 지연 0: 바로 캡처 + 선택 화면
@@ -806,7 +806,7 @@ def test_condition_dialog_crop_find_and_save(gui, tmp_path):
     item = d.result
     assert item["cond"]["template"] == "이미지1.png" and item["timeout"] == 5.0
     ed.insert_items([item])
-    assert ed.tree.item("0")["values"][2] == "🔍 조건 대기"
+    assert ed.tree.item("0")["values"][2] == "🔍 await"
     ed.v_name.set("반응형")
     assert ed.on_save()
     assert (tmp_path / "반응형" / "이미지1.png").is_file()
@@ -927,7 +927,7 @@ def test_branch_dialog_wraps_selection_with_else(gui):
     ed.wrap_if(d.result["cond"], d.result["with_else"])
     assert [i["type"] for i in ed.items] == ["if_start", "kdown", "kup", "else", "if_end"]
     assert "with_else" not in ed.items[0]
-    assert ed.tree.item("1")["values"][2] == "│ 키 누름" and ed.tree.item("3")["values"][2] == "↪ 아니면"
+    assert ed.tree.item("1")["values"][2] == "│ 키 누름" and ed.tree.item("3")["values"][2] == "↪ else"
     ed.tree.selection_set("4")                    # 분기 끝을 지우면 만약/아니면도 함께
     ed.on_delete()
     assert [i["type"] for i in ed.items] == ["kdown", "kup"]
