@@ -919,7 +919,8 @@ def test_branch_dialog_wraps_selection_with_else(gui):
     ed.insert_items(em.build_items("tap", key="a", delay_ms=100))
     ed.tree.selection_set(["0", "1"])
     d = ConditionDialog(ed, mode="if")
-    assert d.kinds == ("var", "group") and d.v_kind.get() == "var"   # 흐름 제어는 변수로만
+    assert d.kinds == ("image", "pixel", "var", "group") and d.v_kind.get() == "image"
+    d.v_kind.set("var"); d._on_kind()
     d.v_var.set("hp")
     d.v_with_else.set(True)
     d._on_ok()
@@ -952,7 +953,10 @@ def test_click_and_break_dialogs(gui):
     assert ck["type"] == "click_image" and ck["button"] == "right" and ck["offset"] == [3, 0] and ck["hold"] == 0.08
     d = ConditionDialog(ed, mode="break")
     gui.root.update()
-    assert not d.f_click.winfo_ismapped() and not d.f_test.winfo_ismapped()
+    assert not d.f_click.winfo_ismapped() and d.f_test.winfo_ismapped()   # 기본은 이미지 조건
+    d.v_kind.set("var"); d._on_kind()
+    gui.root.update()
+    assert not d.f_test.winfo_ismapped()
     d.v_var.set("끝")
     d.v_negate.set(True)
     d._on_ok()
@@ -1013,7 +1017,7 @@ def test_while_and_set_var_dialogs(gui):
     ed.tree.selection_set(["1", "2"])
     d = ConditionDialog(ed, mode="loop")
     gui.root.update()
-    assert d.kinds == ("count", "var", "group") and d.v_kind.get() == "count"
+    assert d.kinds == ("count", "image", "pixel", "var", "group") and d.v_kind.get() == "count"
     assert d.f_count.winfo_ismapped() and not d.f_neg.winfo_ismapped() and not d.f_test.winfo_ismapped()
     d.v_count.set("-1")
     d._on_ok()
@@ -1045,16 +1049,28 @@ def test_while_and_set_var_dialogs(gui):
     assert gui.app.library["동안"].events[1]["cond"] == {"kind": "var", "name": "적"}
 
 
-def test_flow_dialog_keeps_legacy_screen_condition(gui):
+def test_flow_dialog_screen_conditions(gui):
     from gui import ConditionDialog
     ed, _ = _open_condition(gui)
     px = {"kind": "pixel", "x": 3, "y": 4, "color": "#102030"}
     d = ConditionDialog(ed, {"type": "if_start", "dt": 0, "cond": px}, mode="if")
-    assert d.kinds == ("var", "group", "image", "pixel") and d.v_kind.get() == "pixel"
+    assert d.kinds == ("image", "pixel", "var", "group") and d.v_kind.get() == "pixel"
     d._on_ok()
     assert {k: d.result["cond"][k] for k in px} == px    # 한 점은 1x1 범위로 정규화
-    d = ConditionDialog(ed, mode="cond")                 # 여러 조건의 하위 조건은 변수만
-    assert d.kinds == ("var",)
+    d = ConditionDialog(ed, mode="loop")                 # 반복문: 이미지 조건을 바로 지정
+    assert d.kinds == ("count", "image", "pixel", "var", "group")
+    d.v_kind.set("image"); d._on_kind()
+    d.on_crop()
+    d.selector.on_press(Ev(420, 300)); d.selector.on_release(Ev(480, 330))
+    d._on_ok()
+    assert d.result["type"] == "while_start" and d.result["cond"]["kind"] == "image"
+    assert (ed.assets_dir / d.result["cond"]["template"]).is_file()
+    d = ConditionDialog(ed, mode="break")
+    d.v_kind.set("pixel"); d._on_kind()
+    d._on_ok()
+    assert d.result["type"] == "break_if" and d.result["cond"]["kind"] == "pixel"
+    d = ConditionDialog(ed, mode="cond")                 # 여러 조건의 하위 조건도 화면 조건 가능
+    assert d.kinds == ("image", "pixel", "var")
 
 
 def test_group_condition_dialog(gui, monkeypatch):

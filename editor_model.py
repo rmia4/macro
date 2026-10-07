@@ -462,7 +462,7 @@ def replace_loop_start(items: list[dict], i: int, new: dict) -> list[dict]:
 
 
 def uses_screen(cond: dict | None) -> bool:
-    """조건이 화면(이미지/범위 색)을 보는지. 흐름 제어 항목의 예전 조건 호환 판단용."""
+    """조건이 화면(이미지/범위 색)을 보는지 (여러 조건이면 안의 조건 중 하나라도)."""
     return bool(cond) and any(c.get("kind") in vision.SCREEN_KINDS for c in vision.leaf_conditions(cond))
 
 

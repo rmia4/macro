@@ -1414,10 +1414,10 @@ class ConditionDialog:
     TITLES = {"wait": "조건 대기", "if": "조건 분기 (만약)", "break": "반복 탈출", "click": "이미지 클릭",
               "set_var": "변수 저장", "loop": "반복문", "cond": "조건"}
     KIND_TEXT = {"count": "횟수", "image": "이미지", "pixel": "범위 색", "var": "변수", "group": "여러 조건"}
-    # 흐름 제어(반복문·만약·반복 탈출)는 변수로 판정한다. 화면 판정은 '변수 저장'에서.
-    KINDS_BY_MODE = {"loop": ("count", "var", "group"), "if": ("var", "group"), "break": ("var", "group"),
-                     "set_var": ("image", "pixel", "var", "group"), "wait": ("image", "pixel", "var", "group"),
-                     "click": ("image",), "cond": ("var",)}
+    SCREEN_KINDS = ("image", "pixel", "var", "group")
+    KINDS_BY_MODE = {"loop": ("count",) + SCREEN_KINDS, "if": SCREEN_KINDS, "break": SCREEN_KINDS,
+                     "set_var": SCREEN_KINDS, "wait": SCREEN_KINDS,
+                     "click": ("image",), "cond": ("image", "pixel", "var")}
 
     def __init__(self, editor: "EditorWindow", item: dict | None = None, mode: str = "wait", parent=None) -> None:
         """mode: wait(조건 대기) | if(조건 분기) | break(반복 탈출) | click(이미지 클릭)
@@ -1430,10 +1430,7 @@ class ConditionDialog:
         self._modal = False
         cond = (item or {}).get("cond", {})
         region = cond.get("region")
-        kinds = self.KINDS_BY_MODE[mode]
-        if em.uses_screen(cond) and "image" not in kinds:  # 예전에 만든 화면 조건은 그대로 고칠 수 있게
-            kinds = kinds + ("image", "pixel")
-        self.kinds = kinds
+        self.kinds = kinds = self.KINDS_BY_MODE[mode]
         self.top = tk.Toplevel(self.parent)
         self.top.withdraw()
         self.top.title(f"{self.TITLES[mode]} {'수정' if item else '추가'}")
@@ -1493,7 +1490,7 @@ class ConditionDialog:
                             "그 자리에서 판정해 참/거짓을 정합니다. 지정 전에 쓰이면 거짓입니다.",
                  "loop": "조건이 맞는 동안 구간을 반복합니다 (매 회차 시작 전에 판정). 선택한 이벤트를 감쌉니다.",
                  "count": "정한 횟수만큼 구간을 반복합니다. 선택한 이벤트를 감쌉니다 (선택이 없으면 끝에 빈 구간).",
-                 "cond": "'여러 조건'에 넣을 변수 조건 하나를 고릅니다."}
+                 "cond": "'여러 조건'에 넣을 조건 하나를 고릅니다."}
         self.intro = ttk.Label(f, text=self.intros[self.mode], wraplength=440)
         self.intro.pack(anchor="w", pady=(0, 4))
         if self.mode == "set_var":
@@ -1513,7 +1510,7 @@ class ConditionDialog:
         if self.mode != "click":
             neg = {"wait": "반대로 (조건이 '아닐' 때까지 대기)", "if": "반대로 (조건이 '아닐' 때 실행)",
                    "break": "반대로 (조건이 '아닐' 때 탈출)", "set_var": "반대로 (조건이 '아닐' 때 참으로 저장)",
-                   "loop": "반대로 (조건이 '아닌' 동안 반복)", "cond": "반대로 (변수가 거짓일 때 충족)"}[self.mode]
+                   "loop": "반대로 (조건이 '아닌' 동안 반복)", "cond": "반대로 (조건이 '아닐' 때 충족)"}[self.mode]
             ttk.Checkbutton(self.f_neg, text=neg, variable=self.v_negate).pack(anchor="w", pady=2)
 
         # 횟수

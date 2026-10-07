@@ -24,7 +24,7 @@
 - **시간**: 저장은 절대 시각 `t`, 편집 화면은 `dt`(직전으로부터 지연). 재생은 `origin + 누적 dt`까지 대기 → 조건 대기 후엔 `origin = now - cum`으로 재정렬.
 - **블록**: repeat_start(count, 0=무한)/repeat_end, while_start(cond)/while_end, if_start(cond)/else/if_end는 `profiles.blocks()`로 검증·해석(`parent_loop`=가장 안쪽 반복, `loops`=감싸는 반복 체인; 시작/끝 표시는 자기 반복 바깥). 재생은 인덱스 점프(반복 시작 표시는 재실행 안 함, while_end는 while_start로 돌아가 재판정).
 - **조건/변수**: cond = image/pixel/var 잎 또는 all/any(잎만, 중첩 없음). `set_var`는 판정하지 않고 변수에 조건을 **지정**만 한다(`Player.variables[이름] = cond`). 변수 조건은 **쓰일 때마다** `vision.evaluate`가 지정된 조건을 판정(미지정·자기 참조 = 거짓, bool 값도 허용). 지정은 재생 회차마다 비운다. `vision.conditions_in`은 화면 잎 조건만 반환(변수만 쓰면 vision 불필요).
-- **흐름 제어 조건은 변수로만**(UI 규칙): 반복문·만약·반복 탈출 창은 변수/여러 조건(변수만)만 고른다. 화면 판정(이미지/범위 색)은 변수 저장·조건 대기·이미지 클릭에서. 예전 화면 조건 항목은 수정 시에만 image/pixel 선택지를 덧붙인다(`em.uses_screen`). 데이터·재생은 화면 조건도 계속 지원.
+- **조건 선택지**(`KINDS_BY_MODE`): 반복문·만약·반복 탈출·조건 대기·변수 저장 모두 이미지/범위 색/변수/여러 조건을 바로 고른다(반복문은 + 횟수). 여러 조건의 하위(cond 모드)는 이미지/범위 색/변수. 이미지 클릭은 이미지만.
 - **이벤트 타입**: move, rmove(dx,dy), mdown/mup/scroll(x,y 생략=현재 커서), kdown/kup, wait, repeat_*, wait_until, if_start/else/if_end, break_if, click_image, set_var(name, cond), while_start/while_end. 새 타입 추가 시: profiles 검증 → player → editor_model(라벨·describe·depths·KIND_FIELDS) → gui(on_edit 라우팅) → 테스트.
 - **좌표**: 매크로별 `coord_space` screen/window(창 클라이언트 좌상단 기준). 조건 좌표도 동일.
 - **이미지 자산**: `macros/<이름>/*.png`. 기록 화면은 임시 폴더에서 작업하고 저장 시 `App.store(..., assets=)`로 반영. 이름변경/복제/삭제 시 폴더도 처리.
