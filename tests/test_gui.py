@@ -1250,3 +1250,47 @@ def test_editor_buttons_fit_in_pane(gui):
             right = b.winfo_rootx() + b.winfo_width()
             assert right <= pane.winfo_rootx() + pane.winfo_width(), b.cget("text")
             assert b.winfo_width() >= b.winfo_reqwidth(), b.cget("text")
+
+
+def _condition_with_image_var(gui):
+    from gui import ConditionDialog, ImageVarDialog
+    ed, d = _open_condition(gui)
+    d.top.destroy()
+    d = ImageVarDialog(ed)
+    d.v_name.set("버튼")
+    d._pick(crop=True)
+    d.selector.on_press(Ev(420, 300)); d.selector.on_release(Ev(480, 330))
+    d._on_ok()
+    ed.insert_items([d.result])
+    d = ConditionDialog(ed, mode="click")
+    d.v_image_var.set("버튼")
+    gui.root.update()
+    return ed, d
+
+
+def test_image_source_switch_keeps_dialog_size(gui):
+    ed, d = _condition_with_image_var(gui)
+    size = d.top.winfo_reqwidth(), d.top.winfo_reqheight()
+    assert d._thumb is not None                           # 변수 이미지 미리보기 (픽셀 크기)
+    d.v_image_src.set("file"); d._on_image_src()           # 잘라낸 이미지 없음 -> 글자로 돌아감
+    gui.root.update()
+    assert d.thumb.cget("text") == "(이미지 없음)"
+    assert (d.top.winfo_reqwidth(), d.top.winfo_reqheight()) == size   # 글자 단위 170x64 로 커지지 않음
+
+
+def test_screen_action_closes_combobox_popdown(gui):
+    ed, d = _condition_with_image_var(gui)
+    cb = next(w for w in d.f_image.winfo_children()[0].winfo_children() if w.winfo_class() == "TCombobox")
+    popdown = f"{cb}.popdown"
+    t = gui.root.tk
+    t.call("ttk::combobox::Post", str(cb)); gui.root.update()
+    t.call("ttk::combobox::Unpost", str(cb))
+    assert t.call("winfo", "exists", popdown)
+    d.on_crop()                                            # 숨기기 전에 펼침 목록을 없앤다 (되돌린 뒤 다시 숨겨지는 문제)
+    assert not t.call("winfo", "exists", popdown)
+    d.selector.on_press(Ev(100, 100)); d.selector.on_release(Ev(150, 140))
+    gui.root.update()
+    assert d.top.wm_state() == "normal" and d.v_image_src.get() == "file"
+    t.call("ttk::combobox::Post", str(cb)); gui.root.update()   # 다음에 펼치면 새로 만들어진다
+    assert t.call("wm", "state", popdown) == "normal"
+    t.call("ttk::combobox::Unpost", str(cb))

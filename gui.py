@@ -407,6 +407,7 @@ class Gui:
             if w is not None and w.winfo_exists() and w.winfo_viewable():
                 if w.grab_current() is w:
                     w.grab_release()
+                close_popdowns(w)
                 w.withdraw()
                 hidden.append(w)
 
@@ -2071,15 +2072,29 @@ class ImageVarDialog:
         return dlg.result
 
 
+def close_popdowns(widget, path: str | None = None) -> None:
+    """widget 안 콤보박스의 펼침 목록(popdown)을 없앤다. 한 번 펼친 목록은 대화상자의 transient 창으로 남아,
+    대화상자를 숨겼다 되돌리면 Tk 가 대화상자를 다시 숨겨 버린다 (모달이면 프로그램이 멈춘 것처럼 보임).
+    목록은 다음에 펼칠 때 새로 만들어진다."""
+    call = widget.tk.call
+    for child in widget.tk.splitlist(call("winfo", "children", path or str(widget))):
+        if call("winfo", "class", child) == "ComboboxPopdown":
+            call("destroy", child)
+        else:
+            close_popdowns(widget, child)
+
+
 def show_thumb(label, master, path, missing: str):
     """label 에 path 이미지의 축소본을 보인다 (없으면 missing 문구). 돌려준 PhotoImage 는 호출한 쪽이 붙잡아 둔다."""
+    # 이미지를 보이면 크기 단위가 픽셀이 되므로, 글자로 돌아갈 때 처음 크기(글자 단위)로 되돌린다
+    text_size = label.__dict__.setdefault("_text_size", dict(width=label.cget("width"), height=label.cget("height")))
     if path is None or not path.is_file():
-        label.configure(image="", text=missing)
+        label.configure(image="", text=missing, **text_size)
         return None
     try:
         img = tk.PhotoImage(master=master, file=str(path))
     except tk.TclError:
-        label.configure(image="", text=f"(미리보기 불가: {path.name})")
+        label.configure(image="", text=f"(미리보기 불가: {path.name})", **text_size)
         return None
     factor = max(1, -(-img.width() // 170), -(-img.height() // 64))
     thumb = img.subsample(factor) if factor > 1 else img
