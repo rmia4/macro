@@ -1337,7 +1337,11 @@ def test_ai_dialog_opens_unsaved_draft(gui):
     assert gui.ai_dialog is None and ed.dirty and ed.old_name is None
     assert ed.v_name.get() == "alpha 2"  # 이미 있는 이름은 피한다
     assert [i["type"] for i in ed.items] == ["kdown", "kup", "mdown", "mup"]
-    assert wait_for(gui, lambda: "AI 메모: 좌표를 확인하세요" in logs(gui))
+    assert "AI 메모" not in logs(gui)  # 메모는 메인 로그가 아니라 기록 화면 AI 대화에
+    assert ed.v_panel.get() == "ai"
+    chat = ed.ai_panel.log_box.get("1.0", "end")
+    assert "나: f 누르고 클릭" in chat and "AI: 좌표를 확인하세요 (항목 4개, 저장 전 초안)" in chat
+    assert ed.ai_panel.history == [("user", "f 누르고 클릭"), ("ai", "좌표를 확인하세요")]
     assert set(gui.app.library) == {"alpha", "beta"}  # 저장 전
 
 

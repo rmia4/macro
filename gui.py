@@ -299,16 +299,21 @@ class Gui:
             return
         self.ai_dialog = AiPromptDialog(self)
 
-    def open_ai_draft(self, name: str, macro: Macro, notes: str, assets: dict[str, bytes] | None = None) -> None:
-        """AI 가 만든 매크로(+ 잘라낸 이미지)를 저장하지 않은 채 기록 화면에 연다."""
+    def open_ai_draft(self, name: str, macro: Macro, notes: str, assets: dict[str, bytes] | None = None,
+                      text: str = "", shots: int = 0) -> None:
+        """AI 가 만든 매크로(+ 잘라낸 이미지)를 저장하지 않은 채 기록 화면에 열고,
+        요청(text)과 AI 메모를 기록 화면의 AI 대화에 남긴다 (이어서 고칠 때 맥락이 된다)."""
         if self.editor is not None:
             self.editor.show()
             self.log("기록 화면이 이미 열려 있습니다. 먼저 닫아 주세요.")
             return
         self.editor = EditorWindow(self, None, draft=macro, draft_name=em.unique_name(name, self.app.library),
                                    draft_assets=assets)
-        if notes:
-            self.log(f"AI 메모: {notes}")
+        panel = self.editor.ai_panel
+        self.editor.show_panel("ai")
+        if text:
+            panel.add("나", panel.with_shots(text, shots))
+        panel.reply(text, notes or "만들었습니다.", len(self.editor.items), len(assets or {}), "저장 전 초안")
 
     def on_add(self) -> None:
         if self.macros_enabled:
@@ -2363,7 +2368,7 @@ class AiChatPanel:
         if not text:
             return
         self._pending = text
-        self.add("나", text + (f" (화면 {len(self.captures)}장)" if self.captures else ""))
+        self.add("나", self.with_shots(text, len(self.captures)))
         self.text.delete("1.0", "end")
         self.btn_send.state(["disabled"])
         self.v_status.set("AI 가 작업 중…")
@@ -2379,12 +2384,21 @@ class AiChatPanel:
             return
         name, macro, notes, assets = value
         count = self.editor.apply_ai(macro, assets, name)
-        reply = notes or "반영했습니다."
-        self.add("AI", f"{reply} (항목 {count}개{', 새 이미지 ' + str(len(assets)) + '개' if assets else ''})")
-        self.history += [("user", text), ("ai", reply)]
+        self.reply(text, notes or "반영했습니다.", count, len(assets))
         if self.captures:
             self.captures.clear()  # 보낸 화면은 한 번만 쓴다 (잘라낸 이미지는 목록에 남는다)
             self._update_shots()
+
+    @staticmethod
+    def with_shots(text: str, shots: int) -> str:
+        return text + (f" (화면 {shots}장)" if shots else "")
+
+    def reply(self, text: str, notes: str, count: int, new_images: int = 0, extra: str = "") -> None:
+        """AI 답(메모)을 대화에 적고, 요청과 함께 다음 요청의 맥락으로 남긴다."""
+        info = [f"항목 {count}개"] + ([f"새 이미지 {new_images}개"] if new_images else []) + ([extra] if extra else [])
+        self.add("AI", f"{notes} ({', '.join(info)})")
+        if text:
+            self.history += [("user", text), ("ai", notes)]
 
     def close(self) -> None:
         if self.session is not None:
@@ -2549,8 +2563,9 @@ class AiPromptDialog:
         if self.gui.editor is not None:
             self.v_status.set("기록 화면이 열려 있습니다. 먼저 닫아 주세요.")
             return
+        text, shots = self.text.get("1.0", "end").strip(), len(self.captures)
         self.close()
-        self.gui.open_ai_draft(name, macro, notes, assets)
+        self.gui.open_ai_draft(name, macro, notes, assets, text, shots)
 
     def close(self) -> None:
         self.finish_capture()
