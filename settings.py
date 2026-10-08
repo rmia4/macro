@@ -19,6 +19,8 @@ DEFAULTS = {
     "overlay_position": "ne",      # 상태 오버레이 위치 (OVERLAY_POSITIONS) 또는 "off"
     "main_geometry": "",           # 창 크기/위치 ("760x520+100+80")
     "editor_geometry": "",
+    "ai_cli_path": "",             # AI 로 만들기: Claude Code 실행 파일 (비면 PATH 의 claude)
+    "ai_model": "",                # AI 로 만들기: 모델 (비면 Claude Code 기본 모델)
 }
 
 

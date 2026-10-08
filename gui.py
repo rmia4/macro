@@ -11,10 +11,12 @@ import queue
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 
+import ai_gen
 import editor_model as em
 import input_backend
 import keys
@@ -72,6 +74,9 @@ class Gui:
         self._closed = False
         self.play_started: float | None = None
         self.editor: EditorWindow | None = None
+        self.ai_dialog: AiPromptDialog | None = None
+        self.ai_provider_factory = lambda: ai_gen.ClaudeCliProvider(
+            self.settings["ai_cli_path"], self.settings["ai_model"])  # 테스트에서 주입
         self.hotkey_listener: HotkeyListener | None = None
         app.log = self._logs.put
         self.delay = tk.StringVar(root, value=str(self.settings["start_delay"]))
@@ -140,7 +145,7 @@ class Gui:
         row = ttk.Frame(box)
         row.pack(fill="x", pady=(6, 0))
         self.macro_settings_buttons = []
-        for text, cmd in (("+ 추가", self.on_add), ("편집", self.on_edit), ("복제", self.on_duplicate),
+        for text, cmd in (("+ 추가", self.on_add), ("✨ AI로 만들기", self.on_ai_add), ("편집", self.on_edit), ("복제", self.on_duplicate),
                           ("삭제", self.on_delete), ("새로고침", self.reload)):
             button = ttk.Button(row, text=text, command=cmd)
             button.pack(side="left", padx=(0, 4))
@@ -277,12 +282,26 @@ class Gui:
             self.app.stop_play()
 
     # ---- 추가 / 편집 / 복제 / 삭제 ----
-    def open_editor(self, name: str | None) -> None:
+    def open_editor(self, name: str | None, draft: Macro | None = None, draft_name: str | None = None) -> None:
         if self.editor is not None:
             self.editor.show()
             self.log("기록 화면이 이미 열려 있습니다. 먼저 닫아 주세요.")
             return
-        self.editor = EditorWindow(self, name)
+        self.editor = EditorWindow(self, name, draft=draft, draft_name=draft_name)
+
+    def on_ai_add(self) -> None:
+        if self.macros_enabled:
+            return
+        if self.ai_dialog is not None:
+            self.ai_dialog.top.lift()
+            return
+        self.ai_dialog = AiPromptDialog(self)
+
+    def open_ai_draft(self, name: str, macro: Macro, notes: str) -> None:
+        """AI 가 만든 매크로를 저장하지 않은 채 기록 화면에 연다."""
+        self.open_editor(None, draft=macro, draft_name=em.unique_name(name, self.app.library))
+        if notes:
+            self.log(f"AI 메모: {notes}")
 
     def on_add(self) -> None:
         if self.macros_enabled:
@@ -594,10 +613,11 @@ class Gui:
 class EditorWindow:
     """기록 화면: 녹화, 이벤트 목록 편집, 이벤트 추가, 매크로 설정."""
 
-    def __init__(self, gui: Gui, name: str | None = None) -> None:
+    def __init__(self, gui: Gui, name: str | None = None, draft: Macro | None = None,
+                 draft_name: str | None = None) -> None:
         self.gui, self.app = gui, gui.app
-        macro = self.app.library.get(name) if name else None
-        self.old_name = name if macro else None
+        macro = draft or (self.app.library.get(name) if name else None)
+        self.old_name = name if macro and not draft else None
         self.items: list[dict] = em.to_items(macro.events) if macro else []
         self.screen = dict(macro.screen) if macro else None
         self.window = dict(macro.window) if macro and macro.window else None
@@ -619,7 +639,7 @@ class EditorWindow:
         self._moves_only = False  # 이동 녹화 중 (마우스 이동만 선택 위치 뒤에 추가)
         self._redo: list[list[dict]] = []
         self.top.protocol("WM_DELETE_WINDOW", self.close)
-        self.v_name = tk.StringVar(self.top, value=name or em.unique_name("새 매크로", self.app.library))
+        self.v_name = tk.StringVar(self.top, value=draft_name or name or em.unique_name("새 매크로", self.app.library))
         self.v_hotkey = tk.StringVar(self.top, value=macro.hotkey if macro and macro.hotkey else NO_HOTKEY)
         self.v_title = tk.StringVar(self.top, value=opts.window_title)
         coord = macro.coord_space if macro else ("window" if opts.window_title else "screen")
@@ -629,7 +649,7 @@ class EditorWindow:
             value = getattr(opts, fname)
             self.v_opts[fname] = (tk.BooleanVar(self.top, value=value) if kind == "check"
                                   else tk.StringVar(self.top, value=str(value)))
-        self.dirty = False
+        self.dirty = draft is not None  # AI 초안은 저장 전 상태
         self._build()
         self.refresh_tree()
         for var in [self.v_name, self.v_hotkey, self.v_title, self.v_coord, *self.v_opts.values()]:
@@ -2108,6 +2128,106 @@ def overlay_xy(position: str, screen_w: int, screen_h: int, w: int, h: int, marg
     y = margin if "n" in position else screen_h - h - margin if "s" in position else (screen_h - h) // 2
     return x, y
 
+
+class AiPromptDialog:
+    """자연어 설명 -> AI 가 매크로 초안을 만들어 기록 화면에 연다. 생성은 작업 스레드에서 한다."""
+
+    def __init__(self, gui: Gui) -> None:
+        self.gui = gui
+        self.provider = None
+        self.result: queue.Queue = queue.Queue()
+        self._poll_id = None
+        self.top = tk.Toplevel(gui.root)
+        self.top.withdraw()
+        self.top.title("AI로 매크로 만들기")
+        self.top.transient(gui.root)
+        self.top.protocol("WM_DELETE_WINDOW", self.close)
+        self.v_coord = tk.StringVar(self.top, value=COORD_LABELS["screen"])
+        self.v_title = tk.StringVar(self.top)
+        self.v_status = tk.StringVar(self.top)
+        f = ttk.Frame(self.top, padding=10)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, wraplength=460, text="만들 매크로를 문장으로 설명하세요. 예) F 키를 0.5초 간격으로 10번 누르고 "
+                  "(960, 540)을 우클릭. 결과는 저장하지 않은 채 기록 화면에 열리니 확인 후 저장하세요. "
+                  "설치된 Claude Code 로 만들며 요금제 사용량이 쓰입니다. 이미지 조건은 아직 만들지 않습니다."
+                  ).pack(anchor="w")
+        self.text = tk.Text(f, width=60, height=8, wrap="word")
+        self.text.pack(fill="both", expand=True, pady=6)
+        row = ttk.Frame(f)
+        row.pack(fill="x")
+        ttk.Label(row, text="좌표 기준").pack(side="left")
+        ttk.Combobox(row, textvariable=self.v_coord, state="readonly", width=12,
+                     values=[COORD_LABELS["screen"], COORD_LABELS["window"]]).pack(side="left", padx=4)
+        ttk.Label(row, text="대상 창 제목").pack(side="left", padx=(8, 0))
+        ttk.Entry(row, textvariable=self.v_title, width=20).pack(side="left", padx=4)
+        bottom = ttk.Frame(f)
+        bottom.pack(fill="x", pady=(8, 0))
+        ttk.Label(bottom, textvariable=self.v_status, foreground="#a33", wraplength=300).pack(side="left")
+        ttk.Button(bottom, text="닫기", command=self.close).pack(side="right")
+        self.btn_go = ttk.Button(bottom, text="만들기", command=self.on_generate)
+        self.btn_go.pack(side="right", padx=4)
+        self.text.focus_set()
+        center_on_parent(self.top, gui.root)
+
+    @property
+    def busy(self) -> bool:
+        return self.provider is not None
+
+    def request(self) -> ai_gen.GenRequest:
+        title = self.v_title.get().strip()
+        coord = "window" if self.v_coord.get() == COORD_LABELS["window"] and title else "screen"
+        return ai_gen.GenRequest(self.text.get("1.0", "end").strip(), screen=self.gui.app.backend.screen_size(),
+                                 coord_space=coord, window_title=title)
+
+    def on_generate(self) -> None:
+        if self.busy:
+            return
+        req = self.request()
+        if not req.text:
+            self.v_status.set("만들 매크로를 설명해 주세요.")
+            return
+        provider = self.provider = self.gui.ai_provider_factory()
+        self.btn_go.configure(state="disabled")
+        self.v_status.set("AI 가 만드는 중… (수십 초 걸릴 수 있습니다)")
+
+        def work() -> None:
+            try:
+                self.result.put(("ok", ai_gen.generate_macro(req, provider)))
+            except ai_gen.AiError as e:
+                self.result.put(("error", str(e)))
+            except Exception as e:  # noqa: BLE001 - 대화상자에 보여 주고 계속
+                self.result.put(("error", f"예상하지 못한 오류: {e}"))
+        threading.Thread(target=work, daemon=True).start()
+        self._poll_id = self.top.after(100, self._poll)
+
+    def _poll(self) -> None:
+        self._poll_id = None
+        try:
+            status, value = self.result.get_nowait()
+        except queue.Empty:
+            self._poll_id = self.top.after(100, self._poll)
+            return
+        self.provider = None
+        self.btn_go.configure(state="normal")
+        if status == "error":
+            self.v_status.set(value)
+            return
+        name, macro, notes = value
+        if self.gui.editor is not None:
+            self.v_status.set("기록 화면이 열려 있습니다. 먼저 닫아 주세요.")
+            return
+        self.close()
+        self.gui.open_ai_draft(name, macro, notes)
+
+    def close(self) -> None:
+        if self.provider is not None and hasattr(self.provider, "cancel"):
+            self.provider.cancel()
+        self.provider = None
+        if self._poll_id is not None:
+            self.top.after_cancel(self._poll_id)
+            self._poll_id = None
+        self.gui.ai_dialog = None
+        self.top.destroy()
 
 class Overlay:
     """화면 가장자리에 뜨는 반투명 상태 표시. 항상 위, 테두리 없음, 클릭은 아래 창(게임)으로 통과한다."""

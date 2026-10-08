@@ -64,7 +64,7 @@ def test_macro_settings_buttons_follow_enable_state(gui):
     gui.toggle_macros_enabled()
     assert all(button.instate(["!disabled"]) for button in gui.macro_settings_buttons)
     gui.tree.selection_set("alpha")
-    gui.macro_settings_buttons[1].invoke()
+    gui.macro_settings_buttons[2].invoke()  # 편집
     assert gui.editor is not None and gui.editor.old_name == "alpha"
     gui.editor.close()
     gui.hotkey_bindings()[gui.toggle_hotkey]()
@@ -1294,3 +1294,71 @@ def test_screen_action_closes_combobox_popdown(gui):
     t.call("ttk::combobox::Post", str(cb)); gui.root.update()   # 다음에 펼치면 새로 만들어진다
     assert t.call("wm", "state", popdown) == "normal"
     t.call("ttk::combobox::Unpost", str(cb))
+
+
+# ---- AI 로 만들기 ----
+class FakeAiProvider:
+    def __init__(self, answer):
+        self.answer = answer
+        self.cancelled = False
+
+    def generate(self, system, prompt, schema, images):
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+    def cancel(self):
+        self.cancelled = True
+
+
+def wait_for(g, cond, timeout=3.0):
+    end = time.time() + timeout
+    while time.time() < end and not cond():
+        pump(g, 1)
+    return cond()
+
+
+def test_ai_dialog_opens_unsaved_draft(gui):
+    answer = {"name": "alpha", "notes": "좌표를 확인하세요", "events": [
+        {"type": "tap", "key": "f", "delay_ms": 0}, {"type": "click", "x": 3, "y": 4, "delay_ms": 500}]}
+    gui.ai_provider_factory = lambda: FakeAiProvider(answer)
+    gui.on_ai_add()
+    assert gui.ai_dialog is None  # 실행 가능 상태에서는 무동작
+    gui.toggle_macros_enabled()
+    gui.on_ai_add()
+    dlg = gui.ai_dialog
+    dlg.on_generate()
+    assert "설명" in dlg.v_status.get()  # 빈 설명
+    dlg.text.insert("1.0", "f 누르고 클릭")
+    dlg.on_generate()
+    assert wait_for(gui, lambda: gui.editor is not None)
+    ed = gui.editor
+    assert gui.ai_dialog is None and ed.dirty and ed.old_name is None
+    assert ed.v_name.get() == "alpha 2"  # 이미 있는 이름은 피한다
+    assert [i["type"] for i in ed.items] == ["kdown", "kup", "mdown", "mup"]
+    assert wait_for(gui, lambda: "AI 메모: 좌표를 확인하세요" in logs(gui))
+    assert set(gui.app.library) == {"alpha", "beta"}  # 저장 전
+
+
+def test_ai_dialog_shows_error_and_keeps_text(gui):
+    gui.ai_provider_factory = lambda: FakeAiProvider(__import__("ai_gen").AiError("로그인이 필요합니다"))
+    gui.toggle_macros_enabled()
+    gui.on_ai_add()
+    dlg = gui.ai_dialog
+    dlg.text.insert("1.0", "아무거나")
+    dlg.on_generate()
+    assert wait_for(gui, lambda: not dlg.busy)
+    assert dlg.v_status.get() == "로그인이 필요합니다" and gui.editor is None
+    assert dlg.text.get("1.0", "end").strip() == "아무거나" and dlg.btn_go.instate(["!disabled"])
+    dlg.close()
+    assert gui.ai_dialog is None
+
+
+def test_ai_dialog_close_cancels_provider(gui):
+    provider = FakeAiProvider({"name": "a", "notes": "", "events": []})
+    gui.toggle_macros_enabled()
+    gui.on_ai_add()
+    dlg = gui.ai_dialog
+    dlg.provider = provider  # 생성 중
+    dlg.close()
+    assert provider.cancelled and gui.ai_dialog is None
