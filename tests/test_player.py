@@ -144,12 +144,16 @@ def test_approach_smooth_and_ends_at_target():
     assert steps[len(steps) // 2] > steps[0] and steps[len(steps) // 2] > steps[-1]  # 가감속
 
 
-def test_relative_mode_sends_deltas():
-    evs = [mv(0, 100, 100), mv(0.1, 110, 95), btn(0.2, "mdown", 110, 95), mv(0.3, 120, 95),
-           btn(0.4, "mup", 120, 95)]
-    p, be, clock, m = build(evs, mouse_mode="relative", pos_jitter=50)
-    p.run(m)
-    assert be.names() == [("rel", 10, -5), ("mdown", "left"), ("rel", 10, 0), ("mup", "left")]
+def test_move_is_always_absolute_and_old_mouse_mode_option_ignored():
+    """재생 방식은 이벤트 종류가 정한다: move=절대, rmove=상대. 예전 매크로의 mouse_mode 옵션은 무시."""
+    from player import options_from_dict
+    opts = options_from_dict({"mouse_mode": "relative", "approach": False})
+    assert not hasattr(opts, "mouse_mode")
+    evs = [mv(0, 100, 100), {"t": 0.1, "type": "rmove", "dx": 5, "dy": -3}, mv(0.2, 120, 95)]
+    clock = FakeClock()
+    be = FakeBackend(clock)
+    Player(be, opts, clock=clock, waiter=clock.wait).run(Macro(events=evs))
+    assert be.names() == [("abs", 100, 100), ("rel", 5, -3), ("abs", 120, 95)]
 
 
 def test_window_space_mapping():
@@ -189,10 +193,9 @@ def test_set_option():
     set_option(o, "speed", "1.5")
     set_option(o, "approach", "off")
     set_option(o, "window_title", "Elden Ring")
-    set_option(o, "mouse_mode", "relative")
-    assert (o.repeat, o.speed, o.approach, o.window_title, o.mouse_mode) == (0, 1.5, False, "Elden Ring", "relative")
+    assert (o.repeat, o.speed, o.approach, o.window_title) == (0, 1.5, False, "Elden Ring")
     for name, val in [("speed", "0"), ("time_jitter", "101"), ("nope", "1"),
-                      ("mouse_mode", "x"), ("approach", "maybe"), ("repeat", "abc")]:
+                      ("mouse_mode", "relative"), ("approach", "maybe"), ("repeat", "abc")]:
         with pytest.raises(ValueError):
             set_option(o, name, val)
 

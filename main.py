@@ -92,13 +92,13 @@ class App:
         self.log(f"■ 녹화 종료: 이벤트 {len(macro.events)}개, {macro.duration:.2f}초")
         return macro
 
-    def toggle_record(self) -> None:
-        """REPL 용: 녹화 결과를 현재 매크로로 둔다."""
+    def toggle_record(self, relative: bool = False) -> None:
+        """REPL 용: 녹화 결과를 현재 매크로로 둔다. relative: 마우스 이동을 Raw Input 이동량(rmove)으로 녹화."""
         if self.recording:
             self.macro = self.stop_record()
             self.macro_name = None
         else:
-            self.start_record(self.options.window_title, relative=self.options.mouse_mode == "relative")
+            self.start_record(self.options.window_title, relative=relative)
 
     # ---- 재생 ----
     def assets_dir(self, name: str | None) -> Path | None:
@@ -256,7 +256,7 @@ class App:
             if cmd in ("quit", "exit"):
                 return False
             elif cmd == "record":
-                self.toggle_record()
+                self.toggle_record(relative=args[:1] == ["relative"])
             elif cmd in ("play", "stop"):
                 if (cmd == "play") != self.playing:
                     self.toggle_play()

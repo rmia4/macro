@@ -28,7 +28,7 @@
 - **이미지 변수**: `set_image(name, template | capture=[x,y,w,h])`. 이미지 조건은 `template` 대신 `image_var`로 참조. `Vision.images`(이름 -> (캐시 키, 이미지))에 담기며 `set_image`/`capture_image`/`clear_images`(Player 가 회차마다). 캐시 키는 `@이름:모양:crc` 라 이미지가 바뀌면 `_forget`으로 옛 캐시 정리. 미지정 = 거짓. `vision.needs_vision`(화면 조건 또는 set_image)으로 재생 시 vision 생성, `templates_in`은 set_image 파일 포함.
 - **UI 이름**: 흐름·조건 항목은 while/await/if(else, if 끝)/break/const 로 표시(이벤트 타입 이름은 그대로).
 - **이벤트 타입**: move, rmove(dx,dy), mdown/mup/scroll(x,y 생략=현재 커서), kdown/kup, wait, repeat_*, wait_until, if_start/else/if_end, break_if, click_image, set_var(name, cond), set_image(name, template|capture), while_start/while_end. 새 타입 추가 시: profiles 검증 → player → editor_model(라벨·describe·depths·KIND_FIELDS) → gui(on_edit 라우팅) → 테스트.
-- **좌표**: 매크로별 `coord_space` screen/window(창 클라이언트 좌상단 기준). 조건 좌표도 동일.
+- **좌표**: 매크로별 `coord_space` screen/window(창 클라이언트 좌상단 기준). 조건 좌표도 동일. 절대/상대 이동은 **이벤트 종류만** 정한다(move=절대, rmove=상대). 재생 옵션 `mouse_mode`는 없앴고(예전 파일의 값은 무시), Raw Input 녹화 여부는 녹화 방식(기록 화면 체크·상대 이동의 이동 녹화·`record relative`)일 뿐 매크로 설정이 아니다.
 - **이미지 자산**: `macros/<이름>/*.png`. 기록 화면은 임시 폴더에서 작업하고 저장 시 `App.store(..., assets=)`로 반영. 이름변경/복제/삭제 시 폴더도 처리.
 - **안전**: 재생 중 예외·중단 시 `finally`에서 눌린 키/버튼 전부 해제. 조건 이미지 누락은 입력 보내기 전에 실패.
 

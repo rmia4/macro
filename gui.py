@@ -27,12 +27,11 @@ from settings import OVERLAY_POSITIONS, SETTINGS_PATH, Settings
 import vision
 from pathlib import Path
 
-# (옵션 이름, 라벨, 종류)  종류: entry | check | combo
+# (옵션 이름, 라벨, 종류)  종류: entry | check
 PLAY_FIELDS = [
     ("repeat", "반복 횟수 (0=무한)", "entry"),
     ("speed", "속도 배율", "entry"),
     ("loop_delay", "반복 간 대기(초)", "entry"),
-    ("mouse_mode", "마우스 모드", "combo"),
     ("time_jitter", "대기 시간 편차 ±%", "entry"),
     ("pos_jitter", "클릭 좌표 편차 ±px", "entry"),
     ("min_key_hold", "키 최소 유지(초)", "entry"),
@@ -630,6 +629,8 @@ class EditorWindow:
             self.v_opts[fname] = (tk.BooleanVar(self.top, value=value) if kind == "check"
                                   else tk.StringVar(self.top, value=str(value)))
         self.dirty = False
+        self.v_rec_relative = tk.BooleanVar(  # 상대 이동이 있는 매크로는 상대 이동 녹화로 시작
+            self.top, value=any(it["type"] in ("rmove", "relpath") for it in self.items))
         self._build()
         self.refresh_tree()
         for var in [self.v_name, self.v_hotkey, self.v_title, self.v_coord, *self.v_opts.values()]:
@@ -666,6 +667,9 @@ class EditorWindow:
         self.btn_rec.pack(side="left")
         self.btn_test = ttk.Button(bar, text="▶ 테스트 재생", command=self.test_play)
         self.btn_test.pack(side="left", padx=4)
+        # 녹화 방식일 뿐 매크로 설정이 아니다: 재생은 이벤트 종류(이동/상대 이동)를 따른다
+        ttk.Checkbutton(bar, text="상대 이동으로 녹화 (3D 시점, Raw Input)",
+                        variable=self.v_rec_relative).pack(side="left", padx=4)
 
         frame = ttk.Frame(left)
         frame.pack(fill="both", expand=True, pady=4)
@@ -728,15 +732,12 @@ class EditorWindow:
             var = self.v_opts[fname]
             if kind == "check":
                 w = ttk.Checkbutton(right, variable=var)
-            elif kind == "combo":
-                w = ttk.Combobox(right, textvariable=var, state="readonly",
-                                 values=("absolute", "relative"), width=10)
             else:
                 w = ttk.Entry(right, textvariable=var, width=10)
             w.grid(row=i, column=1, sticky="w", padx=6)
         ttk.Label(right, foreground="#666", wraplength=260, justify="left",
                   text="대상 창 제목을 넣으면 그 창이 앞에 있을 때만 입력을 보내고, 좌표를 창 기준으로 저장합니다. "
-                       "마우스 모드를 relative 로 두면 3D 시점 회전용으로 실제 마우스 이동량(Raw Input)을 녹화합니다. "
+                       "마우스 이동은 이벤트 종류(마우스 이동=절대 좌표, 마우스 상대 이동=이동량)대로 재생됩니다. "
                        f"녹화 종료는 {HOTKEY_RECORD.upper()} 키를 권장합니다 (버튼 클릭이 기록됨).").grid(
             row=len(PLAY_FIELDS) + 2, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
@@ -755,11 +756,6 @@ class EditorWindow:
     def _auto_coord(self) -> None:
         if not em.has_positional(self.items):
             self.v_coord.set(COORD_LABELS["window" if self.v_title.get().strip() else "screen"])
-
-    @property
-    def relative_mode(self) -> bool:
-        """마우스 모드가 relative 면 Raw Input 이동량으로 녹화한다."""
-        return self.v_opts["mouse_mode"].get() == "relative"
 
     @property
     def coord_space(self) -> str:
@@ -997,13 +993,16 @@ class EditorWindow:
         self._changed(select)
 
     # ---- 녹화 / 테스트 재생 ----
-    def start_move_record(self) -> None:
-        """마우스 이동만 기록하는 녹화. 끝나면 선택한 이벤트 뒤(없으면 끝)에 추가된다."""
+    def start_move_record(self, relative: bool = False) -> None:
+        """마우스 이동만 기록하는 녹화. 끝나면 선택한 이벤트 뒤(없으면 끝)에 추가된다.
+        relative: 마우스 상대 이동 추가에서 시작하면 Raw Input 이동량(rmove)으로 녹화."""
         if self.app.recording or self.gui.countdown_for("editor"):
             return
-        self.toggle_record(moves_only=True)
+        self.toggle_record(moves_only=True, relative=relative)
 
-    def toggle_record(self, immediate: bool = False, moves_only: bool = False) -> None:
+    def toggle_record(self, immediate: bool = False, moves_only: bool = False,
+                      relative: bool | None = None) -> None:
+        """relative: None 이면 '상대 이동으로 녹화' 체크를 따른다."""
         if self.gui.cancel_countdown():
             self._moves_only = False
             return
@@ -1034,7 +1033,8 @@ class EditorWindow:
             return
         ignore = self.gui.recording_ignore_keys(self._hotkey_value(strict=False))
         title, coord = self.v_title.get().strip(), self.coord_space
-        relative = self.relative_mode
+        if relative is None:
+            relative = self.v_rec_relative.get()
         self._moves_only = moves_only
 
         def start():
@@ -1325,8 +1325,9 @@ class EventDialog:
         return "break"
 
     def _on_record(self) -> None:
+        relative = self.kind == "rmove"  # 상대 이동 추가 -> 이동량 녹화, 마우스 이동 -> 좌표 녹화
         self.top.destroy()
-        self.record()
+        self.record(relative=relative)
 
     def _pick_later(self, n: int = 3) -> None:
         if n > 0:

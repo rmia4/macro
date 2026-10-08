@@ -629,7 +629,8 @@ def test_editor_relative_recording_flag(gui):
     gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
     gui.on_add()
     ed = gui.editor
-    ed.v_opts["mouse_mode"].set("relative")
+    assert "mouse_mode" not in ed.v_opts  # 매크로 설정이 아니라 녹화 방식 체크
+    ed.v_rec_relative.set(True)
     ed.toggle_record(immediate=True)
     pump(gui)
     assert FakeRecorder.last.relative and gui.app.recording_relative
@@ -1162,14 +1163,20 @@ def test_move_record_inserts_only_moves_after_selection(gui):
     assert not d.top.winfo_exists() and gui.app.recording
     pump(gui)
     assert "이동 녹화 중" in ed.banner.cget("text")
+    default_events = FakeRecorder.events
     FakeRecorder.events = [{"t": 0.1, "type": "move", "x": 1, "y": 2}, {"t": 0.2, "type": "kdown", "key": "a"},
                            {"t": 0.3, "type": "move", "x": 3, "y": 4}, {"t": 0.4, "type": "kup", "key": "a"}]
     try:
         ed.toggle_record()
     finally:
-        del FakeRecorder.events
+        FakeRecorder.events = default_events
     assert [i["type"] for i in ed.items] == ["kdown", "kup", "path", "kdown", "kup"]
     assert ed.items[2]["points"][-1][1:] == [3, 4] and not ed._moves_only
+    assert not FakeRecorder.last.relative  # 마우스 이동 -> 좌표 녹화
+    d = EventDialog(ed.top, em.ADD_KINDS, kind="rmove", record=ed.start_move_record)
+    d._on_record()
+    assert gui.app.recording and FakeRecorder.last.relative  # 마우스 상대 이동 -> 이동량 녹화
+    ed.toggle_record()
 
 
 def test_editor_add_buttons_limit_kinds(gui, monkeypatch):

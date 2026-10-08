@@ -26,7 +26,6 @@ class PlayOptions:
     approach_duration: float = 0.4
     min_key_hold: float = 0.04    # 키 최소 유지 시간(초)
     window_title: str = ""        # 비우면 포커스 제한 없음
-    mouse_mode: str = "absolute"  # absolute | relative
     scale_coords: bool = False    # 창 크기가 녹화 때와 다르면 좌표 비례 조정
     max_minutes: float = 0.0      # 최대 실행 시간(분). 0 = 제한 없음
     focus_poll: float = 0.1
@@ -53,8 +52,6 @@ def set_option(opts: PlayOptions, name: str, value: str) -> None:
         parsed = v in _TRUE
     elif typ == "str":
         parsed = "" if value in ("-", "none") else value
-        if name == "mouse_mode" and parsed not in ("absolute", "relative"):
-            raise ValueError("absolute 또는 relative")
     else:
         parsed = int(value) if typ == "int" else float(value)
         if name in _MIN and parsed < _MIN[name]:
@@ -110,7 +107,6 @@ class Player:
         self._win = (0, 0)
         self._scale = (1.0, 1.0)
         self._cursor: tuple[int, int] | None = None
-        self._last_rel: tuple[int, int] | None = None
         self._deadline: float | None = None
         self.loop_index = 0     # 진행 중인 루프 (1부터), GUI 표시용
         self.event_index = -1   # 마지막으로 전송한 이벤트 인덱스
@@ -181,12 +177,9 @@ class Player:
         lap_cum: dict[int, float] = {}                   # 동안 반복 -> 이번 회차 시작 시각(cum)
         first = next((e for e in events if "x" in e), None)
         self._roll_offset()
-        if o.mouse_mode == "relative":
-            self._last_rel = (first["x"], first["y"]) if first else None
-        else:
-            self._cursor = self.backend.cursor_pos()
-            if not self._approach(first):
-                return False
+        self._cursor = self.backend.cursor_pos()
+        if not self._approach(first):
+            return False
         self._origin = self._clock()
         cum = 0.0
         j = o.time_jitter / 100.0
@@ -352,7 +345,7 @@ class Player:
     # ---- 좌표 ----
     def _roll_offset(self) -> None:
         j = self.opt.pos_jitter
-        if j > 0 and self.opt.mouse_mode == "absolute":
+        if j > 0:
             self._offset = (round(self._rng.uniform(-j, j)), round(self._rng.uniform(-j, j)))
         else:
             self._offset = (0, 0)
@@ -362,15 +355,6 @@ class Player:
                 round(y * self._scale[1]) + self._win[1] + self._offset[1])
 
     def _goto(self, ev: dict) -> None:
-        if self.opt.mouse_mode == "relative":
-            if self._last_rel is None:
-                self._last_rel = (ev["x"], ev["y"])
-                return
-            dx, dy = ev["x"] - self._last_rel[0], ev["y"] - self._last_rel[1]
-            if dx or dy:
-                self.backend.mouse_move_rel(dx, dy)
-            self._last_rel = (ev["x"], ev["y"])
-            return
         p = self._map(ev["x"], ev["y"])
         if p != self._cursor:
             self.backend.mouse_move_abs(*p)
