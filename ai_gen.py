@@ -500,6 +500,7 @@ class _ApiProvider:
     label = ""
     default_model = ""
     key_url = ""
+    busy_hint = ""  # 503(서버 과부하) 때 덧붙일 안내
 
     def __init__(self, key: str = "", model: str = "", timeout: float = 120, image_timeout: float = 240,
                  urlopen=None) -> None:
@@ -566,6 +567,9 @@ class _ApiProvider:
                     f"잠시 후 다시 시도하세요. ({detail})")
         if code == 404:
             return f"{self.label} 모델 '{self.model}' 을 찾을 수 없습니다. AI 설정에서 모델을 확인하세요. ({detail})"
+        if code == 503:
+            return (f"{self.label} 서버가 지금 바빠 요청을 받지 못했습니다 (일시적). "
+                    f"잠시 후 다시 보내 보세요.{self.busy_hint} ({detail})")
         return f"{self.label} 오류 (HTTP {code}): {detail}"
 
 
@@ -601,6 +605,8 @@ class GeminiProvider(_ApiProvider):
     label = "Gemini"
     default_model = "gemini-flash-latest"
     key_url = "https://aistudio.google.com/apikey"
+    busy_hint = (" 무료 등급은 사용자가 많을 때 자주 생깁니다. 계속되면 AI 설정의 모델을 "
+                 "gemini-flash-lite-latest 로 바꿔 보세요.")
 
     def request(self, system, prompt, schema, images):
         parts = [{"inlineData": {"mimeType": "image/png", "data": b}} for b in images] + [{"text": prompt}]

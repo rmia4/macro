@@ -277,6 +277,7 @@ def http_error(code, message):
     (http_error(401, "invalid x-api-key"), "API 키가 맞지 않"),
     (http_error(429, "quota"), "사용 한도"),
     (http_error(404, "not found"), "모델 'gemini-x'"),
+    (http_error(503, "The model is overloaded"), "서버가 지금 바빠.*gemini-flash-lite-latest.*overloaded"),
     (http_error(500, "boom"), "HTTP 500.*boom"),
     (__import__("urllib.error").error.URLError(OSError("no route")), "인터넷 연결"),
     (TimeoutError(), "초 안에"),
