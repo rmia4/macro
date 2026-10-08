@@ -52,6 +52,10 @@ FLASH_SECONDS = 2.0
 COLORS = {"idle": "#555555", "rec": "#c62828", "play": "#2e7d32", "wait": "#ef6c00"}
 NO_HOTKEY = "(없음)"
 COORD_LABELS = {"screen": "화면 기준", "window": "창 기준"}
+# AI로 만들기 창·기록 화면 AI 대화가 같이 쓰는 안내
+AI_GUIDE = ("만들 동작을 문장으로 적으세요. 예) F 키 0.5초마다 10번\n"
+            f"📷 화면 캡처: 게임에서 {HOTKEY_CAPTURE.upper()} 한 장씩, {HOTKEY_RECORD.upper()} 끝. "
+            "예) 화면 2의 확인 버튼 클릭")
 
 
 class Gui:
@@ -2310,9 +2314,7 @@ class AiChatPanel:
         ttk.Label(bottom, textvariable=self.v_status, foreground="#a33", wraplength=200).pack(side="left")
         self.worker = AiWorker(self.gui, self.frame, self._on_result)
         self._update_shots()
-        self.add("AI", "지금 목록을 어떻게 바꿀지 적어 주세요. 예) 전체를 5번 반복, 클릭 사이 간격을 0.3초로, "
-                       "맨 앞에 화면 1의 시작 버튼이 보일 때까지 기다리기. 빈 목록이면 새로 만듭니다. "
-                       "결과는 바로 목록에 반영되고 ↶ 되돌리기로 취소할 수 있습니다.")
+        self.add("AI", AI_GUIDE + "\n지금 목록도 고칠 수 있고, ↶ 되돌리기로 취소합니다.")
 
     def add(self, who: str, text: str) -> None:
         self.log_box.configure(state="normal")
@@ -2427,10 +2429,7 @@ class AiPromptDialog:
         self.v_status = tk.StringVar(self.top)
         f = ttk.Frame(self.top, padding=10)
         f.pack(fill="both", expand=True)
-        ttk.Label(f, wraplength=520, text="만들 매크로를 문장으로 설명하세요. 예) F 키를 0.5초 간격으로 10번 누르고 "
-                  "(960, 540)을 우클릭. 화면을 캡처해 두면 AI 가 화면을 보고 좌표·색과 이미지 조건을 정합니다 "
-                  "(예: 화면 2의 확인 버튼이 보이면 클릭). 결과는 저장하지 않은 채 기록 화면에 열리니 확인 후 저장하세요."
-                  ).pack(anchor="w")
+        ttk.Label(f, wraplength=520, justify="left", text=AI_GUIDE + "\n결과는 저장 전 초안으로 열립니다.").pack(anchor="w")
         self.text = tk.Text(f, width=64, height=7, wrap="word")
         self.text.pack(fill="both", expand=True, pady=6)
 
@@ -2445,9 +2444,6 @@ class AiPromptDialog:
         btns.pack(side="left", fill="y")
         ttk.Button(btns, text="📷 화면 캡처 시작", command=self.start_capture).pack(fill="x")
         ttk.Button(btns, text="선택 삭제", command=self.on_delete_capture).pack(fill="x", pady=4)
-        ttk.Label(btns, foreground="#555", wraplength=170,
-                  text=f"창이 숨으면 게임에서 화면을 옮겨 가며 {HOTKEY_CAPTURE.upper()} 로 한 장씩, "
-                       f"{HOTKEY_RECORD.upper()} 로 끝").pack(anchor="w")
 
         row = ttk.Frame(f)
         row.pack(fill="x", pady=(6, 0))
