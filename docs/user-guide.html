@@ -139,6 +139,7 @@ details[open] summary { margin-bottom: 6px; }
     <li><a href="#edit">녹화한 내용 다듬기</a></li>
     <li><a href="#repeat">반복하기</a></li>
     <li><a href="#vision">화면을 보고 반응하기</a></li>
+    <li><a href="#ai">AI로 매크로 만들기</a></li>
     <li><a href="#settings">매크로 설정 항목</a></li>
     <li><a href="#keys">단축키 한눈에 보기</a></li>
     <li><a href="#faq">문제 해결 · 자주 묻는 질문</a></li>
@@ -159,7 +160,7 @@ details[open] summary { margin-bottom: 6px; }
   <div class="card"><h4>③ 재생</h4><p>게임 안에서 지정한 단축키를 누르면 기록한 그대로 다시 실행됩니다.</p></div>
 </div>
 <p>익숙해지면 "화면에 이 버튼이 보일 때까지 기다렸다가 누르기", "보스가 보이는 동안 계속 공격하기" 같은
-<b>화면을 보고 판단하는 매크로</b>도 만들 수 있습니다.</p>
+<b>화면을 보고 판단하는 매크로</b>도 만들 수 있습니다. 녹화 대신 <b>문장으로 설명</b>해 AI에게 매크로를 만들게 할 수도 있습니다(<a href="#ai">AI로 매크로 만들기</a>).</p>
 <div class="warn"><b>꼭 확인하세요</b>
 온라인 게임이나 <b>안티치트</b>가 있는 게임에서는 입력 자동화가 차단되거나 계정 제재를 받을 수 있습니다.
 이 도구는 싱글 플레이 게임용입니다. 사용 전에 게임의 이용 약관을 확인하세요.</div>
@@ -217,7 +218,7 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
       <div class="sel"><span>나무 베기</span><span>f6</span><span>∞</span><span>Stardew Valley</span></div>
       <div><span>제작 반복</span><span>ctrl+f1</span><span>50</span><span></span></div>
     </div>
-    <div class="row"><span class="btn">+ 추가</span><span class="btn">편집</span><span class="btn">복제</span><span class="btn">삭제</span><span class="btn">새로고침</span><span class="callout">6</span></div>
+    <div class="row"><span class="btn">+ 추가</span><span class="btn">✨ AI로 만들기</span><span class="btn">편집</span><span class="btn">복제</span><span class="btn">삭제</span><span class="btn">새로고침</span><span class="callout">6</span></div>
   </div>
 </div>
 <ul class="legend">
@@ -226,7 +227,7 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
   <li><span class="callout">3</span><span><b>버튼 시작 지연</b> — <span class="btn">▶ 재생</span>을 누른 뒤 실제로 시작하기까지의 초(기본 3초). 이 사이에 게임 창을 클릭해 앞으로 가져옵니다.</span></li>
   <li><span class="callout">4</span><span><b>매크로 실행 가능/불가</b> — 모든 매크로를 한꺼번에 켜고 끄는 스위치. 아래 설명을 꼭 읽어 주세요.</span></li>
   <li><span class="callout">5</span><span><b>상태 오버레이</b> — 재생·녹화 중일 때 화면 구석에 작은 반투명 표시줄을 띄울 위치(끄기도 가능).</span></li>
-  <li><span class="callout">6</span><span><b>매크로 관리</b> — 새로 만들기, 편집(목록 더블클릭도 가능), 복제, 삭제(<kbd>Delete</kbd> 키).</span></li>
+  <li><span class="callout">6</span><span><b>매크로 관리</b> — 새로 만들기, AI로 만들기(<a href="#ai">아래 장</a>), 편집(목록 더블클릭도 가능), 복제, 삭제(<kbd>Delete</kbd> 키).</span></li>
 </ul>
 <div class="warn"><b>"편집·추가 버튼이 안 눌려요!"</b>
 <b>매크로 실행 가능</b>(초록) 상태에서는 매크로를 만들거나 고칠 수 없게 버튼이 잠깁니다.
@@ -236,7 +237,8 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
 재생 중에 끄면 실행 중이던 매크로도 즉시 멈춥니다.</p>
 
 <h3>기록 화면 — 매크로 하나를 만들고 고치는 곳</h3>
-<p><span class="btn">+ 추가</span>나 <span class="btn">편집</span>을 누르면 열립니다. 왼쪽은 입력 목록, 오른쪽은 매크로 설정입니다.</p>
+<p><span class="btn">+ 추가</span>나 <span class="btn">편집</span>을 누르면 열립니다. 왼쪽은 입력 목록, 오른쪽은 매크로 설정입니다.
+오른쪽 위의 <span class="btn">⚙ 매크로 설정</span> / <span class="btn">✨ AI 대화</span>로 오른쪽 영역을 바꿀 수 있습니다.</p>
 <div class="mock" aria-label="기록 화면 모형">
   <div class="bar">기록 - 나무 베기</div>
   <div class="body">
@@ -438,6 +440,46 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
 </section>
 
 <!-- 9 -->
+<section id="ai">
+<h2>AI로 매크로 만들기</h2>
+<p>만들 동작을 문장으로 적으면 AI가 매크로 목록을 만들어 줍니다. 예: "F 키를 0.5초마다 10번 누르기".
+게임 화면을 캡처해 함께 보내면 "화면 2의 확인 버튼 클릭"처럼 화면 속 위치를 가리킬 수 있고, 필요하면 이미지 조건도 만들어 줍니다.</p>
+<div class="note"><b>먼저 AI 설정이 필요합니다</b>
+처음 한 번 <span class="btn">⚙ AI 설정</span>에서 쓸 서비스를 고르고 키를 넣으세요. 키는 이 PC의 <code>settings.json</code>에만 저장됩니다.</div>
+<div class="table-scroll"><table>
+  <tr><th>서비스</th><th>준비물</th><th>비용</th></tr>
+  <tr><td>Gemini API (무료 등급 가능) — 기본</td><td>Google AI Studio에서 받은 API 키(<span class="btn">키 발급 페이지 열기</span>)</td><td>무료 등급은 분당·하루 요청 수 제한이 있고, 보낸 내용(화면 캡처 포함)이 Google의 서비스 개선에 쓰일 수 있습니다.</td></tr>
+  <tr><td>Claude API (API 키, 종량제)</td><td>Anthropic Console에서 만든 API 키와 결제 수단</td><td>쓴 만큼 요금이 나갑니다(Pro·Max 구독과는 별개).</td></tr>
+  <tr><td>Claude Code (Pro·Max 구독)</td><td>설치하고 로그인한 Claude Code(<code>claude</code>)</td><td>구독 사용량이 쓰입니다. 실행 파일 칸을 비우면 PATH의 <code>claude</code>를 씁니다.</td></tr>
+</table></div>
+<p>모델 칸은 비워 두면 기본 모델을 씁니다.</p>
+
+<h3>새 매크로를 AI로 만들기</h3>
+<ol class="steps">
+  <li><strong>메인 화면에서 <span class="btn">✨ AI로 만들기</span></strong> 매크로 <b>실행 불가</b> 상태여야 눌립니다.</li>
+  <li><strong>만들 동작을 문장으로 적습니다</strong> 필요하면 <b>좌표 기준</b>과 <b>대상 창 제목</b>도 정합니다.</li>
+  <li><strong>(선택) <span class="btn">📷 화면 캡처 시작</span></strong>
+    MacroTool 창이 숨겨집니다. 게임 화면에서 <kbd>F7</kbd>을 누를 때마다 한 장씩 캡처되고(최대 8장), <kbd>F8</kbd>을 누르면 끝나고 창이 돌아옵니다.
+    캡처한 화면은 "화면 1", "화면 2"…로 가리켜 요청하세요. 필요 없는 화면은 <span class="btn">선택 삭제</span>.</li>
+  <li><strong><span class="btn">만들기</span></strong>
+    수십 초(화면이 있으면 1분 넘게) 걸릴 수 있습니다. 결과는 <b>저장 전 초안</b>으로 기록 화면에 열립니다.
+    <span class="btn">▶ 테스트 재생</span>으로 확인한 뒤 <span class="btn">저장</span>하세요.</li>
+</ol>
+
+<h3>기록 화면의 ✨ AI 대화로 고치기</h3>
+<p>기록 화면 오른쪽을 <span class="btn">✨ AI 대화</span>로 바꾸면 지금 목록을 AI와 대화하며 고칠 수 있습니다.
+예: "마지막 클릭 다음에 1초 기다리기 추가", "전체를 5번 반복하게". 이전 대화를 기억하므로 이어서 요청하면 됩니다.</p>
+<ul>
+  <li><span class="btn">보내기 (Ctrl+Enter)</span>로 요청합니다. AI가 고친 결과가 목록에 바로 반영되고, 마음에 안 들면 <span class="btn">↶ 되돌리기</span>로 취소합니다.</li>
+  <li><span class="btn">📷 화면 캡처</span>로 화면을 붙여 보낼 수 있습니다(<kbd>F7</kbd> 캡처 · <kbd>F8</kbd> 끝). <span class="btn">비우기</span>로 캡처를 지웁니다.</li>
+  <li><span class="btn">⚙</span>는 AI 설정을 엽니다. 녹화·재생 중에는 보낼 수 없습니다.</li>
+</ul>
+<div class="warn"><b>AI 결과는 꼭 확인하세요</b>
+AI가 만든 좌표·시간은 틀릴 수 있습니다. 저장 전에 목록을 훑어보고 테스트 재생으로 확인하세요.
+화면 캡처를 보내면 그 이미지가 선택한 AI 서비스로 전송됩니다.</div>
+</section>
+
+<!-- 10 -->
 <section id="settings">
 <h2>매크로 설정 항목</h2>
 <p>기록 화면 오른쪽 <b>매크로 설정</b>에 있는 값들입니다. 처음엔 <b>반복 횟수</b>와 <b>대상 창 제목</b>만 바꿔도 충분합니다.</p>
@@ -465,12 +507,13 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
 </details>
 </section>
 
-<!-- 10 -->
+<!-- 11 -->
 <section id="keys">
 <h2>단축키 한눈에 보기</h2>
 <div class="table-scroll"><table>
   <tr><th>키</th><th>동작</th></tr>
-  <tr><td><kbd>F8</kbd></td><td>녹화 시작/종료 (기록 화면이 열려 있을 때)</td></tr>
+  <tr><td><kbd>F7</kbd></td><td>AI 화면 캡처 중 한 장 캡처 (캡처 중일 때만)</td></tr>
+  <tr><td><kbd>F8</kbd></td><td>녹화 시작/종료 (기록 화면이 열려 있을 때) · AI 화면 캡처 끝</td></tr>
   <tr><td><kbd>F9</kbd></td><td>목록에서 선택한 매크로 재생/중지 · 테스트 재생 중지 · 이동 녹화 종료</td></tr>
   <tr><td><kbd>F10</kbd></td><td>프로그램 종료 (눌린 입력 모두 해제)</td></tr>
   <tr><td>매크로별 시작 핫키</td><td>그 매크로 재생/중지</td></tr>
@@ -484,7 +527,7 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
 조합 핫키는 <kbd>Ctrl</kbd>을 누른 채 <kbd>F1</kbd>을 누를 때 실행되고, <kbd>W</kbd>로 이동하는 중에 눌러도 동작합니다.</div>
 </section>
 
-<!-- 11 -->
+<!-- 12 -->
 <section id="faq">
 <h2>문제 해결 · 자주 묻는 질문</h2>
 <details open>
@@ -539,6 +582,15 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
   안내 문구를 보고 해당 부분을 고치세요. 변수·이미지 변수를 쓰는데 그것을 지정하는 <b>📌 const</b> · <b>🖼 이미지 변수</b> 줄이 없어도 저장되지 않습니다.</p>
 </details>
 <details>
+  <summary>AI로 만들기에서 오류가 나요</summary>
+  <ul>
+    <li><b>API 키가 맞지 않음</b>: <span class="btn">⚙ AI 설정</span>에서 키를 다시 확인하세요.</li>
+    <li><b>사용 한도를 넘음</b>: Gemini 무료 등급은 분당·하루 요청 수가 제한됩니다. 잠시 후 다시 시도하세요.</li>
+    <li><b>서버가 바쁨(일시적)</b>: 잠시 후 다시 보내세요. Gemini 무료 등급에서 계속되면 모델을 <code>gemini-flash-lite-latest</code>로 바꿔 보세요.</li>
+    <li><b>모델을 찾을 수 없음</b>: 모델 칸을 비워 기본 모델을 쓰세요.</li>
+  </ul>
+</details>
+<details>
   <summary>설정을 처음 상태로 돌리고 싶어요</summary>
   <p>프로그램을 끄고 MacroTool 폴더의 <code>settings.json</code>을 지우면 됩니다. 매크로(<code>macros</code> 폴더)는 그대로 남습니다.</p>
 </details>
@@ -548,7 +600,7 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
 </details>
 </section>
 
-<!-- 12 -->
+<!-- 13 -->
 <section id="cli">
 <h2>부록: 콘솔 모드</h2>
 <p>소스에서 <code>python main.py --cli</code>로 실행하면 화면 없이 명령어로 녹화·재생할 수 있습니다.
