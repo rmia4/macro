@@ -142,6 +142,7 @@ details[open] summary { margin-bottom: 6px; }
     <li><a href="#settings">매크로 설정 항목</a></li>
     <li><a href="#keys">단축키 한눈에 보기</a></li>
     <li><a href="#faq">문제 해결 · 자주 묻는 질문</a></li>
+    <li><a href="#cli">부록: 콘솔 모드</a></li>
   </ol>
 </nav>
 
@@ -241,7 +242,7 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
   <div class="body">
     <div class="row"><span class="label">이름</span><span class="btn">나무 베기</span> <span class="label">시작 핫키</span><span class="btn">f6</span><span class="btn">키 입력으로 지정</span><span style="margin-left:auto" class="btn">저장</span><span class="btn">닫기</span></div>
     <div class="row"><span class="pill" style="background:var(--idle);flex:1;text-align:center">대기</span></div>
-    <div class="row"><span class="btn">● 녹화 (F8)</span><span class="btn">▶ 테스트 재생</span></div>
+    <div class="row"><span class="btn">● 녹화 (F8)</span><span class="btn">▶ 테스트 재생</span><span class="label">☐ 상대 이동으로 녹화 (3D 시점, Raw Input)</span></div>
     <div class="grid events">
       <div><span>앞 지연(ms)</span><span>종류 · 내용</span></div>
       <div><span>0</span><span>마우스 이동 경로 (412,300)→(640,355)</span></div>
@@ -249,8 +250,9 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
       <div><span>800</span><span>키 입력 e</span></div>
     </div>
     <div class="row"><span class="label">추가:</span><span class="btn">키 입력</span><span class="btn">마우스</span><span class="btn">지연</span></div>
-    <div class="row"><span class="label">흐름:</span><span class="btn">🔁 반복문 추가</span></div>
-    <div class="row"><span class="label">조건:</span><span class="btn">🔍 조건 대기</span><span class="btn">❓ 조건 분기</span><span class="btn">🖱 이미지 클릭</span><span class="btn">⏹ 반복 탈출</span><span class="btn">📌 변수 저장</span></div>
+    <div class="row"><span class="label">흐름:</span><span class="btn">🔁 while</span><span class="btn">❓ if</span><span class="btn">⏹ break</span></div>
+    <div class="row"><span class="label">조건:</span><span class="btn">🔍 await</span><span class="btn">🖱 이미지 클릭</span></div>
+    <div class="row"><span class="label">변수:</span><span class="btn">📌 const</span><span class="btn">🖼 이미지 변수</span></div>
     <div class="row"><span class="btn">수정</span><span class="btn">삭제</span><span class="btn">▲ 위로</span><span class="btn">▼ 아래로</span><span class="btn">↶ 되돌리기</span><span class="btn">↷ 다시 실행</span></div>
   </div>
 </div>
@@ -341,12 +343,12 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
 <p>반복 방법은 두 가지가 있고, 함께 쓸 수도 있습니다.</p>
 <div class="cards">
   <div class="card"><h4>매크로 전체 반복</h4><p>매크로 설정의 <b>반복 횟수</b>. 목록 전체를 처음부터 끝까지 N번(<code>0</code> = 멈출 때까지 무한) 실행합니다. <b>반복 간 대기</b>로 회차 사이 쉬는 시간을 둘 수 있습니다.</p></div>
-  <div class="card"><h4>일부 구간만 반복</h4><p><span class="btn">🔁 반복문 추가</span>. 목록의 일부만 여러 번 돌립니다. 예: "준비 동작 1번 → 공격 10번 → 정리 1번".</p></div>
+  <div class="card"><h4>일부 구간만 반복</h4><p><b>흐름:</b> 줄의 <span class="btn">🔁 while</span>. 목록의 일부만 여러 번 돌립니다. 예: "준비 동작 1번 → 공격 10번 → 정리 1번".</p></div>
 </div>
 <h3>구간 반복 만드는 법</h3>
 <ol class="steps">
   <li><strong>반복할 줄들을 선택합니다</strong> 첫 줄을 클릭하고 <kbd>Shift</kbd>+마지막 줄 클릭.</li>
-  <li><strong><span class="btn">🔁 반복문 추가</span>를 누릅니다</strong> 조건은 <b>횟수</b>(기본)를 그대로 두고 반복 횟수를 적은 뒤 확인.</li>
+  <li><strong><span class="btn">🔁 while</span>을 누릅니다</strong> 조건은 <b>횟수</b>(기본)를 그대로 두고 반복 횟수를 적은 뒤 확인.</li>
   <li><strong>목록이 이렇게 바뀝니다</strong>
     <div class="mock events" style="margin:8px 0 0">
       <div><span>…</span><span>🔁 반복 시작 ×10</span></div>
@@ -356,14 +358,15 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
     </div>
     안쪽 줄은 <code>│</code>로 들여쓰기되어 보입니다. 반복 안에 또 반복을 넣을 수도 있습니다.</li>
 </ol>
-<p>시작이나 끝 줄 하나를 지우면 짝도 함께 지워지고, 안의 입력들은 그대로 남습니다. 아무것도 선택하지 않고 추가하면 끝에 빈 반복 구간이 생기며, 그 사이에 입력을 넣으면 됩니다.</p>
+<p>시작이나 끝 줄 하나를 지우면 짝도 함께 지워지고, 안의 입력들은 그대로 남습니다. 아무것도 선택하지 않고 추가하면 끝에 빈 반복 구간이 생기며, 그 사이에 입력을 넣으면 됩니다.
+<code>반복 시작</code> 줄을 수정하면 같은 창이 열려 횟수를 바꾸거나, 조건으로 바꿔 <b>동안 반복</b>(아래 장)으로 만들 수 있습니다.</p>
 </section>
 
 <!-- 8 -->
 <section id="vision">
 <h2>화면을 보고 반응하기</h2>
 <p>여기부터는 고급 기능입니다. 정해진 시간대로만 움직이는 매크로는 게임이 조금만 느려져도 어긋나는데,
-화면을 보고 판단하게 하면 훨씬 튼튼해집니다. 기록 화면의 <b>조건:</b> 줄 버튼들을 씁니다.</p>
+화면을 보고 판단하게 하면 훨씬 튼튼해집니다. 기록 화면의 <b>흐름:</b> · <b>조건:</b> · <b>변수:</b> 줄 버튼들을 씁니다.</p>
 
 <h3>화면 판정의 두 종류</h3>
 <div class="cards">
@@ -373,9 +376,9 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
 <p>둘 다 <b>반대로</b>를 체크하면 "아닐 때"가 됩니다(예: 로딩 화면이 <b>사라질 때</b>).
 설정 창의 <span class="btn">🔍 지금 찾아보기</span>를 누르면 지금 화면에서 바로 판정해 일치도를 보여 주니, 기준값을 정할 때 활용하세요.</p>
 
-<h3>🔍 조건 대기 — "~가 보일 때까지 기다리기"</h3>
+<h3>🔍 await — "~가 보일 때까지 기다리기"</h3>
 <ol class="steps">
-  <li><strong><span class="btn">🔍 조건 대기</span>를 누르고 <span class="btn">📷 화면에서 잘라내기</span></strong> 카운트다운 동안 게임 화면을 띄워 둡니다.</li>
+  <li><strong><span class="btn">🔍 await</span>를 누르고 <span class="btn">📷 화면에서 잘라내기</span></strong> 카운트다운 동안 게임 화면을 띄워 둡니다.</li>
   <li><strong>캡처된 화면에서 찾을 부분을 드래그</strong> 잘라낸 그림과, 그 주변의 <b>검색 영역</b>이 자동으로 채워집니다.</li>
   <li><strong>최대 대기 시간을 정합니다</strong> 0은 무제한. 시간이 지나도 안 보이면 <b>재생 중지</b>(기본) 또는 <b>계속 진행</b>을 고릅니다.</li>
 </ol>
@@ -385,29 +388,44 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
 <p>이미지가 화면에 나타날 때까지 기다렸다가, 찾은 위치의 가운데를 클릭합니다. 버튼 위치가 매번 조금씩 달라지는 게임에서 유용합니다.
 <b>보정 X, Y</b>로 클릭 지점을 살짝 옮길 수 있습니다.</p>
 
-<h3>📌 변수 — 판정에 이름 붙이기</h3>
-<p>"만약 ~라면", "~인 동안 반복", "~이면 반복 그만" 같은 <b>흐름 제어</b>에는 화면 판정을 직접 넣지 않고 <b>변수</b>를 거쳐서 씁니다.</p>
-<ol class="steps">
-  <li><strong><span class="btn">📌 변수 저장</span>으로 이름을 붙입니다</strong>
-    예: 변수 이름 <code>보스</code>, 조건 = 이미지 "보스 체력바가 보일 때". 이 줄은 판정을 하지 않고 "보스라는 이름은 이 판정"이라고 <b>정해만</b> 둡니다.
-    그래서 흐름 제어보다 <b>앞쪽</b>에 있어야 합니다.</li>
-  <li><strong>흐름 제어에서 변수를 고릅니다</strong>
-    변수가 쓰일 때마다 그 순간의 화면으로 다시 판정합니다. 여러 변수를 <b>모두 맞을 때(그리고)</b> / <b>하나라도 맞을 때(또는)</b>로 묶는 <b>여러 조건</b>도 고를 수 있습니다.</li>
-</ol>
+<h3>흐름 제어 — 만약 · 동안 반복 · 반복 탈출</h3>
+<p>"만약 ~라면", "~인 동안 반복", "~이면 반복 그만" 같은 흐름 제어는 <b>흐름:</b> 줄 버튼으로 넣습니다.
+조건 창에서 <b>이미지 / 범위 색 / 변수 / 여러 조건</b> 중 하나를 바로 고르면 됩니다.</p>
 <div class="table-scroll"><table>
   <tr><th>버튼</th><th>하는 일</th></tr>
-  <tr><td><span class="btn">❓ 조건 분기</span></td><td>선택한 줄들을 <b>만약 [조건]</b> ~ <b>분기 끝</b>으로 감쌉니다. 조건이 맞을 때만 실행. <b>'아니면' 구간도 만들기</b>를 체크하면 맞지 않을 때 실행할 구간도 생깁니다.</td></tr>
-  <tr><td><span class="btn">🔁 반복문 추가</span>에서 변수 선택</td><td><b>동안 반복</b>: 한 바퀴 돌기 전마다 조건을 확인해, 맞는 동안 계속 반복합니다.</td></tr>
-  <tr><td><span class="btn">⏹ 반복 탈출</span></td><td>조건이 맞으면 지금 돌고 있는 가장 안쪽 반복을 끝내고 다음으로 넘어갑니다. 반복 횟수 0(무한)과 함께 쓰면 "~가 보일 때까지 반복"이 됩니다.</td></tr>
+  <tr><td><span class="btn">❓ if</span></td><td>선택한 줄들을 <b>❓ if [조건]</b> ~ <b>❓ if 끝</b>으로 감쌉니다. 조건이 맞을 때만 실행. <b>'else' 구간도 만들기</b>를 체크하면 맞지 않을 때 실행할 <b>↪ else</b> 구간도 생깁니다.</td></tr>
+  <tr><td><span class="btn">🔁 while</span>에서 조건 선택</td><td><b>동안 반복</b>(<b>🔂 while</b> ~ <b>🔂 while 끝</b>): 한 바퀴 돌기 전마다 조건을 확인해, 맞는 동안 계속 반복합니다.</td></tr>
+  <tr><td><span class="btn">⏹ break</span></td><td>조건이 맞으면 지금 돌고 있는 가장 안쪽 반복을 끝내고 다음으로 넘어갑니다. 반복 횟수 0(무한)과 함께 쓰면 "~가 보일 때까지 반복"이 됩니다.</td></tr>
 </table></div>
+<p><b>여러 조건</b>을 고르면 조건(이미지/범위 색/변수)을 2개 이상 넣고 <b>모두 맞을 때(그리고)</b> 또는 <b>하나라도 맞을 때(또는)</b>로 묶습니다.</p>
+
+<h3>📌 const — 판정에 이름 붙이기</h3>
+<p>같은 화면 판정을 여러 곳에서 쓸 때는 <b>변수:</b> 줄의 <span class="btn">📌 const</span>로 이름을 붙여 두면 편합니다.</p>
+<ol class="steps">
+  <li><strong><span class="btn">📌 const</span>로 이름을 붙입니다</strong>
+    예: 변수 이름 <code>보스</code>, 조건 = 이미지 "보스 체력바가 보일 때". 이 줄은 판정을 하지 않고 "보스라는 이름은 이 판정"이라고 <b>정해만</b> 둡니다.
+    그래서 변수를 쓰는 줄보다 <b>앞쪽</b>에 있어야 합니다.</li>
+  <li><strong>조건에서 <b>변수</b>를 고릅니다</strong>
+    변수가 쓰일 때마다 그 순간의 화면으로 다시 판정합니다. 예를 들어 while의 조건에 쓰면 바퀴마다 화면을 다시 봅니다.</li>
+</ol>
+<p>변수 지정은 재생 회차마다 비워지고, 지정되기 전에 쓰이면 "아니다(거짓)"로 봅니다.</p>
+
+<h3>🖼 이미지 변수 — 그림에 이름 붙이기</h3>
+<p>이미지 조건과 이미지 클릭에서 <b>찾을 이미지: 이미지 변수</b>로 골라 쓰는 그림입니다. <b>변수:</b> 줄의 <span class="btn">🖼 이미지 변수</span>로 추가합니다.</p>
+<div class="cards">
+  <div class="card"><h4>잘라낸 이미지 (고정)</h4><p><span class="btn">📷 화면에서 잘라내기</span>로 자른 그림을 이름으로 담습니다. 같은 그림을 여러 곳에서 쓸 때, 그림을 바꾸려면 이 줄 하나만 고치면 됩니다.</p></div>
+  <div class="card"><h4>재생 중 화면 캡처</h4><p>재생 중 이 줄에 도달한 순간 지정한 영역을 캡처해 담습니다. 예: 시작할 때 화면 일부를 기억해 두고, 같은 영역에서 그 그림이 <b>반대로</b>(안 보이면) <b>⏹ break</b> → "화면이 바뀔 때까지 반복".</p></div>
+</div>
+<p>재생 중 캡처는 편집 화면에서 내용을 알 수 없어 <span class="btn">🔍 지금 찾아보기</span>에서는 "아니다"로 봅니다.
+한 가지 색으로만 된 그림은 찾을 수 없으니, 색만 볼 때는 범위 색 조건을 쓰세요.</p>
 
 <h3>예시: 보스가 보이는 동안 공격하기</h3>
 <div class="mock events" aria-label="예시 목록">
-  <div><span>0</span><span>📌 변수 저장: 보스 = 이미지 boss.png 보일 때</span></div>
-  <div><span>0</span><span>🔂 동안 반복 [보스]</span></div>
+  <div><span>0</span><span>📌 const: 보스 = 이미지 boss.png 보일 때</span></div>
+  <div><span>0</span><span>🔂 while [보스]</span></div>
   <div><span>200</span><span class="in">│ 키 입력 1  (공격 스킬)</span></div>
   <div><span>500</span><span class="in">│ 키 입력 2</span></div>
-  <div><span>0</span><span>🔂 동안 반복 끝</span></div>
+  <div><span>0</span><span>🔂 while 끝</span></div>
   <div><span>300</span><span>🖱 이미지 클릭: 보상받기.png</span></div>
 </div>
 <p>보스 체력바가 보이는 동안 1·2번 스킬을 번갈아 쓰고, 보스가 사라지면 반복을 빠져나와 "보상받기" 버튼을 찾아 누릅니다.</p>
@@ -430,7 +448,6 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
   <tr><td>반복 횟수 (0=무한)</td><td>1</td><td>매크로 전체를 몇 번 실행할지.</td></tr>
   <tr><td>속도 배율</td><td>1.0</td><td>2.0이면 두 배 빠르게, 0.5면 절반 속도로 재생.</td></tr>
   <tr><td>반복 간 대기(초)</td><td>0</td><td>전체 반복의 회차 사이에 쉬는 시간.</td></tr>
-  <tr><td>마우스 모드</td><td>absolute</td><td><b>absolute</b>: 화면 좌표로 이동(일반 게임·메뉴). <b>relative</b>: 실제 마우스 움직임 양을 기록(1인칭/3인칭 3D 게임의 시점 회전용).</td></tr>
   <tr><td>대기 시간 편차 ±%</td><td>0</td><td>매번 기다리는 시간을 조금씩 다르게 해서 기계적인 느낌을 줄입니다.</td></tr>
   <tr><td>클릭 좌표 편차 ±px</td><td>0</td><td>클릭 위치를 몇 픽셀씩 무작위로 흔듭니다.</td></tr>
   <tr><td>키 최소 유지(초)</td><td>0.04</td><td>키를 너무 짧게 눌러 게임이 못 알아듣는 것을 막습니다.</td></tr>
@@ -441,9 +458,10 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
 </table></div>
 <details>
   <summary>3D 게임에서 시점(카메라) 회전을 녹화하려면</summary>
-  <p>마우스 모드를 <code>relative</code>로 바꾸고 녹화하세요. 커서 위치 대신 마우스를 실제로 움직인 양을 기록하므로, 커서가 화면 중앙에 고정되는 게임에서도 시점 회전이 재현됩니다.
+  <p>기록 화면의 <b>상대 이동으로 녹화</b>를 체크하고 녹화하세요. 커서 위치 대신 마우스를 실제로 움직인 양을 기록하므로, 커서가 화면 중앙에 고정되는 게임에서도 시점 회전이 재현됩니다.
   게임 감도에 따라 회전 각도가 달라지면 이동 경로 줄을 수정해 <b>이동량 배율(%)</b>로 보정합니다.
-  Windows의 "포인터 정확도 향상" 설정도 결과에 영향을 줄 수 있습니다.</p>
+  Windows의 "포인터 정확도 향상" 설정도 결과에 영향을 줄 수 있습니다.
+  재생 방식은 설정이 아니라 줄의 종류가 정합니다: <b>마우스 이동</b>은 항상 화면 좌표, <b>마우스 상대 이동</b>은 항상 움직인 양입니다.</p>
 </details>
 </section>
 
@@ -495,7 +513,7 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
   <ul>
     <li><b>대상 창 제목</b>을 적어 좌표를 <b>창 기준</b>으로 녹화하면 게임 창을 옮겨도 맞습니다.</li>
     <li>게임 창 크기가 바뀌었다면 <b>창 크기에 맞춰 좌표 조정</b>을 켜세요.</li>
-    <li>3D 게임의 시점 회전이라면 마우스 모드를 <code>relative</code>로 녹화하세요.</li>
+    <li>3D 게임의 시점 회전이라면 <b>상대 이동으로 녹화</b>를 체크하고 녹화하세요.</li>
   </ul>
 </details>
 <details>
@@ -508,7 +526,7 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
   <p>채팅 전에 <kbd>Ctrl</kbd>+<kbd>F12</kbd>로 <b>실행 불가</b>로 바꾸세요. 그동안 매크로 키는 게임에 그대로 전달됩니다.</p>
 </details>
 <details>
-  <summary>조건 대기가 항상 "시간 초과"로 끝나요</summary>
+  <summary>await가 항상 "시간 초과"로 끝나요</summary>
   <ul>
     <li>조건 설정 창의 <span class="btn">🔍 지금 찾아보기</span>로 일치도를 확인하고, <b>일치도 기준</b>을 조금 낮춰 보세요(예: 85 → 75).</li>
     <li>잘라낸 이미지에 배경이 많이 들어갔거나 애니메이션되는 부분이 있으면 판정이 흔들립니다. 바뀌지 않는 부분만 작게 잘라내세요.</li>
@@ -518,7 +536,7 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
 <details>
   <summary>저장하려는데 오류가 나요</summary>
   <p>이름이 다른 매크로와 겹치거나, 시작 핫키가 다른 매크로와 겹치거나, <kbd>F8</kbd>~<kbd>F10</kbd>을 사용했거나, 녹화 내용에 핫키·제어 키가 들어 있으면 저장되지 않습니다.
-  안내 문구를 보고 해당 부분을 고치세요. 변수를 쓰는데 그 변수를 지정하는 <b>📌 변수 저장</b> 줄이 없어도 저장되지 않습니다.</p>
+  안내 문구를 보고 해당 부분을 고치세요. 변수·이미지 변수를 쓰는데 그것을 지정하는 <b>📌 const</b> · <b>🖼 이미지 변수</b> 줄이 없어도 저장되지 않습니다.</p>
 </details>
 <details>
   <summary>설정을 처음 상태로 돌리고 싶어요</summary>
@@ -528,6 +546,27 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
   <summary>매크로를 다른 PC로 옮기거나 백업하려면?</summary>
   <p>MacroTool 폴더 안의 <code>macros</code> 폴더를 통째로 복사하세요. 매크로 파일(<code>.json</code>)과 같은 이름의 이미지 폴더가 함께 있어야 합니다.</p>
 </details>
+</section>
+
+<!-- 12 -->
+<section id="cli">
+<h2>부록: 콘솔 모드</h2>
+<p>소스에서 <code>python main.py --cli</code>로 실행하면 화면 없이 명령어로 녹화·재생할 수 있습니다.
+권장 순서: <code>set window_title 게임 창 제목</code> → <kbd>F8</kbd> 녹화 → <kbd>F8</kbd> → <code>save 이름</code> → <kbd>F9</kbd> 재생.</p>
+<p>명령: <code>record</code>(<code>record relative</code>: 상대 이동 녹화) · <code>play</code> · <code>stop</code> · <code>save 이름</code> · <code>load 이름</code> · <code>delete 이름</code> · <code>list</code> · <code>set 옵션 값</code> · <code>show</code> · <code>quit</code></p>
+<div class="table-scroll"><table>
+  <tr><th>옵션</th><th>기본</th><th>설명</th></tr>
+  <tr><td><code>repeat</code></td><td>1</td><td>반복 횟수 (0 = 무한)</td></tr>
+  <tr><td><code>speed</code></td><td>1.0</td><td>속도 배율</td></tr>
+  <tr><td><code>loop_delay</code></td><td>0</td><td>반복 사이 대기(초)</td></tr>
+  <tr><td><code>time_jitter</code></td><td>0</td><td>대기 시간 ±% 편차</td></tr>
+  <tr><td><code>pos_jitter</code></td><td>0</td><td>클릭 좌표 ±px 편차 (한 번의 클릭/드래그 동안 같은 값)</td></tr>
+  <tr><td><code>approach</code> / <code>approach_duration</code></td><td>on / 0.4</td><td>회차 시작 시 첫 위치까지 부드럽게 이동</td></tr>
+  <tr><td><code>min_key_hold</code></td><td>0.04</td><td>키 최소 유지 시간(초)</td></tr>
+  <tr><td><code>window_title</code></td><td>(없음)</td><td>이 글자가 제목에 들어간 창이 앞에 있을 때만 입력 전송. 녹화 시 좌표를 창 기준으로 저장</td></tr>
+  <tr><td><code>scale_coords</code></td><td>off</td><td>창 크기가 녹화 때와 다르면 좌표를 비례 조정</td></tr>
+  <tr><td><code>max_minutes</code></td><td>0</td><td>최대 실행 시간(분, 0 = 제한 없음)</td></tr>
+</table></div>
 </section>
 
 </main>
