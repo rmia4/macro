@@ -31,7 +31,7 @@ for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8", errors="replace")
 
 NAME = "MacroTool"
-VERSION = "1.1.0"  # v1.2.3 태그로 빌드하면 태그 번호를 쓴다
+VERSION = "1.2.0"  # v1.2.3 태그로 빌드하면 태그 번호를 쓴다
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "dist" / f"{NAME}-windows"
 WORK = ROOT / "build"
