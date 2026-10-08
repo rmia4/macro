@@ -1341,6 +1341,22 @@ def test_ai_dialog_opens_unsaved_draft(gui):
     assert set(gui.app.library) == {"alpha", "beta"}  # 저장 전
 
 
+def test_ai_settings_dialog_saves_provider_and_key(gui):
+    import gui as gui_mod
+    dlg = gui_mod.AiSettingsDialog.open(gui, gui.root)
+    assert gui_mod.AiSettingsDialog.open(gui, gui.root) is dlg  # 하나만
+    assert dlg.v_provider.get() == "gemini"
+    assert dlg.pages["gemini"].winfo_manager() and not dlg.pages["anthropic"].winfo_manager()
+    dlg.v_provider.set("anthropic")
+    dlg._show()
+    assert dlg.pages["anthropic"].winfo_manager() and not dlg.pages["gemini"].winfo_manager()
+    dlg.vars["ai_anthropic_key"].set("  sk-test  ")
+    dlg.save()
+    assert gui.ai_settings_dialog is None
+    assert (gui.settings["ai_provider"], gui.settings["ai_anthropic_key"]) == ("anthropic", "sk-test")
+    assert isinstance(__import__("ai_gen").make_provider(gui.settings), __import__("ai_gen").AnthropicProvider)
+
+
 def test_ai_dialog_shows_error_and_keeps_text(gui):
     gui.ai_provider_factory = lambda: FakeAiProvider(__import__("ai_gen").AiError("로그인이 필요합니다"))
     gui.toggle_macros_enabled()

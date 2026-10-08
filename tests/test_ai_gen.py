@@ -191,6 +191,129 @@ def test_cli_cancel():
         p.generate("s", "p", {}, [])
 
 
+# ---- API 제공자 (Gemini / Claude API) ----
+class FakeResp:
+    def __init__(self, body):
+        self.body = body
+
+    def read(self):
+        return self.body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def fake_urlopen(answer, seen=None):
+    def urlopen(req, timeout=None):
+        if seen is not None:
+            seen.update(url=req.full_url, headers={k.lower(): v for k, v in req.header_items()},
+                        body=json.loads(req.data), timeout=timeout)
+        if isinstance(answer, Exception):
+            raise answer
+        return FakeResp(json.dumps(answer).encode() if isinstance(answer, dict) else answer)
+    return urlopen
+
+
+def gemini_answer(data, **cand):
+    return {"candidates": [{"content": {"parts": [{"text": "생각", "thought": True},
+                                                  {"text": json.dumps(data)}]}, **cand}]}
+
+
+def test_gemini_request_and_parse():
+    seen = {}
+    p = ai_gen.GeminiProvider(" KEY ", urlopen=fake_urlopen(gemini_answer(GOOD), seen))
+    assert p.generate("SYS", "설명", {"type": "object"}, [b"png"]) == GOOD
+    assert seen["url"].endswith(f"/models/{ai_gen.GeminiProvider.default_model}:generateContent")
+    assert seen["headers"]["x-goog-api-key"] == "KEY"
+    body = seen["body"]
+    assert body["systemInstruction"]["parts"][0]["text"] == "SYS"
+    parts = body["contents"][0]["parts"]
+    assert parts[0]["inlineData"] == {"mimeType": "image/png", "data": "cG5n"} and parts[1] == {"text": "설명"}
+    assert body["generationConfig"]["responseMimeType"] == "application/json"
+    assert seen["timeout"] == p.image_timeout
+    fenced = {"candidates": [{"content": {"parts": [{"text": "```json\n" + json.dumps(GOOD) + "\n```"}]}}]}
+    assert ai_gen.GeminiProvider("k", "gemini-x", urlopen=fake_urlopen(fenced)).generate("s", "p", {}, []) == GOOD
+
+
+def test_anthropic_request_and_parse():
+    seen = {}
+    answer = {"stop_reason": "tool_use", "content": [{"type": "text", "text": "..."},
+                                                     {"type": "tool_use", "name": "macro", "input": GOOD}]}
+    p = ai_gen.AnthropicProvider("KEY", "claude-x", urlopen=fake_urlopen(answer, seen))
+    assert p.generate("SYS", "설명", {"type": "object"}, [b"png"]) == GOOD
+    assert seen["url"] == "https://api.anthropic.com/v1/messages"
+    assert seen["headers"]["x-api-key"] == "KEY" and seen["headers"]["anthropic-version"]
+    body = seen["body"]
+    assert body["model"] == "claude-x" and body["system"] == "SYS"
+    assert body["tools"][0]["input_schema"] == {"type": "object"}
+    assert body["tool_choice"] == {"type": "tool", "name": "macro"}
+    content = body["messages"][0]["content"]
+    assert content[0]["source"]["data"] == "cG5n" and content[1] == {"type": "text", "text": "설명"}
+
+
+@pytest.mark.parametrize("answer, msg", [
+    (gemini_answer(GOOD, finishReason="MAX_TOKENS"), "잘렸습니다"),
+    ({"promptFeedback": {"blockReason": "SAFETY"}}, "SAFETY"),
+    ({"candidates": [{"content": {"parts": [{"text": "그냥 글"}]}}]}, "읽지 못했습니다"),
+    (b"<html>", "응답을 읽지 못했습니다"),
+])
+def test_gemini_bad_answers(answer, msg):
+    with pytest.raises(AiError, match=msg):
+        ai_gen.GeminiProvider("k", urlopen=fake_urlopen(answer)).generate("s", "p", {}, [])
+
+
+def http_error(code, message):
+    import io
+    import urllib.error
+    body = io.BytesIO(json.dumps({"error": {"message": message}}).encode())
+    return urllib.error.HTTPError("u", code, "x", {}, body)
+
+
+@pytest.mark.parametrize("err, msg", [
+    (http_error(400, "API key not valid"), "API 키가 맞지 않"),
+    (http_error(401, "invalid x-api-key"), "API 키가 맞지 않"),
+    (http_error(429, "quota"), "사용 한도"),
+    (http_error(404, "not found"), "모델 'gemini-x'"),
+    (http_error(500, "boom"), "HTTP 500.*boom"),
+    (__import__("urllib.error").error.URLError(OSError("no route")), "인터넷 연결"),
+    (TimeoutError(), "초 안에"),
+])
+def test_api_errors(err, msg):
+    with pytest.raises(AiError, match=msg):
+        ai_gen.GeminiProvider("k", "gemini-x", urlopen=fake_urlopen(err)).generate("s", "p", {}, [])
+
+
+def test_api_without_key_or_cancelled():
+    with pytest.raises(AiError, match="API 키가 없습니다.*aistudio"):
+        ai_gen.GeminiProvider("  ", urlopen=fake_urlopen(gemini_answer(GOOD))).generate("s", "p", {}, [])
+    p = ai_gen.AnthropicProvider("k", urlopen=fake_urlopen({"content": [{"type": "tool_use", "input": GOOD}]}))
+    p.cancel()
+    with pytest.raises(AiError, match="취소"):
+        p.generate("s", "p", {}, [])
+
+
+def test_make_provider_from_settings():
+    from settings import Settings
+    s = Settings(None)
+    assert isinstance(ai_gen.make_provider(s), ai_gen.GeminiProvider)  # 기본
+    s["ai_provider"], s["ai_anthropic_key"], s["ai_anthropic_model"] = "anthropic", "k", ""
+    p = ai_gen.make_provider(s)
+    assert isinstance(p, ai_gen.AnthropicProvider) and p.key == "k" and p.model == p.default_model
+    s["ai_provider"], s["ai_cli_path"] = "claude_cli", "c:/claude.exe"
+    assert ai_gen.make_provider(s).path == "c:/claude.exe"
+
+
+def test_generate_tells_api_providers_images_are_attached():
+    class Api(FakeProvider):
+        image_files = False
+    p = Api(GOOD)
+    generate_macro(GenRequest("a"), p)
+    assert "Read 도구" not in p.calls[0][0] and '"events"' in p.calls[0][0]
+
+
 # ---- 화면 캡처 ----
 np = pytest.importorskip("numpy")
 import vision  # noqa: E402

@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+import webbrowser
 from tkinter import messagebox, scrolledtext, ttk
 
 import ai_gen
@@ -75,9 +76,9 @@ class Gui:
         self.play_started: float | None = None
         self.editor: EditorWindow | None = None
         self.ai_dialog: AiPromptDialog | None = None
+        self.ai_settings_dialog: AiSettingsDialog | None = None
         self.capture_session: AiPromptDialog | None = None  # AI 화면 캡처 모드 (F7 캡처, F8 끝)
-        self.ai_provider_factory = lambda: ai_gen.ClaudeCliProvider(
-            self.settings["ai_cli_path"], self.settings["ai_model"])  # 테스트에서 주입
+        self.ai_provider_factory = lambda: ai_gen.make_provider(self.settings)  # 테스트에서 주입
         self.hotkey_listener: HotkeyListener | None = None
         app.log = self._logs.put
         self.delay = tk.StringVar(root, value=str(self.settings["start_delay"]))
@@ -2299,6 +2300,8 @@ class AiChatPanel:
         bottom.pack(fill="x", pady=(4, 0))
         self.btn_send = ttk.Button(bottom, text="보내기 (Ctrl+Enter)", command=self.send)
         self.btn_send.pack(side="right")
+        ttk.Button(bottom, text="⚙", width=3,
+                   command=lambda: AiSettingsDialog.open(self.gui, editor.top)).pack(side="right", padx=(0, 4))
         ttk.Label(bottom, textvariable=self.v_status, foreground="#a33", wraplength=200).pack(side="left")
         self.worker = AiWorker(self.gui, self.frame, self._on_result)
         self._update_shots()
@@ -2412,8 +2415,7 @@ class AiPromptDialog:
         f.pack(fill="both", expand=True)
         ttk.Label(f, wraplength=520, text="만들 매크로를 문장으로 설명하세요. 예) F 키를 0.5초 간격으로 10번 누르고 "
                   "(960, 540)을 우클릭. 화면을 캡처해 두면 AI 가 화면을 보고 좌표·색과 이미지 조건을 정합니다 "
-                  "(예: 화면 2의 확인 버튼이 보이면 클릭). 결과는 저장하지 않은 채 기록 화면에 열리니 확인 후 저장하세요. "
-                  "설치된 Claude Code 로 만들며 요금제 사용량이 쓰입니다."
+                  "(예: 화면 2의 확인 버튼이 보이면 클릭). 결과는 저장하지 않은 채 기록 화면에 열리니 확인 후 저장하세요."
                   ).pack(anchor="w")
         self.text = tk.Text(f, width=64, height=7, wrap="word")
         self.text.pack(fill="both", expand=True, pady=6)
@@ -2442,10 +2444,11 @@ class AiPromptDialog:
         ttk.Entry(row, textvariable=self.v_title, width=20).pack(side="left", padx=4)
         bottom = ttk.Frame(f)
         bottom.pack(fill="x", pady=(8, 0))
-        ttk.Label(bottom, textvariable=self.v_status, foreground="#a33", wraplength=360).pack(side="left")
+        ttk.Label(bottom, textvariable=self.v_status, foreground="#a33", wraplength=300).pack(side="left")
         ttk.Button(bottom, text="닫기", command=self.close).pack(side="right")
         self.btn_go = ttk.Button(bottom, text="만들기", command=self.on_generate)
         self.btn_go.pack(side="right", padx=4)
+        ttk.Button(bottom, text="⚙ AI 설정", command=lambda: AiSettingsDialog.open(gui, self.top)).pack(side="right")
         self.text.focus_set()
         center_on_parent(self.top, gui.root)
 
@@ -2654,6 +2657,99 @@ def restore_geometry(window, geometry: str) -> None:
         window.geometry(f"{w}x{h}+{x}+{y}")
     else:
         window.geometry(f"{w}x{h}")
+
+
+class AiSettingsDialog:
+    """AI 제공자·API 키·모델 설정. 저장하면 settings.json 에 쓴다 (키는 이 PC 에만, 평문)."""
+
+    # 제공자 -> (설정 키, 이름, 가리기) 칸, 안내, 키 발급 주소, 기본 모델
+    FIELDS = {
+        "gemini": ((("ai_gemini_key", "API 키", True), ("ai_gemini_model", "모델", False)),
+                   "Google AI Studio 에서 무료로 키를 받을 수 있습니다. 무료 등급은 분당·하루 요청 수가 제한되고, "
+                   "보낸 내용(화면 캡처 포함)이 Google 의 서비스 개선에 쓰일 수 있습니다.",
+                   ai_gen.GeminiProvider.key_url, ai_gen.GeminiProvider.default_model),
+        "anthropic": ((("ai_anthropic_key", "API 키", True), ("ai_anthropic_model", "모델", False)),
+                      "Anthropic Console 에서 키를 만들고 결제 수단을 등록하세요. 쓴 만큼 요금이 나갑니다 "
+                      "(Pro·Max 구독과는 별개).",
+                      ai_gen.AnthropicProvider.key_url, ai_gen.AnthropicProvider.default_model),
+        "claude_cli": ((("ai_cli_path", "실행 파일", False), ("ai_model", "모델", False)),
+                       "설치하고 로그인한 Claude Code(claude)를 실행합니다. Pro·Max 구독 사용량이 쓰입니다. "
+                       "실행 파일을 비우면 PATH 의 claude 를 씁니다.", "", "Claude Code 기본값"),
+    }
+
+    def __init__(self, gui: Gui, parent) -> None:
+        self.gui = gui
+        self.top = tk.Toplevel(parent)
+        self.top.withdraw()
+        self.top.title("AI 설정")
+        self.top.transient(parent)
+        self.top.resizable(False, False)
+        self.top.protocol("WM_DELETE_WINDOW", self.close)
+        self.v_provider = tk.StringVar(self.top, value=gui.settings["ai_provider"])
+        self.vars = {key: tk.StringVar(self.top, value=gui.settings[key])
+                     for fields, *_ in self.FIELDS.values() for key, _, _ in fields}
+        f = ttk.Frame(self.top, padding=12)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, text="AI 로 매크로를 만들 때 쓸 서비스").pack(anchor="w")
+        for value, text in ai_gen.PROVIDERS.items():
+            ttk.Radiobutton(f, text=text, value=value, variable=self.v_provider,
+                            command=self._show).pack(anchor="w", padx=(8, 0))
+        self.pages = {}
+        for kind, (fields, hint, url, default_model) in self.FIELDS.items():
+            page = ttk.LabelFrame(f, text=ai_gen.PROVIDERS[kind], padding=8)
+            ttk.Label(page, text=hint, wraplength=380, foreground="#555").grid(row=0, column=0, columnspan=3,
+                                                                              sticky="w", pady=(0, 6))
+            for row, (key, label, secret) in enumerate(fields, start=1):
+                ttk.Label(page, text=label).grid(row=row, column=0, sticky="w", pady=2)
+                entry = ttk.Entry(page, textvariable=self.vars[key], width=40, show="•" if secret else "")
+                entry.grid(row=row, column=1, sticky="we", padx=4, pady=2)
+                if secret:
+                    shown = tk.BooleanVar(self.top, value=False)
+                    ttk.Checkbutton(page, text="보기", variable=shown,
+                                    command=lambda e=entry, v=shown: e.configure(show="" if v.get() else "•")
+                                    ).grid(row=row, column=2, sticky="w")
+            ttk.Label(page, text=f"모델을 비우면 {default_model}", foreground="#555").grid(
+                row=len(fields) + 1, column=1, sticky="w", padx=4)
+            if url:
+                ttk.Button(page, text="키 발급 페이지 열기", command=lambda u=url: webbrowser.open(u)).grid(
+                    row=len(fields) + 2, column=1, sticky="w", padx=4, pady=(6, 0))
+            self.pages[kind] = page
+        btns = ttk.Frame(f)
+        btns.pack(fill="x", side="bottom", pady=(10, 0))
+        ttk.Button(btns, text="취소", command=self.close).pack(side="right")
+        ttk.Button(btns, text="저장", command=self.save).pack(side="right", padx=4)
+        self._show()
+        center_on_parent(self.top, parent)
+
+    def _show(self) -> None:
+        for kind, page in self.pages.items():
+            if kind == self.v_provider.get():
+                page.pack(fill="x", pady=(8, 0))
+            else:
+                page.pack_forget()
+
+    def save(self) -> None:
+        if self.v_provider.get() in ai_gen.PROVIDERS:
+            self.gui.settings["ai_provider"] = self.v_provider.get()
+        for key, var in self.vars.items():
+            self.gui.settings[key] = var.get().strip()
+        self.gui.settings.save()
+        self.close()
+
+    def close(self) -> None:
+        if self.gui.ai_settings_dialog is self:
+            self.gui.ai_settings_dialog = None
+        self.top.destroy()
+
+    @classmethod
+    def open(cls, gui: Gui, parent) -> "AiSettingsDialog":
+        """하나만 연다 (이미 열려 있으면 앞으로)."""
+        dlg = gui.ai_settings_dialog
+        if dlg is not None and dlg.top.winfo_exists():
+            dlg.top.lift()
+            return dlg
+        gui.ai_settings_dialog = cls(gui, parent)
+        return gui.ai_settings_dialog
 
 
 class HotkeyCaptureDialog:

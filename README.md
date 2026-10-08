@@ -170,7 +170,15 @@ pip install -r requirements-dev.txt && python -m pytest tests
 메인 화면의 `✨ AI로 만들기`에서 문장으로 설명하면(예: "F 키를 0.5초 간격으로 5번 누르고 화면 가운데를 우클릭,
 (100, 200)이 빨간색이 될 때까지 기다렸다가 스페이스") AI 가 이벤트를 만들어 기록 화면에 채워 연다.
 결과는 저장 전 상태이니 **반드시 확인·수정한 뒤 저장**한다. AI 가 가정한 좌표·색 등은 로그에 `AI 메모`로 표시된다.
-- 이 PC 에 설치·로그인된 **Claude Code**(`claude`)를 호출하므로 Claude 요금제 사용량이 쓰인다(API 키 불필요). 한 번에 10초 안팎.
+- **AI 서비스 고르기** (`⚙ AI 설정`, AI로 만들기 창 아래 / 기록 화면 AI 대화의 `⚙`):
+  | 서비스 | 필요한 것 | 비용 |
+  |---|---|---|
+  | **Gemini API** (기본) | [Google AI Studio](https://aistudio.google.com/apikey)에서 받은 API 키 | 무료 등급 가능(분당·하루 요청 수 제한, 무료 등급 입력은 Google 서비스 개선에 쓰일 수 있음) |
+  | Claude API | [Anthropic Console](https://console.anthropic.com/settings/keys) API 키 + 결제 수단 | 쓴 만큼(종량제) |
+  | Claude Code | 이 PC 에 설치·로그인된 `claude` (Pro·Max 등 구독) | 구독 사용량 |
+
+  키는 `settings.json`에 **평문으로** 저장되며 이 PC 밖으로는 해당 서비스에만 보낸다. 모델 칸을 비우면 기본 모델
+  (Gemini `gemini-flash-latest`, Claude `claude-sonnet-5-5`)을 쓴다. 한 번에 10초 안팎.
 - 만들 수 있는 것: 키 입력·마우스(클릭·이동·스크롤)·지연·반복·while·if/else·break·await·const·이미지 클릭,
   조건은 범위 색·변수·여러 조건·이미지(화면을 캡처했을 때). 이미지 변수는 아직 만들지 않는다.
 - **화면 캡처**: `📷 화면 캡처 시작` → 창이 숨으면 게임에서 화면을 옮겨 가며 **F7**로 한 장씩(최대 8장), **F8**로 끝.
@@ -179,7 +187,6 @@ pip install -r requirements-dev.txt && python -m pytest tests
   캡처 모드 동안 F7·F8 은 캡처용으로 쓰이며(F7 매크로 핫키·F8 녹화 대신), 키 입력은 게임에도 전달된다.
   화면이 있으면 한 번에 10초~1분 정도 걸린다.
 - 좌표 기준을 `창 기준`으로 고르고 대상 창 제목을 적으면 창 클라이언트 좌상단 기준 좌표로 만든다.
-- `settings.json`의 `ai_cli_path`(claude 실행 파일 경로, 비우면 PATH), `ai_model`(예: `sonnet`, 비우면 Claude Code 기본 모델)로 바꿀 수 있다.
 - 결과가 형식에 맞지 않으면 오류를 알려 주고 한 번 다시 요청한다.
 - **기록 화면의 AI 대화**: 기록 화면 오른쪽 위 `⚙ 매크로 설정` / `✨ AI 대화`로 오른쪽 영역을 바꾼다(마지막 선택 기억).
   AI 대화에서 "전체를 5번 반복", "클릭 간격을 0.3초로", "맨 앞에 화면 1의 시작 버튼이 보일 때까지 기다리기"처럼 요청하면

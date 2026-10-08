@@ -1,4 +1,5 @@
-"""자연어 -> 매크로 생성 (AI). 제공자는 주입한다(기본: 설치된 Claude Code CLI, 사용자의 요금제로 호출).
+"""자연어 -> 매크로 생성 (AI). 제공자는 주입한다: Gemini API(무료 등급 가능), Claude API(사용자 API 키),
+설치된 Claude Code CLI(요금제 사용량). 설정에서 고르고 make_provider 로 만든다.
 
 AI 는 편집 화면과 같은 dt 기반 단계(delay_ms = 직전으로부터 지연)를 내고, 여기서 절대 시각 t 로 바꿔
 profiles 검증기로 확인한다. 화면 캡처(Capture)를 함께 보내면 AI 는 캡처 이미지 픽셀 좌표에 "capture": n 을 붙여
@@ -7,6 +8,7 @@ profiles 검증기로 확인한다. 화면 캡처(Capture)를 함께 보내면 A
 """
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import shutil
@@ -122,7 +124,8 @@ def from_events(events: list[dict]) -> list[dict]:
 
 
 # ---- 프롬프트 ----
-def build_system_prompt(req: GenRequest) -> str:
+def build_system_prompt(req: GenRequest, image_files: bool = True) -> str:
+    """image_files: 화면을 작업 폴더 파일로 두고 Read 도구로 읽게 할지 (CLI). 아니면 요청에 바로 첨부된다."""
     w, h = req.screen
     if req.coord_space == "window":
         space = f"좌표는 대상 창('{req.window_title}') 클라이언트 영역 좌상단 기준 픽셀."
@@ -133,8 +136,10 @@ def build_system_prompt(req: GenRequest) -> str:
         shots = "\n".join(
             f"- 화면 {i + 1}: {image_name(i)} (이미지 {round(c.size[0] * c.scale)}x{round(c.size[1] * c.scale)})"
             + (f" — {c.label}" if c.label else "") for i, c in enumerate(req.captures))
+        where = ("작업 폴더에 있음). 답하기 전에 Read 도구로 모두 열어 본다" if image_files
+                 else "요청에 이 순서대로 첨부됨). 답하기 전에 모두 살펴본다")
         screens = f"""
-첨부 화면 (사용자가 게임에서 차례로 캡처한 화면, 작업 폴더에 있음). 답하기 전에 Read 도구로 모두 열어 본다:
+첨부 화면 (사용자가 게임에서 차례로 캡처한 화면, {where}:
 {shots}
 - 화면에서 본 위치를 쓸 때는 그 이미지의 픽셀 좌표로 적고 같은 객체에 "capture": 화면 번호 를 붙인다
   (클릭·이동의 x,y / 범위 색 조건의 x,y,w,h). 매크로 좌표로의 변환은 프로그램이 한다.
@@ -202,6 +207,8 @@ def build_system_prompt(req: GenRequest) -> str:
 - 변수 이름은 글자·숫자·_ 1~20자.
 - button: {" ".join(sorted(BUTTONS))}
 - key 이름 (이 목록만 사용): {key_names}
+
+출력: JSON 객체 하나 {{"name": 짧은 이름, "notes": 확인할 점(없으면 ""), "events": [단계, ...]}}
 """
 
 
@@ -375,7 +382,7 @@ def generate_macro(req: GenRequest, provider: Provider,
         raise AiError("만들 매크로를 설명해 주세요.")
     if len(req.captures) > MAX_CAPTURES:
         raise AiError(f"화면은 {MAX_CAPTURES}장까지 보낼 수 있습니다.")
-    system = build_system_prompt(req)
+    system = build_system_prompt(req, getattr(provider, "image_files", True))
     images = [capture_png(c) for c in req.captures]
     prompt = text
     for attempt in range(retries + 1):
@@ -393,6 +400,7 @@ def generate_macro(req: GenRequest, provider: Provider,
 class ClaudeCliProvider:
     """설치된 Claude Code 를 `claude -p` 로 호출한다 (로그인한 요금제 사용량에서 차감).
     화면 이미지는 임시 작업 폴더에 capture_n.png 로 두고 Read 도구로만 읽게 한다."""
+    image_files = True
 
     def __init__(self, path: str = "", model: str = "", timeout: float = 180, image_timeout: float = 300,
                  popen=subprocess.Popen) -> None:
@@ -482,3 +490,178 @@ def parse_envelope(out: str, err: str, code: int) -> dict:
         except ValueError:
             raise AiError("AI 응답에서 매크로를 읽지 못했습니다.") from None
     return data
+
+
+# ---- 제공자: HTTP API (사용자 API 키) ----
+class _ApiProvider:
+    """API 키로 직접 호출하는 제공자 공통: JSON POST, 오류를 한국어로. 이미지는 요청에 바로 첨부한다.
+    urlopen 은 테스트에서 주입. 취소는 응답을 버린다 (요청 자체는 timeout 까지 작업 스레드에 남는다)."""
+    image_files = False
+    label = ""
+    default_model = ""
+    key_url = ""
+
+    def __init__(self, key: str = "", model: str = "", timeout: float = 120, image_timeout: float = 240,
+                 urlopen=None) -> None:
+        self.key = key.strip()
+        self.model = model.strip() or self.default_model
+        self.timeout = timeout
+        self.image_timeout = image_timeout
+        self._urlopen = urlopen
+        self.cancelled = False
+
+    def generate(self, system: str, prompt: str, schema: dict, images: list[bytes]) -> dict:
+        if not self.key:
+            raise AiError(f"{self.label} API 키가 없습니다. AI 설정에서 키를 입력하세요 (발급: {self.key_url}).")
+        if self.cancelled:
+            raise AiError("취소했습니다.")
+        url, headers, body = self.request(system, prompt, schema, [base64.b64encode(b).decode() for b in images])
+        resp = self._post(url, headers, body, self.image_timeout if images else self.timeout)
+        if self.cancelled:
+            raise AiError("취소했습니다.")
+        return self.parse(resp)
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+    def request(self, system: str, prompt: str, schema: dict, images: list[str]) -> tuple[str, dict, dict]:
+        """-> (url, 헤더, 본문). images 는 base64 PNG."""
+        raise NotImplementedError
+
+    def parse(self, resp: dict) -> dict:
+        raise NotImplementedError
+
+    def _post(self, url: str, headers: dict, body: dict, timeout: float) -> dict:
+        import urllib.error
+        import urllib.request
+        urlopen = self._urlopen or urllib.request.urlopen
+        req = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                                     headers={"content-type": "application/json", **headers}, method="POST")
+        try:
+            with urlopen(req, timeout=timeout) as r:
+                raw = r.read()
+        except urllib.error.HTTPError as e:
+            raise AiError(self._http_error(e.code, _error_message(e.read()))) from None
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, TimeoutError):
+                raise AiError(f"AI 응답이 {int(timeout)}초 안에 오지 않았습니다.") from None
+            raise AiError(f"{self.label} 에 연결하지 못했습니다. 인터넷 연결을 확인하세요. ({e.reason})") from None
+        except TimeoutError:
+            raise AiError(f"AI 응답이 {int(timeout)}초 안에 오지 않았습니다.") from None
+        except OSError as e:
+            raise AiError(f"{self.label} 요청 실패: {e}") from None
+        try:
+            data = json.loads(raw.decode("utf-8", "replace"))
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            raise AiError(f"{self.label} 응답을 읽지 못했습니다.")
+        return data
+
+    def _http_error(self, code: int, detail: str) -> str:
+        if code in (401, 403) or "api key" in detail.lower():
+            return f"{self.label} API 키가 맞지 않거나 권한이 없습니다. AI 설정에서 확인하세요. ({detail})"
+        if code == 429:
+            return (f"{self.label} 사용 한도를 넘었습니다 (무료 등급은 분당·하루 요청 수 제한). "
+                    f"잠시 후 다시 시도하세요. ({detail})")
+        if code == 404:
+            return f"{self.label} 모델 '{self.model}' 을 찾을 수 없습니다. AI 설정에서 모델을 확인하세요. ({detail})"
+        return f"{self.label} 오류 (HTTP {code}): {detail}"
+
+
+def _error_message(raw: bytes) -> str:
+    """API 오류 본문 {"error": {"message": ...}} -> 메시지."""
+    text = raw.decode("utf-8", "replace")
+    try:
+        err = json.loads(text).get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return str(err["message"])[:300]
+    except (ValueError, AttributeError):
+        pass
+    return text.strip()[:300] or "내용 없음"
+
+
+def _json_text(text: str) -> dict:
+    """모델이 낸 JSON 글 -> 객체 (```json 울타리 허용)."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1].rsplit("```", 1)[0]
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise AiError("AI 응답에서 매크로를 읽지 못했습니다.")
+    return data
+
+
+class GeminiProvider(_ApiProvider):
+    """Google Gemini API (generateContent). AI Studio 에서 무료로 키를 받을 수 있다 (무료 등급은 요청 수 제한).
+    responseSchema 는 선언한 필드만 남겨 단계별 필드가 사라지므로 쓰지 않고 JSON 출력만 요구한다 (형식은 프롬프트·검증)."""
+    label = "Gemini"
+    default_model = "gemini-flash-latest"
+    key_url = "https://aistudio.google.com/apikey"
+
+    def request(self, system, prompt, schema, images):
+        parts = [{"inlineData": {"mimeType": "image/png", "data": b}} for b in images] + [{"text": prompt}]
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        body = {"systemInstruction": {"parts": [{"text": system}]},
+                "contents": [{"role": "user", "parts": parts}],
+                "generationConfig": {"responseMimeType": "application/json"}}
+        return url, {"x-goog-api-key": self.key}, body
+
+    def parse(self, resp):
+        cands = resp.get("candidates") or []
+        if not cands:
+            reason = (resp.get("promptFeedback") or {}).get("blockReason")
+            raise AiError(f"Gemini 가 답하지 않았습니다{f' ({reason})' if reason else ''}.")
+        cand = cands[0]
+        if cand.get("finishReason") == "MAX_TOKENS":
+            raise AiError("AI 답이 너무 길어 잘렸습니다. 요청을 나눠 보세요.")
+        parts = (cand.get("content") or {}).get("parts") or []
+        return _json_text("".join(p.get("text", "") for p in parts if isinstance(p, dict) and not p.get("thought")))
+
+
+class AnthropicProvider(_ApiProvider):
+    """Anthropic Messages API (Claude, API 키 종량제). 출력은 도구 하나를 강제해 그 입력으로 받는다."""
+    label = "Claude"
+    default_model = "claude-sonnet-5-5"
+    key_url = "https://console.anthropic.com/settings/keys"
+    max_tokens = 16000
+
+    def request(self, system, prompt, schema, images):
+        content = [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b}}
+                   for b in images] + [{"type": "text", "text": prompt}]
+        body = {"model": self.model, "max_tokens": self.max_tokens, "system": system,
+                "messages": [{"role": "user", "content": content}],
+                "tools": [{"name": "macro", "description": "만든 매크로를 낸다", "input_schema": schema}],
+                "tool_choice": {"type": "tool", "name": "macro"}}
+        headers = {"x-api-key": self.key, "anthropic-version": "2023-06-01"}
+        return "https://api.anthropic.com/v1/messages", headers, body
+
+    def parse(self, resp):
+        if resp.get("stop_reason") == "max_tokens":
+            raise AiError("AI 답이 너무 길어 잘렸습니다. 요청을 나눠 보세요.")
+        blocks = [b for b in resp.get("content") or [] if isinstance(b, dict)]
+        for b in blocks:
+            if b.get("type") == "tool_use" and isinstance(b.get("input"), dict):
+                return b["input"]
+        return _json_text("".join(b.get("text", "") for b in blocks))
+
+
+PROVIDERS = {  # 설정 값 -> 화면 이름
+    "gemini": "Gemini API (무료 등급 가능)",
+    "anthropic": "Claude API (API 키, 종량제)",
+    "claude_cli": "Claude Code (Pro·Max 구독)",
+}
+DEFAULT_PROVIDER = "gemini"
+
+
+def make_provider(cfg) -> Provider:
+    """설정(settings 의 ai_* 값) -> 제공자."""
+    kind = cfg["ai_provider"] if cfg["ai_provider"] in PROVIDERS else DEFAULT_PROVIDER
+    if kind == "gemini":
+        return GeminiProvider(cfg["ai_gemini_key"], cfg["ai_gemini_model"])
+    if kind == "anthropic":
+        return AnthropicProvider(cfg["ai_anthropic_key"], cfg["ai_anthropic_model"])
+    return ClaudeCliProvider(cfg["ai_cli_path"], cfg["ai_model"])
