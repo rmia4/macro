@@ -8,6 +8,7 @@ import keys
 HOTKEY_RECORD = "f8"
 HOTKEY_PLAY = "f9"
 HOTKEY_QUIT = "f10"
+HOTKEY_CAPTURE = "f7"  # AI 로 만들기의 화면 캡처 모드에서만 (끝은 HOTKEY_RECORD)
 CONTROL_KEYS = (HOTKEY_RECORD, HOTKEY_PLAY, HOTKEY_QUIT)  # 녹화에서 제외되는 키
 
 

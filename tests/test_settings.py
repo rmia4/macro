@@ -33,6 +33,15 @@ def test_broken_or_invalid_values_fall_back(tmp_path):
     assert Settings(path)["start_delay"] == DEFAULTS["start_delay"]
 
 
+def test_ai_provider_validated(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"ai_provider": "anthropic", "ai_anthropic_key": "k"}), encoding="utf-8")
+    s = Settings(path)
+    assert (s["ai_provider"], s["ai_anthropic_key"]) == ("anthropic", "k")
+    path.write_text(json.dumps({"ai_provider": "openai"}), encoding="utf-8")
+    assert Settings(path)["ai_provider"] == DEFAULTS["ai_provider"] == "gemini"
+
+
 def test_overlay_position_validated(tmp_path):
     path = tmp_path / "settings.json"
     path.write_text(json.dumps({"overlay_position": "sw"}), encoding="utf-8")

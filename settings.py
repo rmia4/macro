@@ -10,7 +10,9 @@ from paths import app_dir
 
 SETTINGS_PATH = app_dir() / "settings.json"
 
+EDITOR_PANELS = ("settings", "ai")
 OVERLAY_POSITIONS = ("off", "nw", "n", "ne", "w", "e", "sw", "s", "se")
+AI_PROVIDERS = ("gemini", "anthropic", "claude_cli")
 
 DEFAULTS = {
     "macros_enabled": True,        # 전체 매크로 실행 가능 여부
@@ -19,6 +21,14 @@ DEFAULTS = {
     "overlay_position": "ne",      # 상태 오버레이 위치 (OVERLAY_POSITIONS) 또는 "off"
     "main_geometry": "",           # 창 크기/위치 ("760x520+100+80")
     "editor_geometry": "",
+    "editor_panel": "settings",    # 기록 화면 오른쪽: "settings"(매크로 설정) | "ai"(AI 대화)
+    "ai_provider": "gemini",       # AI 제공자: gemini | anthropic | claude_cli (AI_PROVIDERS)
+    "ai_gemini_key": "",           # Gemini API 키 (AI Studio, 무료 등급 가능)
+    "ai_gemini_model": "",         # 비면 ai_gen.GeminiProvider.default_model
+    "ai_anthropic_key": "",        # Claude API 키 (Anthropic Console)
+    "ai_anthropic_model": "",      # 비면 ai_gen.AnthropicProvider.default_model
+    "ai_cli_path": "",             # Claude Code 실행 파일 (비면 PATH 의 claude)
+    "ai_model": "",                # Claude Code 모델 (비면 Claude Code 기본 모델)
 }
 
 
@@ -54,8 +64,12 @@ class Settings:
         except ValueError:
             self.data["toggle_hotkey"] = DEFAULTS["toggle_hotkey"]
         self.data["start_delay"] = min(max(self.data["start_delay"], 0), 30)
+        if self.data["editor_panel"] not in EDITOR_PANELS:
+            self.data["editor_panel"] = DEFAULTS["editor_panel"]
         if self.data["overlay_position"] not in OVERLAY_POSITIONS:
             self.data["overlay_position"] = DEFAULTS["overlay_position"]
+        if self.data["ai_provider"] not in AI_PROVIDERS:
+            self.data["ai_provider"] = DEFAULTS["ai_provider"]
 
     def save(self) -> bool:
         if not self.path:

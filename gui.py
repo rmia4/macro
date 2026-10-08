@@ -11,14 +11,17 @@ import queue
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import tkinter as tk
+import webbrowser
 from tkinter import messagebox, scrolledtext, ttk
 
+import ai_gen
 import editor_model as em
 import input_backend
 import keys
-from hotkeys import CONTROL_KEYS, HOTKEY_PLAY, HOTKEY_QUIT, HOTKEY_RECORD, HotkeyListener
+from hotkeys import CONTROL_KEYS, HOTKEY_CAPTURE, HOTKEY_PLAY, HOTKEY_QUIT, HOTKEY_RECORD, HotkeyListener
 from main import App
 from paths import resource_path
 from player import PlayOptions, options_from_dict, options_to_dict, set_option
@@ -48,6 +51,10 @@ FLASH_SECONDS = 2.0
 COLORS = {"idle": "#555555", "rec": "#c62828", "play": "#2e7d32", "wait": "#ef6c00"}
 NO_HOTKEY = "(없음)"
 COORD_LABELS = {"screen": "화면 기준", "window": "창 기준"}
+# AI로 만들기 창·기록 화면 AI 대화가 같이 쓰는 안내
+AI_GUIDE = ("만들 동작을 문장으로 적으세요. 예) F 키 0.5초마다 10번\n"
+            f"📷 화면 캡처: 게임에서 {HOTKEY_CAPTURE.upper()} 한 장씩, {HOTKEY_RECORD.upper()} 끝. "
+            "예) 화면 2의 확인 버튼 클릭")
 
 
 class Gui:
@@ -71,6 +78,10 @@ class Gui:
         self._closed = False
         self.play_started: float | None = None
         self.editor: EditorWindow | None = None
+        self.ai_dialog: AiPromptDialog | None = None
+        self.ai_settings_dialog: AiSettingsDialog | None = None
+        self.capture_session: AiPromptDialog | None = None  # AI 화면 캡처 모드 (F7 캡처, F8 끝)
+        self.ai_provider_factory = lambda: ai_gen.make_provider(self.settings)  # 테스트에서 주입
         self.hotkey_listener: HotkeyListener | None = None
         app.log = self._logs.put
         self.delay = tk.StringVar(root, value=str(self.settings["start_delay"]))
@@ -139,7 +150,7 @@ class Gui:
         row = ttk.Frame(box)
         row.pack(fill="x", pady=(6, 0))
         self.macro_settings_buttons = []
-        for text, cmd in (("+ 추가", self.on_add), ("편집", self.on_edit), ("복제", self.on_duplicate),
+        for text, cmd in (("+ 추가", self.on_add), ("✨ AI로 만들기", self.on_ai_add), ("편집", self.on_edit), ("복제", self.on_duplicate),
                           ("삭제", self.on_delete), ("새로고침", self.reload)):
             button = ttk.Button(row, text=text, command=cmd)
             button.pack(side="left", padx=(0, 4))
@@ -276,12 +287,36 @@ class Gui:
             self.app.stop_play()
 
     # ---- 추가 / 편집 / 복제 / 삭제 ----
-    def open_editor(self, name: str | None) -> None:
+    def open_editor(self, name: str | None, draft: Macro | None = None, draft_name: str | None = None) -> None:
         if self.editor is not None:
             self.editor.show()
             self.log("기록 화면이 이미 열려 있습니다. 먼저 닫아 주세요.")
             return
-        self.editor = EditorWindow(self, name)
+        self.editor = EditorWindow(self, name, draft=draft, draft_name=draft_name)
+
+    def on_ai_add(self) -> None:
+        if self.macros_enabled:
+            return
+        if self.ai_dialog is not None:
+            self.ai_dialog.top.lift()
+            return
+        self.ai_dialog = AiPromptDialog(self)
+
+    def open_ai_draft(self, name: str, macro: Macro, notes: str, assets: dict[str, bytes] | None = None,
+                      text: str = "", shots: int = 0) -> None:
+        """AI 가 만든 매크로(+ 잘라낸 이미지)를 저장하지 않은 채 기록 화면에 열고,
+        요청(text)과 AI 메모를 기록 화면의 AI 대화에 남긴다 (이어서 고칠 때 맥락이 된다)."""
+        if self.editor is not None:
+            self.editor.show()
+            self.log("기록 화면이 이미 열려 있습니다. 먼저 닫아 주세요.")
+            return
+        self.editor = EditorWindow(self, None, draft=macro, draft_name=em.unique_name(name, self.app.library),
+                                   draft_assets=assets)
+        panel = self.editor.ai_panel
+        self.editor.show_panel("ai")
+        if text:
+            panel.add("나", panel.with_shots(text, shots))
+        panel.reply(text, notes or "만들었습니다.", len(self.editor.items), len(assets or {}), "저장 전 초안")
 
     def on_add(self) -> None:
         if self.macros_enabled:
@@ -486,6 +521,9 @@ class Gui:
         bindings[HOTKEY_RECORD] = post(self._hotkey_record)
         bindings[HOTKEY_PLAY] = post(lambda: self.on_play(True))
         bindings[HOTKEY_QUIT] = post(self.close)
+        if self.capture_session is not None:  # 캡처 모드: F7 한 장, F8 끝 (녹화 대신)
+            bindings[HOTKEY_CAPTURE] = post(self.capture_session.capture_one)
+            bindings[HOTKEY_RECORD] = post(self.capture_session.finish_capture)
         return bindings
 
     def hotkey_suppressed(self, name: str) -> bool:
@@ -593,10 +631,11 @@ class Gui:
 class EditorWindow:
     """기록 화면: 녹화, 이벤트 목록 편집, 이벤트 추가, 매크로 설정."""
 
-    def __init__(self, gui: Gui, name: str | None = None) -> None:
+    def __init__(self, gui: Gui, name: str | None = None, draft: Macro | None = None,
+                 draft_name: str | None = None, draft_assets: dict[str, bytes] | None = None) -> None:
         self.gui, self.app = gui, gui.app
-        macro = self.app.library.get(name) if name else None
-        self.old_name = name if macro else None
+        macro = draft or (self.app.library.get(name) if name else None)
+        self.old_name = name if macro and not draft else None
         self.items: list[dict] = em.to_items(macro.events) if macro else []
         self.screen = dict(macro.screen) if macro else None
         self.window = dict(macro.window) if macro and macro.window else None
@@ -606,6 +645,8 @@ class EditorWindow:
         if self.old_name:
             for fname, src in self.app.asset_files(self.old_name).items():
                 shutil.copyfile(src, self.assets_dir / fname)
+        for fname, png in (draft_assets or {}).items():  # AI 가 잘라낸 이미지
+            (self.assets_dir / fname).write_bytes(png)
 
         self.top = tk.Toplevel(gui.root)
         self.top.minsize(900, 560)
@@ -618,7 +659,7 @@ class EditorWindow:
         self._moves_only = False  # 이동 녹화 중 (마우스 이동만 선택 위치 뒤에 추가)
         self._redo: list[list[dict]] = []
         self.top.protocol("WM_DELETE_WINDOW", self.close)
-        self.v_name = tk.StringVar(self.top, value=name or em.unique_name("새 매크로", self.app.library))
+        self.v_name = tk.StringVar(self.top, value=draft_name or name or em.unique_name("새 매크로", self.app.library))
         self.v_hotkey = tk.StringVar(self.top, value=macro.hotkey if macro and macro.hotkey else NO_HOTKEY)
         self.v_title = tk.StringVar(self.top, value=opts.window_title)
         coord = macro.coord_space if macro else ("window" if opts.window_title else "screen")
@@ -628,7 +669,7 @@ class EditorWindow:
             value = getattr(opts, fname)
             self.v_opts[fname] = (tk.BooleanVar(self.top, value=value) if kind == "check"
                                   else tk.StringVar(self.top, value=str(value)))
-        self.dirty = False
+        self.dirty = draft is not None  # AI 초안은 저장 전 상태
         self.v_rec_relative = tk.BooleanVar(  # 상대 이동이 있는 매크로는 상대 이동 녹화로 시작
             self.top, value=any(it["type"] in ("rmove", "relpath") for it in self.items))
         self._build()
@@ -718,9 +759,18 @@ class EditorWindow:
         self.summary = ttk.Label(left, foreground="#444")
         self.summary.pack(anchor="e", pady=(4, 0))
 
-        right = ttk.LabelFrame(body, text="매크로 설정", padding=6)
-        right.pack(side="right", fill="y")
+        side = ttk.Frame(body)  # 오른쪽: 매크로 설정 <-> AI 대화 전환
+        side.pack(side="right", fill="y")
         left.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        switch = ttk.Frame(side)
+        switch.pack(fill="x", pady=(0, 4))
+        self.v_panel = tk.StringVar(self.top, value=self.gui.settings["editor_panel"])
+        for value, text in (("settings", "⚙ 매크로 설정"), ("ai", "✨ AI 대화")):
+            ttk.Radiobutton(switch, text=text, value=value, variable=self.v_panel, style="Toolbutton",
+                            command=self.show_panel).pack(side="left", padx=(0, 2))
+        right = self.settings_panel = ttk.LabelFrame(side, text="매크로 설정", padding=6)
+        self.ai_panel = AiChatPanel(self, side)
+        self.show_panel()
         ttk.Label(right, text="대상 창 제목").grid(row=0, column=0, sticky="w", pady=2)
         ttk.Entry(right, textvariable=self.v_title, width=18).grid(row=0, column=1, sticky="w", padx=6)
         ttk.Label(right, text="좌표 기준").grid(row=1, column=0, sticky="w", pady=2)
@@ -740,6 +790,29 @@ class EditorWindow:
                        "마우스 이동은 이벤트 종류(마우스 이동=절대 좌표, 마우스 상대 이동=이동량)대로 재생됩니다. "
                        f"녹화 종료는 {HOTKEY_RECORD.upper()} 키를 권장합니다 (버튼 클릭이 기록됨).").grid(
             row=len(PLAY_FIELDS) + 2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+    def show_panel(self, mode: str | None = None) -> None:
+        """오른쪽 영역을 매크로 설정(settings) 또는 AI 대화(ai)로 바꾼다."""
+        if mode is not None:
+            self.v_panel.set(mode)
+        mode = self.v_panel.get()
+        shown, hidden = ((self.ai_panel.frame, self.settings_panel) if mode == "ai"
+                         else (self.settings_panel, self.ai_panel.frame))
+        hidden.pack_forget()
+        shown.pack(fill="both", expand=True)
+        self.gui.settings["editor_panel"] = mode
+
+    def apply_ai(self, macro: Macro, assets: dict[str, bytes], name: str = "") -> int:
+        """AI 가 고친 매크로로 목록을 바꾼다 (되돌리기 가능). 바뀐 항목 수를 돌려준다."""
+        was_empty = not self.items
+        for fname, png in assets.items():
+            (self.assets_dir / fname).write_bytes(png)
+        self._snapshot()
+        self.items = em.to_items(macro.events)
+        if was_empty and name and self.old_name is None and self.v_name.get().startswith("새 매크로"):
+            self.v_name.set(em.unique_name(name, self.app.library))
+        self._changed([])
+        return len(self.items)
 
     # ---- 상태 ----
     def show(self) -> None:
@@ -1151,6 +1224,7 @@ class EditorWindow:
         return True
 
     def _destroy(self) -> None:
+        self.ai_panel.close()
         if self.gui.countdown_for("editor"):
             self.gui.cancel_countdown()
         self.gui.settings["editor_geometry"] = self.top.geometry()
@@ -2110,6 +2184,393 @@ def overlay_xy(position: str, screen_w: int, screen_h: int, w: int, h: int, marg
     return x, y
 
 
+class CaptureSession:
+    """AI 화면 캡처 모드: windows 를 숨기고, 게임에서 F7 을 누를 때마다 captures 에 한 장 추가, F8 로 끝.
+    origin() 은 매크로 좌표 원점(화면 좌표)을 돌려주고, 못 정하면 ValueError (그 장은 건너뛴다)."""
+
+    def __init__(self, gui: Gui, windows, captures: list, origin, on_done) -> None:
+        self.gui, self.captures, self.origin, self.on_done = gui, captures, origin, on_done
+        self.hidden = []
+        for w in dict.fromkeys(windows):
+            if w is not None and w.winfo_exists() and w.winfo_viewable():
+                if w.grab_current() is w:
+                    w.grab_release()
+                close_popdowns(w)
+                w.withdraw()
+                self.hidden.append(w)
+        gui.capture_session = self
+        gui.sync_hotkeys()
+        self._notice()
+
+    def _notice(self, prefix: str = "") -> None:
+        self.gui.notice(f"{prefix}캡처 {len(self.captures)}장 · {HOTKEY_CAPTURE.upper()} 캡처 · "
+                        f"{HOTKEY_RECORD.upper()} 끝", 3600)
+
+    def capture_one(self) -> None:
+        """F7: 지금 화면을 한 장 추가한다 (Tk 스레드)."""
+        if self.gui.capture_session is not self:
+            return
+        if len(self.captures) >= ai_gen.MAX_CAPTURES:
+            self._notice(f"{ai_gen.MAX_CAPTURES}장까지 · ")
+            return
+        try:
+            origin = self.origin()
+            self.captures.append(ai_gen.capture_screen(self.gui.get_grabber(), origin))
+        except ValueError as e:
+            self._notice(f"{e} · ")
+            return
+        except Exception as e:  # noqa: BLE001 - 캡처 실패는 알리고 계속
+            self._notice(f"캡처 실패: {e} · ")
+            return
+        self._notice()
+
+    def finish_capture(self) -> None:
+        """F8: 캡처를 끝내고 창을 되돌린다."""
+        if self.gui.capture_session is not self:
+            return
+        self.gui.capture_session = None
+        self.gui.sync_hotkeys()
+        self.gui._notice = None
+        for w in reversed(self.hidden):
+            if w.winfo_exists():
+                w.deiconify()
+                w.lift()
+        self.hidden = []
+        self.on_done()
+
+
+class AiWorker:
+    """AI 생성을 작업 스레드에서 돌리고 결과를 Tk 스레드의 after 폴링으로 돌려준다."""
+
+    def __init__(self, gui: Gui, widget, on_result) -> None:
+        self.gui, self.widget, self.on_result = gui, widget, on_result
+        self.provider = None
+        self._queue: queue.Queue = queue.Queue()
+        self._poll_id = None
+
+    @property
+    def busy(self) -> bool:
+        return self.provider is not None
+
+    def start(self, req: ai_gen.GenRequest) -> None:
+        provider = self.provider = self.gui.ai_provider_factory()
+
+        def work() -> None:
+            try:
+                self._queue.put(("ok", ai_gen.generate_macro(req, provider)))
+            except ai_gen.AiError as e:
+                self._queue.put(("error", str(e)))
+            except Exception as e:  # noqa: BLE001 - 화면에 보여 주고 계속
+                self._queue.put(("error", f"예상하지 못한 오류: {e}"))
+        threading.Thread(target=work, daemon=True).start()
+        self._poll_id = self.widget.after(100, self._poll)
+
+    def _poll(self) -> None:
+        self._poll_id = None
+        try:
+            status, value = self._queue.get_nowait()
+        except queue.Empty:
+            self._poll_id = self.widget.after(100, self._poll)
+            return
+        self.provider = None
+        self.on_result(status, value)
+
+    def cancel(self) -> None:
+        if self.provider is not None and hasattr(self.provider, "cancel"):
+            self.provider.cancel()
+        self.provider = None
+        if self._poll_id is not None:
+            self.widget.after_cancel(self._poll_id)
+            self._poll_id = None
+
+
+class AiChatPanel:
+    """기록 화면 오른쪽의 AI 대화: 지금 목록을 AI 에게 보여 주고 요청대로 고친 전체 목록으로 바꾼다
+    (빈 목록이면 새로 만든다). 되돌리기로 이전 상태로 돌아갈 수 있다."""
+
+    def __init__(self, editor: "EditorWindow", parent) -> None:
+        self.editor, self.gui = editor, editor.gui
+        self.history: list[tuple[str, str]] = []
+        self.captures: list[ai_gen.Capture] = []
+        self.session: CaptureSession | None = None
+        self.v_status = tk.StringVar(parent)
+        self.v_shots = tk.StringVar(parent)
+        self.frame = ttk.LabelFrame(parent, text="AI 대화", padding=6)
+        self.log_box = scrolledtext.ScrolledText(self.frame, width=40, height=14, wrap="word", state="disabled")
+        self.log_box.pack(fill="both", expand=True)
+        shots = ttk.Frame(self.frame)
+        shots.pack(fill="x", pady=(6, 0))
+        ttk.Label(shots, textvariable=self.v_shots).pack(side="left")
+        ttk.Button(shots, text="비우기", command=self.clear_captures).pack(side="right")
+        ttk.Button(shots, text="📷 화면 캡처", command=self.start_capture).pack(side="right", padx=4)
+        self.text = tk.Text(self.frame, width=40, height=4, wrap="word")
+        self.text.pack(fill="x", pady=(6, 0))
+        self.text.bind("<Control-Return>", lambda e: (self.send(), "break")[1])
+        bottom = ttk.Frame(self.frame)
+        bottom.pack(fill="x", pady=(4, 0))
+        self.btn_send = ttk.Button(bottom, text="보내기 (Ctrl+Enter)", command=self.send)
+        self.btn_send.pack(side="right")
+        ttk.Button(bottom, text="⚙", width=3,
+                   command=lambda: AiSettingsDialog.open(self.gui, editor.top)).pack(side="right", padx=(0, 4))
+        ttk.Label(bottom, textvariable=self.v_status, foreground="#a33", wraplength=200).pack(side="left")
+        self.worker = AiWorker(self.gui, self.frame, self._on_result)
+        self._update_shots()
+        self.add("AI", AI_GUIDE + "\n지금 목록도 고칠 수 있고, ↶ 되돌리기로 취소합니다.")
+
+    def add(self, who: str, text: str) -> None:
+        self.log_box.configure(state="normal")
+        self.log_box.insert("end", f"{who}: {text}\n\n")
+        self.log_box.see("end")
+        self.log_box.configure(state="disabled")
+
+    @property
+    def busy(self) -> bool:
+        return self.worker.busy
+
+    def _update_shots(self) -> None:
+        self.v_shots.set(f"화면 {len(self.captures)}장" if self.captures else "화면 없음")
+
+    # ---- 화면 캡처 ----
+    def start_capture(self) -> None:
+        if self.busy or self.session is not None or self.gui.capture_session is not None:
+            return
+        if len(self.captures) >= ai_gen.MAX_CAPTURES:
+            self.v_status.set(f"화면은 {ai_gen.MAX_CAPTURES}장까지입니다.")
+            return
+        self.session = CaptureSession(self.gui, [self.editor.top, self.gui.root], self.captures,
+                                      self.editor.coord_origin, self._capture_done)
+
+    def _capture_done(self) -> None:
+        self.session = None
+        self._update_shots()
+        if self.captures:
+            self.add("AI", f"화면 {len(self.captures)}장을 받았습니다. '화면 n' 으로 가리켜 요청하세요.")
+
+    def clear_captures(self) -> None:
+        if self.busy or self.session is not None:
+            return
+        self.captures.clear()
+        self._update_shots()
+
+    # ---- 보내기 ----
+    def request(self, text: str) -> ai_gen.GenRequest:
+        ed = self.editor
+        templates = tuple(sorted(p.name for p in ed.assets_dir.glob("*.png")))
+        return ai_gen.GenRequest(text, screen=self.gui.app.backend.screen_size(), coord_space=ed.coord_space,
+                                 window_title=ed.v_title.get().strip(), captures=list(self.captures),
+                                 current=em.to_events(ed.items) if ed.items else None,
+                                 templates=templates, history=list(self.history))
+
+    def send(self) -> None:
+        if self.busy or self.session is not None:
+            return
+        if self.gui.app.recording or self.gui.app.playing:
+            self.v_status.set("녹화·재생 중에는 보낼 수 없습니다.")
+            return
+        text = self.text.get("1.0", "end").strip()
+        if not text:
+            return
+        self._pending = text
+        self.add("나", self.with_shots(text, len(self.captures)))
+        self.text.delete("1.0", "end")
+        self.btn_send.state(["disabled"])
+        self.v_status.set("AI 가 작업 중…")
+        self.worker.start(self.request(text))
+
+    def _on_result(self, status: str, value) -> None:
+        self.btn_send.state(["!disabled"])
+        self.v_status.set("")
+        text = self._pending
+        if status == "error":
+            self.add("⚠", value)
+            self.text.insert("1.0", text)  # 고쳐서 다시 보낼 수 있게
+            return
+        name, macro, notes, assets = value
+        count = self.editor.apply_ai(macro, assets, name)
+        self.reply(text, notes or "반영했습니다.", count, len(assets))
+        if self.captures:
+            self.captures.clear()  # 보낸 화면은 한 번만 쓴다 (잘라낸 이미지는 목록에 남는다)
+            self._update_shots()
+
+    @staticmethod
+    def with_shots(text: str, shots: int) -> str:
+        return text + (f" (화면 {shots}장)" if shots else "")
+
+    def reply(self, text: str, notes: str, count: int, new_images: int = 0, extra: str = "") -> None:
+        """AI 답(메모)을 대화에 적고, 요청과 함께 다음 요청의 맥락으로 남긴다."""
+        info = [f"항목 {count}개"] + ([f"새 이미지 {new_images}개"] if new_images else []) + ([extra] if extra else [])
+        self.add("AI", f"{notes} ({', '.join(info)})")
+        if text:
+            self.history += [("user", text), ("ai", notes)]
+
+    def close(self) -> None:
+        if self.session is not None:
+            self.session.finish_capture()
+        self.worker.cancel()
+
+
+class AiPromptDialog:
+    """자연어 설명(+ 화면 캡처) -> AI 가 매크로 초안을 만들어 기록 화면에 연다. 생성은 작업 스레드에서 한다.
+    캡처 모드: 창을 숨기고 게임에서 F7 을 누를 때마다 화면을 한 장씩 모은다 (F8 끝)."""
+
+    def __init__(self, gui: Gui) -> None:
+        self.gui = gui
+        self.captures: list[ai_gen.Capture] = []
+        self.session: CaptureSession | None = None
+        self._thumb = None
+        self.thumb_dir = Path(tempfile.mkdtemp(prefix="macro_ai_thumb_"))
+        self.top = tk.Toplevel(gui.root)
+        self.top.withdraw()
+        self.top.title("AI로 매크로 만들기")
+        self.top.transient(gui.root)
+        self.top.protocol("WM_DELETE_WINDOW", self.close)
+        self.worker = AiWorker(gui, self.top, self._on_result)
+        self.v_coord = tk.StringVar(self.top, value=COORD_LABELS["screen"])
+        self.v_title = tk.StringVar(self.top)
+        self.v_status = tk.StringVar(self.top)
+        f = ttk.Frame(self.top, padding=10)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, wraplength=520, justify="left", text=AI_GUIDE + "\n결과는 저장 전 초안으로 열립니다.").pack(anchor="w")
+        self.text = tk.Text(f, width=64, height=7, wrap="word")
+        self.text.pack(fill="both", expand=True, pady=6)
+
+        shots = ttk.LabelFrame(f, text=f"화면 캡처 (최대 {ai_gen.MAX_CAPTURES}장)", padding=6)
+        shots.pack(fill="x")
+        self.listbox = tk.Listbox(shots, height=4, width=22, exportselection=False)
+        self.listbox.pack(side="left", fill="y")
+        self.listbox.bind("<<ListboxSelect>>", lambda e: self._show_selected())
+        self.thumb = tk.Label(shots, text="(캡처 없음)", width=24, height=4, relief="sunken", bg="#eeeeee")
+        self.thumb.pack(side="left", padx=6)
+        btns = ttk.Frame(shots)
+        btns.pack(side="left", fill="y")
+        ttk.Button(btns, text="📷 화면 캡처 시작", command=self.start_capture).pack(fill="x")
+        ttk.Button(btns, text="선택 삭제", command=self.on_delete_capture).pack(fill="x", pady=4)
+
+        row = ttk.Frame(f)
+        row.pack(fill="x", pady=(6, 0))
+        ttk.Label(row, text="좌표 기준").pack(side="left")
+        ttk.Combobox(row, textvariable=self.v_coord, state="readonly", width=12,
+                     values=[COORD_LABELS["screen"], COORD_LABELS["window"]]).pack(side="left", padx=4)
+        ttk.Label(row, text="대상 창 제목").pack(side="left", padx=(8, 0))
+        ttk.Entry(row, textvariable=self.v_title, width=20).pack(side="left", padx=4)
+        bottom = ttk.Frame(f)
+        bottom.pack(fill="x", pady=(8, 0))
+        ttk.Label(bottom, textvariable=self.v_status, foreground="#a33", wraplength=300).pack(side="left")
+        ttk.Button(bottom, text="닫기", command=self.close).pack(side="right")
+        self.btn_go = ttk.Button(bottom, text="만들기", command=self.on_generate)
+        self.btn_go.pack(side="right", padx=4)
+        ttk.Button(bottom, text="⚙ AI 설정", command=lambda: AiSettingsDialog.open(gui, self.top)).pack(side="right")
+        self.text.focus_set()
+        center_on_parent(self.top, gui.root)
+
+    @property
+    def busy(self) -> bool:
+        return self.worker.busy
+
+    @property
+    def capturing(self) -> bool:
+        return self.session is not None
+
+    @property
+    def window_space(self) -> bool:
+        return self.v_coord.get() == COORD_LABELS["window"] and bool(self.v_title.get().strip())
+
+    def request(self) -> ai_gen.GenRequest:
+        title = self.v_title.get().strip()
+        return ai_gen.GenRequest(self.text.get("1.0", "end").strip(), screen=self.gui.app.backend.screen_size(),
+                                 coord_space="window" if self.window_space else "screen", window_title=title,
+                                 captures=list(self.captures))
+
+    # ---- 화면 캡처 ----
+    def origin(self) -> tuple[int, int]:
+        if not self.window_space:
+            return 0, 0
+        rect = self.gui.app.backend.find_window_rect(self.v_title.get().strip())
+        if rect is None:
+            raise ValueError("대상 창을 찾을 수 없습니다")
+        return rect[0], rect[1]
+
+    def start_capture(self) -> None:
+        if self.busy or self.capturing or self.gui.capture_session is not None:
+            return
+        if len(self.captures) >= ai_gen.MAX_CAPTURES:
+            self.v_status.set(f"화면은 {ai_gen.MAX_CAPTURES}장까지입니다. 지우고 다시 캡처하세요.")
+            return
+        self.session = CaptureSession(self.gui, [self.top, self.gui.root], self.captures, self.origin,
+                                      self._capture_done)
+
+    def capture_one(self) -> None:
+        if self.session is not None:
+            self.session.capture_one()
+
+    def finish_capture(self) -> None:
+        if self.session is not None:
+            self.session.finish_capture()
+
+    def _capture_done(self) -> None:
+        self.session = None
+        self.refresh_captures(select=len(self.captures) - 1)
+
+    def refresh_captures(self, select: int | None = None) -> None:
+        self.listbox.delete(0, "end")
+        for i, cap in enumerate(self.captures):
+            w, h = cap.size
+            self.listbox.insert("end", f"화면 {i + 1}  ({w}x{h})")
+        if self.captures and select is not None:
+            select = max(0, min(select, len(self.captures) - 1))
+            self.listbox.selection_set(select)
+            self.listbox.see(select)
+        self._show_selected()
+
+    def _show_selected(self) -> None:
+        sel = self.listbox.curselection()
+        path = None
+        if sel:
+            path = self.thumb_dir / f"thumb_{sel[0]}.png"
+            cap = self.captures[sel[0]]
+            path.write_bytes(vision.encode_png(ai_gen.resize(cap.img, min(1.0, 340 / max(cap.size)))))
+        self._thumb = show_thumb(self.thumb, self.top, path, "(캡처 없음)")
+
+    def on_delete_capture(self) -> None:
+        sel = self.listbox.curselection()
+        if not sel or self.busy:
+            return
+        del self.captures[sel[0]]
+        self.refresh_captures(select=sel[0])
+
+    # ---- 생성 ----
+    def on_generate(self) -> None:
+        if self.busy or self.capturing:
+            return
+        req = self.request()
+        if not req.text:
+            self.v_status.set("만들 매크로를 설명해 주세요.")
+            return
+        self.btn_go.configure(state="disabled")
+        self.v_status.set("AI 가 만드는 중… (화면이 있으면 1분 넘게 걸릴 수 있습니다)" if req.captures
+                          else "AI 가 만드는 중… (수십 초 걸릴 수 있습니다)")
+        self.worker.start(req)
+
+    def _on_result(self, status: str, value) -> None:
+        self.btn_go.configure(state="normal")
+        if status == "error":
+            self.v_status.set(value)
+            return
+        name, macro, notes, assets = value
+        if self.gui.editor is not None:
+            self.v_status.set("기록 화면이 열려 있습니다. 먼저 닫아 주세요.")
+            return
+        text, shots = self.text.get("1.0", "end").strip(), len(self.captures)
+        self.close()
+        self.gui.open_ai_draft(name, macro, notes, assets, text, shots)
+
+    def close(self) -> None:
+        self.finish_capture()
+        self.worker.cancel()
+        self.gui.ai_dialog = None
+        shutil.rmtree(self.thumb_dir, ignore_errors=True)
+        self.top.destroy()
+
 class Overlay:
     """화면 가장자리에 뜨는 반투명 상태 표시. 항상 위, 테두리 없음, 클릭은 아래 창(게임)으로 통과한다."""
 
@@ -2208,6 +2669,99 @@ def restore_geometry(window, geometry: str) -> None:
         window.geometry(f"{w}x{h}+{x}+{y}")
     else:
         window.geometry(f"{w}x{h}")
+
+
+class AiSettingsDialog:
+    """AI 제공자·API 키·모델 설정. 저장하면 settings.json 에 쓴다 (키는 이 PC 에만, 평문)."""
+
+    # 제공자 -> (설정 키, 이름, 가리기) 칸, 안내, 키 발급 주소, 기본 모델
+    FIELDS = {
+        "gemini": ((("ai_gemini_key", "API 키", True), ("ai_gemini_model", "모델", False)),
+                   "Google AI Studio 에서 무료로 키를 받을 수 있습니다. 무료 등급은 분당·하루 요청 수가 제한되고, "
+                   "보낸 내용(화면 캡처 포함)이 Google 의 서비스 개선에 쓰일 수 있습니다.",
+                   ai_gen.GeminiProvider.key_url, ai_gen.GeminiProvider.default_model),
+        "anthropic": ((("ai_anthropic_key", "API 키", True), ("ai_anthropic_model", "모델", False)),
+                      "Anthropic Console 에서 키를 만들고 결제 수단을 등록하세요. 쓴 만큼 요금이 나갑니다 "
+                      "(Pro·Max 구독과는 별개).",
+                      ai_gen.AnthropicProvider.key_url, ai_gen.AnthropicProvider.default_model),
+        "claude_cli": ((("ai_cli_path", "실행 파일", False), ("ai_model", "모델", False)),
+                       "설치하고 로그인한 Claude Code(claude)를 실행합니다. Pro·Max 구독 사용량이 쓰입니다. "
+                       "실행 파일을 비우면 PATH 의 claude 를 씁니다.", "", "Claude Code 기본값"),
+    }
+
+    def __init__(self, gui: Gui, parent) -> None:
+        self.gui = gui
+        self.top = tk.Toplevel(parent)
+        self.top.withdraw()
+        self.top.title("AI 설정")
+        self.top.transient(parent)
+        self.top.resizable(False, False)
+        self.top.protocol("WM_DELETE_WINDOW", self.close)
+        self.v_provider = tk.StringVar(self.top, value=gui.settings["ai_provider"])
+        self.vars = {key: tk.StringVar(self.top, value=gui.settings[key])
+                     for fields, *_ in self.FIELDS.values() for key, _, _ in fields}
+        f = ttk.Frame(self.top, padding=12)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, text="AI 로 매크로를 만들 때 쓸 서비스").pack(anchor="w")
+        for value, text in ai_gen.PROVIDERS.items():
+            ttk.Radiobutton(f, text=text, value=value, variable=self.v_provider,
+                            command=self._show).pack(anchor="w", padx=(8, 0))
+        self.pages = {}
+        for kind, (fields, hint, url, default_model) in self.FIELDS.items():
+            page = ttk.LabelFrame(f, text=ai_gen.PROVIDERS[kind], padding=8)
+            ttk.Label(page, text=hint, wraplength=380, foreground="#555").grid(row=0, column=0, columnspan=3,
+                                                                              sticky="w", pady=(0, 6))
+            for row, (key, label, secret) in enumerate(fields, start=1):
+                ttk.Label(page, text=label).grid(row=row, column=0, sticky="w", pady=2)
+                entry = ttk.Entry(page, textvariable=self.vars[key], width=40, show="•" if secret else "")
+                entry.grid(row=row, column=1, sticky="we", padx=4, pady=2)
+                if secret:
+                    shown = tk.BooleanVar(self.top, value=False)
+                    ttk.Checkbutton(page, text="보기", variable=shown,
+                                    command=lambda e=entry, v=shown: e.configure(show="" if v.get() else "•")
+                                    ).grid(row=row, column=2, sticky="w")
+            ttk.Label(page, text=f"모델을 비우면 {default_model}", foreground="#555").grid(
+                row=len(fields) + 1, column=1, sticky="w", padx=4)
+            if url:
+                ttk.Button(page, text="키 발급 페이지 열기", command=lambda u=url: webbrowser.open(u)).grid(
+                    row=len(fields) + 2, column=1, sticky="w", padx=4, pady=(6, 0))
+            self.pages[kind] = page
+        btns = ttk.Frame(f)
+        btns.pack(fill="x", side="bottom", pady=(10, 0))
+        ttk.Button(btns, text="취소", command=self.close).pack(side="right")
+        ttk.Button(btns, text="저장", command=self.save).pack(side="right", padx=4)
+        self._show()
+        center_on_parent(self.top, parent)
+
+    def _show(self) -> None:
+        for kind, page in self.pages.items():
+            if kind == self.v_provider.get():
+                page.pack(fill="x", pady=(8, 0))
+            else:
+                page.pack_forget()
+
+    def save(self) -> None:
+        if self.v_provider.get() in ai_gen.PROVIDERS:
+            self.gui.settings["ai_provider"] = self.v_provider.get()
+        for key, var in self.vars.items():
+            self.gui.settings[key] = var.get().strip()
+        self.gui.settings.save()
+        self.close()
+
+    def close(self) -> None:
+        if self.gui.ai_settings_dialog is self:
+            self.gui.ai_settings_dialog = None
+        self.top.destroy()
+
+    @classmethod
+    def open(cls, gui: Gui, parent) -> "AiSettingsDialog":
+        """하나만 연다 (이미 열려 있으면 앞으로)."""
+        dlg = gui.ai_settings_dialog
+        if dlg is not None and dlg.top.winfo_exists():
+            dlg.top.lift()
+            return dlg
+        gui.ai_settings_dialog = cls(gui, parent)
+        return gui.ai_settings_dialog
 
 
 class HotkeyCaptureDialog:

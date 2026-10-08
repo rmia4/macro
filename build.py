@@ -40,9 +40,9 @@ WORK = ROOT / "build"
 EXCLUDES = [
     "matplotlib", "pytest",
     "cv2",  # 테스트 비교용으로만 설치된 OpenCV 가 섞여 들어가지 않게
-    # 표준 라이브러리: 테스트·문서·네트워크·압축·DB·비동기
-    "unittest", "doctest", "pydoc", "pydoc_data", "xmlrpc", "http", "xml", "ftplib", "smtplib", "imaplib",
-    "poplib", "mailbox", "ssl", "_ssl", "_hashlib", "sqlite3", "_sqlite3", "lzma", "_lzma", "bz2", "_bz2",
+    # 표준 라이브러리: 테스트·문서·네트워크·압축·DB·비동기 (http·ssl 은 AI API 호출(urllib)에 쓴다)
+    "unittest", "doctest", "pydoc", "pydoc_data", "xmlrpc", "xml", "ftplib", "smtplib", "imaplib",
+    "poplib", "mailbox", "sqlite3", "_sqlite3", "lzma", "_lzma", "bz2", "_bz2",
     "asyncio", "multiprocessing", "concurrent", "decimal", "_decimal", "turtle", "turtledemo", "idlelib",
     "lib2to3", "tkinter.tix",
     # numpy: FFT·기본 연산만 쓴다
