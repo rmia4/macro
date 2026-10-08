@@ -68,28 +68,30 @@ def test_to_macro_validates_blocks_and_fills_screen():
         {"type": "repeat_start", "count": 3, "delay_ms": 0},
         {"type": "tap", "key": "f", "delay_ms": 500},
         {"type": "repeat_end", "delay_ms": 0}]}
-    name, macro, notes = to_macro(data, GenRequest("x", screen=(1920, 1080)))
-    assert name == "F 연타" and notes == "확인"
+    name, macro, notes, assets = to_macro(data, GenRequest("x", screen=(1920, 1080)))
+    assert name == "F 연타" and notes == "확인" and assets == {}
     assert macro.screen == {"width": 1920, "height": 1080} and macro.coord_space == "screen"
     assert [e["type"] for e in macro.events] == ["repeat_start", "kdown", "kup", "repeat_end"]
 
 
 def test_to_macro_window_space_sets_play_window():
     data = {"name": "a", "notes": "", "events": [{"type": "click", "x": 1, "y": 2, "delay_ms": 0}]}
-    _, macro, _ = to_macro(data, GenRequest("x", coord_space="window", window_title="게임"))
+    _, macro, _, _ = to_macro(data, GenRequest("x", coord_space="window", window_title="게임"))
     assert macro.coord_space == "window" and macro.window == {"title": "게임"}
     assert macro.options == {"window_title": "게임"}
 
 
 @pytest.mark.parametrize("steps, msg", [
     ([], "비어"),
-    ([{"type": "click_image", "delay_ms": 0}], "지원하지 않는 type"),
+    ([{"type": "set_image", "delay_ms": 0}], "지원하지 않는 type"),
+    ([{"type": "click_image", "delay_ms": 0, "cond": {"kind": "image", "crop": {"capture": 1, "rect": [0, 0, 9, 9]}}}],
+     "capture"),
     ([{"type": "tap", "key": "없는키", "delay_ms": 0}], "key"),
     ([{"type": "repeat_start", "count": 2, "delay_ms": 0}], "짝"),
     ([{"type": "wait", "delay_ms": -1}], "delay_ms"),
-    ([{"type": "wait_until", "delay_ms": 0, "cond": {"kind": "image", "template": "a.png"}}], "조건 종류"),
+    ([{"type": "wait_until", "delay_ms": 0, "cond": {"kind": "image", "template": "a.png"}}], "첨부 화면이 없어"),
     ([{"type": "if_start", "delay_ms": 0, "cond": {"kind": "any", "conds": [
-        {"kind": "var", "name": "a"}, {"kind": "image", "template": "a.png"}]}},
+        {"kind": "var", "name": "a"}, {"kind": "image_var", "name": "a"}]}},
       {"type": "if_end", "delay_ms": 0}], "조건 종류"),
 ])
 def test_to_macro_rejects_invalid(steps, msg):
@@ -116,7 +118,7 @@ GOOD = {"name": "ok", "notes": "", "events": [{"type": "tap", "key": "a", "delay
 def test_generate_retries_once_with_error():
     bad = {"name": "x", "notes": "", "events": [{"type": "tap", "key": "zz", "delay_ms": 0}]}
     p = FakeProvider(bad, GOOD)
-    name, macro, _ = generate_macro(GenRequest("a 눌러"), p)
+    name, macro, _, _ = generate_macro(GenRequest("a 눌러"), p)
     assert name == "ok" and len(macro.events) == 2
     assert p.calls[0][1] == "a 눌러" and "[이전 답의 오류]" in p.calls[1][1] and "zz" in p.calls[1][1]
 
@@ -182,10 +184,118 @@ def test_cli_timeout_kills_process():
     assert proc.killed
 
 
-def test_cli_rejects_images_and_cancel():
+def test_cli_cancel():
     p = ClaudeCliProvider(popen=lambda cmd, **kw: FakeProc(out=envelope(structured_output=GOOD)))
-    with pytest.raises(AiError, match="이미지"):
-        p.generate("s", "p", {}, [b"png"])
     p.cancel()
     with pytest.raises(AiError, match="취소"):
         p.generate("s", "p", {}, [])
+
+
+# ---- 화면 캡처 ----
+np = pytest.importorskip("numpy")
+import vision  # noqa: E402
+from ai_gen import Capture  # noqa: E402
+
+
+def screen(w=3136, h=1764):
+    img = np.zeros((h, w, 3), np.uint8)
+    img[100:140, 200:300] = (0, 0, 255)  # 빨간 버튼 (원본 픽셀)
+    img[100:140, 230:240] = (255, 255, 255)
+    return img
+
+
+def test_capture_scale_and_png_size():
+    cap = Capture(screen())
+    assert cap.scale == 0.5
+    png = ai_gen.capture_png(cap)
+    assert vision.decode_png(png).shape[:2] == (882, 1568)
+    assert Capture(np.zeros((1080, 1920, 3), np.uint8)).scale == pytest.approx(1568 / 1920)
+    assert Capture(np.zeros((100, 200, 3), np.uint8)).scale == 1.0
+
+
+def test_capture_coords_convert_to_macro_coords():
+    req = GenRequest("x", coord_space="window", window_title="g",
+                     captures=[Capture(screen(), origin=(0, 0)), Capture(screen(), origin=(100, 50))])
+    data = {"name": "a", "notes": "", "events": [
+        {"type": "click", "x": 125, "y": 60, "capture": 2, "delay_ms": 0},
+        {"type": "wait_until", "delay_ms": 0, "cond": {"kind": "pixel", "x": 10, "y": 20, "w": 5, "h": 3,
+                                                        "color": "#ff0000", "capture": 1}},
+        {"type": "move", "x": 7, "y": 8, "delay_ms": 0}]}  # capture 없으면 매크로 좌표 그대로
+    _, macro, _, _ = to_macro(data, req)
+    down = macro.events[0]
+    assert (down["x"], down["y"]) == (150, 70) and "capture" not in down
+    cond = macro.events[2]["cond"]
+    assert (cond["x"], cond["y"], cond["w"], cond["h"]) == (20, 40, 10, 6) and "capture" not in cond
+    assert (macro.events[3]["x"], macro.events[3]["y"]) == (7, 8)
+
+
+def test_image_crop_becomes_asset_and_is_reused():
+    img = screen()
+    req = GenRequest("x", captures=[Capture(img), Capture(img, origin=(10, 10))])
+    crop = {"capture": 1, "rect": [100, 50, 50, 20]}  # 이미지 픽셀 (scale 0.5) -> 원본 [200,100,100,40]
+    data = {"name": "a", "notes": "", "events": [
+        {"type": "wait_until", "delay_ms": 0, "cond": {"kind": "image", "crop": dict(crop)}},
+        {"type": "click_image", "delay_ms": 0, "button": "left",
+         "cond": {"kind": "image", "crop": dict(crop), "region": [0, 0, 400, 200], "threshold": 0.9}},
+        {"type": "if_start", "delay_ms": 0, "cond": {"kind": "all", "conds": [
+            {"kind": "image", "crop": {"capture": 2, "rect": [0, 0, 10, 10]}}, {"kind": "var", "name": "v"}]}},
+        {"type": "if_end", "delay_ms": 0}]}
+    _, macro, _, assets = to_macro(data, req)
+    c0, c1 = macro.events[0]["cond"], macro.events[1]["cond"]
+    assert c0 == {"kind": "image", "template": "ai_1_1.png"}
+    assert c1["template"] == "ai_1_1.png" and c1["region"] == [0, 0, 800, 400] and c1["threshold"] == 0.9
+    assert macro.events[2]["cond"]["conds"][0]["template"] == "ai_2_2.png"
+    assert set(assets) == {"ai_1_1.png", "ai_2_2.png"}
+    cut = vision.decode_png(assets["ai_1_1.png"])
+    assert cut.shape[:2] == (40, 100) and (cut == img[100:140, 200:300]).all()
+    assert data["events"][0]["cond"]["crop"] == crop  # AI 답은 바꾸지 않는다
+
+
+@pytest.mark.parametrize("cond, msg", [
+    ({"kind": "image", "crop": {"capture": 3, "rect": [0, 0, 10, 10]}}, "화면 번호"),
+    ({"kind": "image", "crop": {"capture": 1, "rect": [1560, 0, 20, 20]}}, "화면 밖"),
+    ({"kind": "image", "crop": {"capture": 1, "rect": [0, 0, 3, 3]}}, "너무 작습니다"),
+    ({"kind": "image", "crop": {"rect": [0, 0, 10, 10]}}, "capture 화면 번호"),
+    ({"kind": "image", "template": "x.png"}, "crop"),
+    ({"kind": "image", "crop": {"capture": 1, "rect": [0, 0, 10, 10]}, "negate": True}, "보이는"),
+])
+def test_image_crop_errors(cond, msg):
+    req = GenRequest("x", captures=[Capture(screen())])
+    with pytest.raises(MacroFormatError, match=msg):
+        to_macro({"name": "a", "notes": "", "events": [{"type": "click_image", "delay_ms": 0, "cond": cond}]}, req)
+
+
+def test_prompt_lists_captures():
+    req = GenRequest("x", captures=[Capture(screen(), label="메뉴"), Capture(np.zeros((100, 200, 3), np.uint8))])
+    system = ai_gen.build_system_prompt(req)
+    assert "capture_1.png (이미지 1568x882) — 메뉴" in system and "capture_2.png (이미지 200x100)" in system
+    assert "crop" in system and "Read" in system
+    assert "만들 수 없다" in ai_gen.build_system_prompt(GenRequest("x"))
+
+
+def test_generate_sends_capture_pngs_and_limit():
+    p = FakeProvider(GOOD)
+    seen = []
+    p.generate = lambda system, prompt, schema, images: seen.append(images) or GOOD
+    generate_macro(GenRequest("a", captures=[Capture(screen())]), p)
+    assert len(seen[0]) == 1 and seen[0][0].startswith(b"\x89PNG")
+    many = [Capture(np.zeros((10, 10, 3), np.uint8))] * (ai_gen.MAX_CAPTURES + 1)
+    with pytest.raises(AiError, match="장까지"):
+        generate_macro(GenRequest("a", captures=many), p)
+
+
+def test_cli_with_images_uses_read_tool_in_temp_dir():
+    seen = {}
+
+    def popen(cmd, **kw):
+        from pathlib import Path
+        d = Path(kw["cwd"])
+        seen.update(cmd=cmd, cwd=d, files=sorted(f.name for f in d.iterdir()),
+                    data=(d / "capture_2.png").read_bytes())
+        return FakeProc(out=envelope(structured_output=GOOD))
+    p = ClaudeCliProvider(popen=popen)
+    assert p.generate("s", "p", {}, [b"one", b"two"]) == GOOD
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("--tools") + 1] == "Read" and cmd[cmd.index("--allowedTools") + 1] == "Read"
+    assert seen["files"] == ["capture_1.png", "capture_2.png"] and seen["data"] == b"two"
+    assert not seen["cwd"].exists()  # 끝나면 지운다

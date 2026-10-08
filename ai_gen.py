@@ -1,27 +1,36 @@
 """자연어 -> 매크로 생성 (AI). 제공자는 주입한다(기본: 설치된 Claude Code CLI, 사용자의 요금제로 호출).
 
 AI 는 편집 화면과 같은 dt 기반 단계(delay_ms = 직전으로부터 지연)를 내고, 여기서 절대 시각 t 로 바꿔
-profiles 검증기로 확인한다. 1차는 텍스트만: 이미지 조건·이미지 클릭·이미지 변수는 만들지 않는다.
+profiles 검증기로 확인한다. 화면 캡처(Capture)를 함께 보내면 AI 는 캡처 이미지 픽셀 좌표에 "capture": n 을 붙여
+답하고, 여기서 매크로 좌표로 바꾼다. 이미지 조건은 캡처에서 잘라낼 영역(crop)으로 받아 PNG 자산으로 만든다.
+캡처를 모으는 방법(키로 여러 장, 3차: 녹화 중 자동)과는 분리되어 있다.
 """
 from __future__ import annotations
 
+import copy
 import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol
 
 import keys
+import vision
 from profiles import BUTTONS, Macro, MacroFormatError, macro_path
 
 DEFAULT_NAME = "AI 매크로"
-# 1차에서 AI 가 낼 수 있는 단계 (tap/click 은 편의 타입, 여기서 누름/뗌으로 펼친다)
+# AI 가 낼 수 있는 단계 (tap/click 은 편의 타입, 여기서 누름/뗌으로 펼친다). set_image 는 아직 제외
 ALLOWED_TYPES = ("move", "rmove", "mdown", "mup", "scroll", "kdown", "kup", "tap", "click", "wait",
                  "repeat_start", "repeat_end", "while_start", "while_end", "if_start", "else", "if_end",
-                 "break_if", "wait_until", "set_var")
-ALLOWED_COND_KINDS = ("pixel", "var", "all", "any")
+                 "break_if", "wait_until", "set_var", "click_image")
+ALLOWED_COND_KINDS = ("pixel", "var", "all", "any", "image")
 DEFAULT_HOLD_MS = 50
+MAX_CAPTURES = 8        # 한 번에 보내는 화면 수 (사용량·시간)
+AI_IMAGE_MAX = 1568     # AI 에 보내는 이미지의 긴 변 (넘으면 줄인다)
+MIN_CROP = 8            # 잘라낼 이미지의 최소 변 (원본 픽셀)
 
 OUTPUT_SCHEMA = {
     "type": "object",
@@ -40,17 +49,62 @@ class AiError(RuntimeError):
     """사용자에게 그대로 보여 줄 한국어 오류."""
 
 
+@dataclass(eq=False)  # numpy 이미지라 값 비교하지 않는다
+class Capture:
+    """AI 에 보여 줄 화면 한 장."""
+    img: object                        # 전체 화면 원본 (numpy BGR uint8)
+    origin: tuple[int, int] = (0, 0)   # 캡처할 때의 매크로 좌표 원점 (창 기준이면 창 좌상단, 화면 좌표)
+    label: str = ""                    # 사용자가 붙인 설명 (선택)
+    event_index: int | None = None     # 3차: 녹화 중 자동 캡처면 그 직후 이벤트 인덱스
+
+    @property
+    def size(self) -> tuple[int, int]:
+        h, w = self.img.shape[:2]
+        return w, h
+
+    @property
+    def scale(self) -> float:
+        """AI 에 보내는 이미지 배율 (원본 픽셀 * scale = 이미지 픽셀)."""
+        return min(1.0, AI_IMAGE_MAX / max(self.size))
+
+
 @dataclass
 class GenRequest:
     text: str
     screen: tuple[int, int] = (0, 0)
     coord_space: str = "screen"   # screen | window
     window_title: str = ""
-    images: list[bytes] = field(default_factory=list)  # 2차: 화면 캡처 PNG (1차는 비어 있음)
+    captures: list[Capture] = field(default_factory=list)
+    recorded: list[dict] | None = None  # 3차: 녹화한 이벤트 (캡처의 event_index 가 가리킴)
 
 
 class Provider(Protocol):
     def generate(self, system: str, prompt: str, schema: dict, images: list[bytes]) -> dict: ...
+
+
+def capture_screen(grabber, origin: tuple[int, int] = (0, 0), label: str = "") -> Capture:
+    w, h = grabber.screen_size()
+    return Capture(grabber.grab(0, 0, w, h), origin, label)
+
+
+def resize(img, scale: float):
+    """최근접 축소 (scale >= 1 이면 그대로)."""
+    import numpy as np
+    if scale >= 1:
+        return img
+    h, w = img.shape[:2]
+    nh, nw = max(1, round(h * scale)), max(1, round(w * scale))
+    ys = np.minimum((np.arange(nh) / scale).astype(int), h - 1)
+    xs = np.minimum((np.arange(nw) / scale).astype(int), w - 1)
+    return img[ys][:, xs]
+
+
+def capture_png(cap: Capture) -> bytes:
+    return vision.encode_png(resize(cap.img, cap.scale))
+
+
+def image_name(i: int) -> str:
+    return f"capture_{i + 1}.png"
 
 
 # ---- 프롬프트 ----
@@ -61,6 +115,32 @@ def build_system_prompt(req: GenRequest) -> str:
     else:
         space = "좌표는 화면 좌상단 기준 픽셀" + (f" (화면 {w}x{h})." if w and h else ".")
     key_names = " ".join(sorted(keys.NAME_TO_SCAN))
+    if req.captures:
+        shots = "\n".join(
+            f"- 화면 {i + 1}: {image_name(i)} (이미지 {round(c.size[0] * c.scale)}x{round(c.size[1] * c.scale)})"
+            + (f" — {c.label}" if c.label else "") for i, c in enumerate(req.captures))
+        screens = f"""
+첨부 화면 (사용자가 게임에서 차례로 캡처한 화면, 작업 폴더에 있음). 답하기 전에 Read 도구로 모두 열어 본다:
+{shots}
+- 화면에서 본 위치를 쓸 때는 그 이미지의 픽셀 좌표로 적고 같은 객체에 "capture": 화면 번호 를 붙인다
+  (클릭·이동의 x,y / 범위 색 조건의 x,y,w,h). 매크로 좌표로의 변환은 프로그램이 한다.
+- 이미지 조건: {{"kind":"image","crop":{{"capture":n,"rect":[x,y,w,h]}},"threshold":0~1(선택, 기본 0.85),
+  "region":[x,y,w,h](선택, 같은 화면의 검색 범위)}}. 버튼·아이콘처럼 그 화면을 대표하는 부분을 여백 없이
+  {MIN_CROP}px 이상으로 잘라 지정한다. 화면마다 달라지는 숫자·글자(점수, 시간)는 피한다.
+- click_image(cond: 이미지 조건, button, offset [x,y](선택), timeout 초(기본 10), on_timeout "stop"|"continue"):
+  이미지를 찾을 때까지 기다렸다가 그 가운데를 클릭. 화면이 바뀐 뒤 나오는 버튼 클릭에 쓴다.
+- 화면이 바뀌는 동작 뒤에는 wait_until(이미지 조건) 또는 click_image 로 다음 화면을 기다린다.
+"""
+        image_rule = "- 이미지 조건은 반드시 첨부 화면의 crop 으로 만든다 (template·image_var 를 직접 쓰지 않는다)."
+    else:
+        screens = ""
+        image_rule = ("- 첨부 화면이 없으므로 이미지 조건·click_image 는 만들 수 없다. 필요하면 notes 에 "
+                      "화면을 캡처해서 다시 만들거나 기록 화면에서 직접 추가하라고 적는다.")
+    recorded = ""
+    if req.recorded:
+        recorded = ("\n사용자가 녹화한 입력(절대 시각 t): "
+                    + json.dumps(req.recorded, ensure_ascii=False)[:20000]
+                    + "\n이 입력을 바탕으로 설명대로 다듬는다.\n")
     return f"""너는 Windows 게임용 입력 매크로 도구의 매크로 작성기다. 사용자의 설명을 입력 단계 목록으로 바꿔 구조화 출력으로만 답한다.
 
 각 단계: {{"type": ..., "delay_ms": 직전 단계 후 기다릴 밀리초, ...필드}}. 단계는 순서대로 실행된다.
@@ -86,11 +166,11 @@ def build_system_prompt(req: GenRequest) -> str:
 - 변수: {{"kind":"var","name":"이름"}}
 - 여러 조건: {{"kind":"all"|"any","conds":[잎 조건 2개 이상]}} (중첩 금지)
 - 모든 조건에 "negate": true 로 반대 조건.
-
+{screens}{recorded}
 규칙:
 - 블록 시작/끝은 반드시 짝을 맞추고 엇갈리지 않게 중첩한다.
-- 이미지(그림) 찾기·이미지 클릭은 아직 지원하지 않는다. 필요하면 notes 에 사용자가 기록 화면에서 직접 추가하라고 적는다.
-- 좌표·색을 사용자가 주지 않았는데 필요하면 그럴듯한 값을 넣고 notes 에 확인하라고 적는다.
+{image_rule}
+- 좌표·색을 사용자가 주지 않았고 화면에서도 알 수 없으면 그럴듯한 값을 넣고 notes 에 확인하라고 적는다.
 - 무한 반복(count 0)은 사용자가 계속/무한을 원할 때만. 시간 간격 표현(예: 0.5초마다)은 delay_ms 로.
 - 변수 이름은 글자·숫자·_ 1~20자.
 - button: {" ".join(sorted(BUTTONS))}
@@ -103,22 +183,94 @@ def _num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
-def _check_cond(cond, where: str) -> None:
-    if not isinstance(cond, dict):
-        return  # 구조 오류는 profiles 검증기가 알려 준다
-    kinds = [cond.get("kind")] + [c.get("kind") for c in cond.get("conds", []) if isinstance(c, dict)]
-    for kind in kinds:
+class _Converter:
+    """캡처 좌표 -> 매크로 좌표, 이미지 crop -> PNG 자산."""
+
+    def __init__(self, req: GenRequest) -> None:
+        self.captures = req.captures
+        self.assets: dict[str, bytes] = {}
+        self._by_png: dict[bytes, str] = {}
+
+    def capture(self, obj: dict, where: str) -> Capture | None:
+        """obj 의 "capture": 화면 번호를 꺼내 그 캡처를 돌려준다 (없으면 None)."""
+        if "capture" not in obj:
+            return None
+        n = obj.pop("capture")
+        if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= len(self.captures):
+            raise MacroFormatError(f"{where}: capture 는 1~{len(self.captures)} 화면 번호여야 합니다 ({n!r})")
+        return self.captures[n - 1]
+
+    def _rect(self, cap: Capture, rect, where: str, label: str) -> list[int]:
+        """이미지 픽셀 [x,y,w,h] -> 원본 픽셀 (화면 밖이면 오류)."""
+        if not (isinstance(rect, list) and len(rect) == 4 and all(_num(v) for v in rect)):
+            raise MacroFormatError(f"{where}: {label} 는 [x, y, w, h] 숫자여야 합니다")
+        s = cap.scale
+        x, y = round(rect[0] / s), round(rect[1] / s)
+        w, h = round(rect[2] / s), round(rect[3] / s)
+        W, H = cap.size
+        if w < 1 or h < 1 or x < 0 or y < 0 or x + w > W or y + h > H:
+            raise MacroFormatError(f"{where}: {label} 가 화면 밖입니다 ({rect})")
+        return [x, y, w, h]
+
+    def point(self, obj: dict, where: str) -> None:
+        cap = self.capture(obj, where)
+        if cap is None:
+            return
+        for a, b in (("x", 0), ("y", 1)):
+            if a in obj:
+                if not _num(obj[a]):
+                    raise MacroFormatError(f"{where}: {a} 가 숫자가 아닙니다")
+                obj[a] = round(obj[a] / cap.scale) - cap.origin[b]
+        for a in ("w", "h"):
+            if a in obj and _num(obj[a]):
+                obj[a] = max(1, round(obj[a] / cap.scale))
+
+    def cond(self, cond, where: str) -> None:
+        if not isinstance(cond, dict):
+            return  # 구조 오류는 profiles 검증기가 알려 준다
+        kind = cond.get("kind")
         if kind not in ALLOWED_COND_KINDS:
-            raise MacroFormatError(f"{where}: 지원하지 않는 조건 종류 {kind!r} (pixel/var/all/any 만)")
+            raise MacroFormatError(f"{where}: 지원하지 않는 조건 종류 {kind!r}")
+        if kind in ("all", "any"):
+            for c in cond.get("conds", []) if isinstance(cond.get("conds"), list) else []:
+                self.cond(c, where)
+        elif kind == "pixel":
+            self.point(cond, where)
+        elif kind == "image":
+            self.image(cond, where)
+
+    def image(self, cond: dict, where: str) -> None:
+        crop = cond.pop("crop", None)
+        if "template" in cond or "image_var" in cond or not isinstance(crop, dict):
+            if not self.captures:
+                raise MacroFormatError(f"{where}: 첨부 화면이 없어 이미지 조건을 만들 수 없습니다")
+            raise MacroFormatError(f"{where}: 이미지 조건은 crop {{capture, rect}} 로 지정해야 합니다")
+        cap = self.capture(crop, where)
+        if cap is None:
+            raise MacroFormatError(f"{where}: crop 에 capture 화면 번호가 필요합니다")
+        x, y, w, h = self._rect(cap, crop.get("rect"), where, "crop.rect")
+        if w < MIN_CROP or h < MIN_CROP:
+            raise MacroFormatError(f"{where}: 잘라낸 이미지가 너무 작습니다 ({w}x{h}, {MIN_CROP}px 이상)")
+        png = vision.encode_png(cap.img[y:y + h, x:x + w])
+        name = self._by_png.get(png)
+        if name is None:
+            n = next(i for i, c in enumerate(self.captures) if c is cap) + 1
+            name = self._by_png[png] = f"ai_{n}_{len(self.assets) + 1}.png"
+            self.assets[name] = png
+        cond["template"] = name
+        if "region" in cond:
+            rx, ry, rw, rh = self._rect(cap, cond["region"], where, "region")
+            cond["region"] = [rx - cap.origin[0], ry - cap.origin[1], rw, rh]
 
 
-def to_events(steps: list) -> list[dict]:
+def to_events(steps: list, conv: _Converter | None = None) -> list[dict]:
     """AI 단계(delay_ms) -> 저장 이벤트(절대 t). tap/click 은 누름/뗌으로 펼친다."""
     if not isinstance(steps, list) or not steps:
         raise MacroFormatError("events 가 비어 있습니다")
+    conv = conv or _Converter(GenRequest(""))
     events: list[dict] = []
     t = 0.0
-    for i, step in enumerate(steps):
+    for i, step in enumerate(copy.deepcopy(steps)):
         where = f"events[{i}]"
         if not isinstance(step, dict):
             raise MacroFormatError(f"{where}: 객체가 아닙니다")
@@ -129,8 +281,9 @@ def to_events(steps: list) -> list[dict]:
         if not _num(delay) or delay < 0:
             raise MacroFormatError(f"{where}: delay_ms 는 0 이상의 숫자여야 합니다")
         t = round(t + delay / 1000, 4)
+        conv.point(step, where)
         if "cond" in step:
-            _check_cond(step["cond"], where)
+            conv.cond(step["cond"], where)
         fields = {k: v for k, v in step.items() if k not in ("type", "delay_ms", "hold_ms")}
         hold = step.get("hold_ms", DEFAULT_HOLD_MS)
         if typ in ("tap", "click"):
@@ -147,11 +300,12 @@ def to_events(steps: list) -> list[dict]:
     return events
 
 
-def to_macro(data, req: GenRequest) -> tuple[str, Macro, str]:
-    """AI 출력 -> (이름, 매크로, 메모). 잘못되면 MacroFormatError."""
+def to_macro(data, req: GenRequest) -> tuple[str, Macro, str, dict[str, bytes]]:
+    """AI 출력 -> (이름, 매크로, 메모, 잘라낸 이미지 {파일 이름: PNG}). 잘못되면 MacroFormatError."""
     if not isinstance(data, dict):
         raise MacroFormatError("최상위 값이 객체가 아닙니다")
-    events = to_events(data.get("events"))
+    conv = _Converter(req)
+    events = to_events(data.get("events"), conv)
     window = {"title": req.window_title} if req.coord_space == "window" and req.window_title else None
     raw = {"version": 1, "coord_space": req.coord_space, "window": window,
            "screen": {"width": req.screen[0], "height": req.screen[1]}, "events": events}
@@ -160,7 +314,7 @@ def to_macro(data, req: GenRequest) -> tuple[str, Macro, str]:
     macro = Macro.from_dict(raw)
     name = data.get("name") if isinstance(data.get("name"), str) else ""
     notes = data.get("notes") if isinstance(data.get("notes"), str) else ""
-    return clean_name(name), macro, notes.strip()
+    return clean_name(name), macro, notes.strip(), conv.assets
 
 
 def clean_name(name: str) -> str:
@@ -172,15 +326,19 @@ def clean_name(name: str) -> str:
     return name
 
 
-def generate_macro(req: GenRequest, provider: Provider, retries: int = 1) -> tuple[str, Macro, str]:
-    """설명 -> (이름, 매크로, 메모). 결과가 형식에 맞지 않으면 오류를 알려 주고 retries 번 다시 요청한다."""
+def generate_macro(req: GenRequest, provider: Provider,
+                   retries: int = 1) -> tuple[str, Macro, str, dict[str, bytes]]:
+    """설명 -> (이름, 매크로, 메모, 이미지 자산). 형식이 맞지 않으면 오류를 알려 주고 retries 번 다시 요청한다."""
     text = req.text.strip()
     if not text:
         raise AiError("만들 매크로를 설명해 주세요.")
+    if len(req.captures) > MAX_CAPTURES:
+        raise AiError(f"화면은 {MAX_CAPTURES}장까지 보낼 수 있습니다.")
     system = build_system_prompt(req)
+    images = [capture_png(c) for c in req.captures]
     prompt = text
     for attempt in range(retries + 1):
-        data = provider.generate(system, prompt, OUTPUT_SCHEMA, req.images)
+        data = provider.generate(system, prompt, OUTPUT_SCHEMA, images)
         try:
             return to_macro(data, req)
         except MacroFormatError as e:
@@ -192,46 +350,60 @@ def generate_macro(req: GenRequest, provider: Provider, retries: int = 1) -> tup
 
 # ---- 제공자: Claude Code CLI ----
 class ClaudeCliProvider:
-    """설치된 Claude Code 를 `claude -p` 로 호출한다 (로그인한 요금제 사용량에서 차감)."""
+    """설치된 Claude Code 를 `claude -p` 로 호출한다 (로그인한 요금제 사용량에서 차감).
+    화면 이미지는 임시 작업 폴더에 capture_n.png 로 두고 Read 도구로만 읽게 한다."""
 
-    def __init__(self, path: str = "", model: str = "", timeout: float = 180, popen=subprocess.Popen) -> None:
+    def __init__(self, path: str = "", model: str = "", timeout: float = 180, image_timeout: float = 300,
+                 popen=subprocess.Popen) -> None:
         self.path = path or "claude"
         self.model = model
         self.timeout = timeout
+        self.image_timeout = image_timeout
         self._popen = popen
         self._proc = None
         self.cancelled = False
 
-    def command(self, system: str, schema: dict) -> list[str]:
+    def command(self, system: str, schema: dict, with_images: bool = False) -> list[str]:
+        tools = ["--tools", "Read", "--allowedTools", "Read"] if with_images else ["--tools", ""]
         cmd = [self.path, "-p", "--output-format", "json",
                "--json-schema", json.dumps(schema, ensure_ascii=False),
-               "--system-prompt", system, "--tools", "", "--no-session-persistence"]
+               "--system-prompt", system, *tools, "--no-session-persistence"]
         if self.model:
             cmd += ["--model", self.model]
         return cmd
 
     def generate(self, system: str, prompt: str, schema: dict, images: list[bytes]) -> dict:
-        if images:
-            raise AiError("화면 이미지 첨부는 아직 지원하지 않습니다.")
         if self.cancelled:
             raise AiError("취소했습니다.")
+        workdir = Path(tempfile.mkdtemp(prefix="macro_ai_")) if images else None
+        try:
+            for i, png in enumerate(images):
+                (workdir / image_name(i)).write_bytes(png)
+            return self._run(system, prompt, schema, workdir)
+        finally:
+            if workdir is not None:
+                shutil.rmtree(workdir, ignore_errors=True)
+
+    def _run(self, system: str, prompt: str, schema: dict, workdir: Path | None) -> dict:
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+        timeout = self.image_timeout if workdir else self.timeout
         try:
             path = shutil.which(self.path) or self.path
-            self._proc = self._popen([path, *self.command(system, schema)[1:]], stdin=subprocess.PIPE,
+            cmd = self.command(system, schema, workdir is not None)
+            self._proc = self._popen([path, *cmd[1:]], stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     creationflags=flags)
+                                     cwd=str(workdir) if workdir else None, creationflags=flags)
         except FileNotFoundError:
             raise AiError("Claude Code(claude)를 찾을 수 없습니다. 설치하고 로그인한 뒤 다시 시도하세요. "
                           "다른 위치에 있으면 settings.json 의 ai_cli_path 에 경로를 적으세요.") from None
         except OSError as e:
             raise AiError(f"Claude Code 실행 실패: {e}") from None
         try:
-            out, err = self._proc.communicate(prompt.encode("utf-8"), timeout=self.timeout)
+            out, err = self._proc.communicate(prompt.encode("utf-8"), timeout=timeout)
         except subprocess.TimeoutExpired:
             self._proc.kill()
             self._proc.communicate()
-            raise AiError(f"AI 응답이 {int(self.timeout)}초 안에 오지 않았습니다.") from None
+            raise AiError(f"AI 응답이 {int(timeout)}초 안에 오지 않았습니다.") from None
         code = self._proc.returncode
         self._proc = None
         if self.cancelled:

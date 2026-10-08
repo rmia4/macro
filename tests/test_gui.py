@@ -1362,3 +1362,66 @@ def test_ai_dialog_close_cancels_provider(gui):
     dlg.provider = provider  # 생성 중
     dlg.close()
     assert provider.cancelled and gui.ai_dialog is None
+
+
+def test_ai_capture_mode_collects_screens_and_opens_draft_with_images(gui):
+    from hotkeys import HOTKEY_CAPTURE, HOTKEY_RECORD
+    gui.grabber = ScreenGrabber()
+    seen = []
+
+    class Provider(FakeAiProvider):
+        def generate(self, system, prompt, schema, images):
+            seen.append(images)
+            return super().generate(system, prompt, schema, images)
+    answer = {"name": "버튼", "notes": "", "events": [
+        {"type": "click_image", "delay_ms": 0, "cond": {"kind": "image",
+                                                         "crop": {"capture": 2, "rect": [420, 300, 60, 30]}}}]}
+    gui.ai_provider_factory = lambda: Provider(answer)
+    gui.toggle_macros_enabled()
+    gui.on_ai_add()
+    dlg = gui.ai_dialog
+    assert HOTKEY_CAPTURE not in gui.hotkey_bindings()
+    dlg.start_capture()
+    gui.root.update()
+    assert dlg.capturing and not dlg.top.winfo_viewable() and gui.capture_session is dlg
+    bindings = gui.hotkey_bindings()
+    bindings[HOTKEY_CAPTURE]()
+    bindings[HOTKEY_CAPTURE]()
+    pump(gui)
+    assert len(dlg.captures) == 2 and "캡처 2장" in gui._notice[0]
+    bindings[HOTKEY_RECORD]()  # 캡처 모드에서는 녹화가 아니라 끝
+    pump(gui)
+    assert not dlg.capturing and gui.capture_session is None and dlg.top.winfo_viewable()
+    assert HOTKEY_CAPTURE not in gui.hotkey_bindings()
+    assert dlg.listbox.get(0, "end") == ("화면 1  (600x400)", "화면 2  (600x400)")
+    assert dlg.listbox.curselection() == (1,) and dlg._thumb is not None
+    dlg.listbox.selection_clear(0, "end")
+    dlg.listbox.selection_set(0)
+    dlg.on_delete_capture()
+    dlg.captures.append(__import__("ai_gen").Capture(dlg.captures[0].img))  # 다시 2장
+    dlg.text.insert("1.0", "화면 2의 버튼 클릭")
+    dlg.on_generate()
+    assert wait_for(gui, lambda: gui.editor is not None)
+    assert len(seen[0]) == 2
+    ed = gui.editor
+    item = ed.items[0]
+    assert item["type"] == "click_image" and item["cond"]["template"] == "ai_2_1.png"
+    assert (ed.assets_dir / "ai_2_1.png").is_file()
+
+
+def test_ai_capture_window_space_needs_window(gui):
+    gui.grabber = ScreenGrabber()
+    gui.toggle_macros_enabled()
+    gui.on_ai_add()
+    dlg = gui.ai_dialog
+    dlg.v_coord.set("창 기준")
+    dlg.v_title.set("게임")
+    gui.app.backend.rect = None
+    dlg.start_capture()
+    dlg.capture_one()
+    assert dlg.captures == []
+    gui.app.backend.rect = (100, 50, 800, 600)
+    dlg.capture_one()
+    assert dlg.captures[0].origin == (100, 50)
+    dlg.close()  # 캡처 중 닫아도 창이 돌아온다
+    assert gui.capture_session is None and gui.root.winfo_viewable()
