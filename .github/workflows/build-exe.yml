@@ -10,6 +10,9 @@ env:
   PYTHONUTF8: "1"  # 한글 출력이 cp1252 콘솔에서 실패하지 않도록
   NUMPY_VERSION: "2.5.3"  # BLAS 없이 소스에서 빌드할 numpy (바꾸면 캐시도 새로 만든다)
 
+permissions:
+  contents: write  # v* 태그에서 Release 만들기 (저장소 기본 토큰 권한이 read 라서)
+
 jobs:
   build:
     runs-on: windows-latest
