@@ -1,3 +1,4 @@
+import copy
 import time
 
 import pytest
@@ -1359,7 +1360,7 @@ def test_ai_dialog_close_cancels_provider(gui):
     gui.toggle_macros_enabled()
     gui.on_ai_add()
     dlg = gui.ai_dialog
-    dlg.provider = provider  # 생성 중
+    dlg.worker.provider = provider  # 생성 중
     dlg.close()
     assert provider.cancelled and gui.ai_dialog is None
 
@@ -1383,7 +1384,7 @@ def test_ai_capture_mode_collects_screens_and_opens_draft_with_images(gui):
     assert HOTKEY_CAPTURE not in gui.hotkey_bindings()
     dlg.start_capture()
     gui.root.update()
-    assert dlg.capturing and not dlg.top.winfo_viewable() and gui.capture_session is dlg
+    assert dlg.capturing and not dlg.top.winfo_viewable() and gui.capture_session is dlg.session
     bindings = gui.hotkey_bindings()
     bindings[HOTKEY_CAPTURE]()
     bindings[HOTKEY_CAPTURE]()
@@ -1425,3 +1426,115 @@ def test_ai_capture_window_space_needs_window(gui):
     assert dlg.captures[0].origin == (100, 50)
     dlg.close()  # 캡처 중 닫아도 창이 돌아온다
     assert gui.capture_session is None and gui.root.winfo_viewable()
+
+
+
+# ---- 기록 화면 AI 대화 ----
+def open_editor_ai(gui, name="alpha"):
+    gui.toggle_macros_enabled()
+    gui.open_editor(name)
+    ed = gui.editor
+    ed.show_panel("ai")
+    gui.root.update()
+    return ed
+
+
+def test_editor_panel_switches_and_is_remembered(gui):
+    gui.toggle_macros_enabled()
+    gui.open_editor("alpha")
+    ed = gui.editor
+    gui.root.update()
+    assert ed.v_panel.get() == "settings" and ed.settings_panel.winfo_ismapped()
+    assert not ed.ai_panel.frame.winfo_ismapped()
+    ed.show_panel("ai")
+    gui.root.update()
+    assert ed.ai_panel.frame.winfo_ismapped() and not ed.settings_panel.winfo_ismapped()
+    assert gui.settings["editor_panel"] == "ai"
+    ed.close()
+    gui.open_editor("beta")
+    gui.root.update()
+    assert gui.editor.v_panel.get() == "ai" and gui.editor.ai_panel.frame.winfo_ismapped()
+
+
+def test_editor_ai_chat_edits_existing_macro_with_undo(gui):
+    ed = open_editor_ai(gui)
+    before = copy.deepcopy(ed.items)
+    seen = []
+
+    class Provider(FakeAiProvider):
+        def generate(self, system, prompt, schema, images):
+            seen.append((system, prompt))
+            return super().generate(system, prompt, schema, images)
+    answer = {"name": "", "notes": "a 를 두 번 누르게 바꿨습니다", "events": [
+        {"type": "tap", "key": "a", "delay_ms": 0}, {"type": "tap", "key": "a", "delay_ms": 300}]}
+    gui.ai_provider_factory = lambda: Provider(answer)
+    panel = ed.ai_panel
+    panel.text.insert("1.0", "a 를 두 번만 누르게")
+    panel.send()
+    assert panel.busy and panel.btn_send.instate(["disabled"])
+    assert wait_for(gui, lambda: not panel.busy)
+    system, prompt = seen[0]
+    assert "수정 모드" in system and '"type": "mdown"' in system and prompt == "a 를 두 번만 누르게"
+    assert [i["type"] for i in ed.items] == ["kdown", "kup", "kdown", "kup"] and ed.dirty
+    assert ed.v_name.get() == "alpha"  # 기존 매크로 이름은 그대로
+    log = panel.log_box.get("1.0", "end")
+    assert "나: a 를 두 번만 누르게" in log and "AI: a 를 두 번 누르게 바꿨습니다 (항목 4개)" in log
+    assert panel.history == [("user", "a 를 두 번만 누르게"), ("ai", "a 를 두 번 누르게 바꿨습니다")]
+    ed.undo()
+    assert ed.items == before
+    # 두 번째 요청은 이전 대화를 함께 보낸다
+    panel.text.insert("1.0", "간격 늘려")
+    panel.send()
+    assert wait_for(gui, lambda: not panel.busy)
+    assert "- 사용자: a 를 두 번만 누르게" in seen[1][0]
+
+
+def test_editor_ai_chat_error_keeps_text_and_items(gui):
+    ed = open_editor_ai(gui)
+    before = copy.deepcopy(ed.items)
+    gui.ai_provider_factory = lambda: FakeAiProvider(__import__("ai_gen").AiError("시간 초과"))
+    panel = ed.ai_panel
+    panel.text.insert("1.0", "바꿔줘")
+    panel.send()
+    assert wait_for(gui, lambda: not panel.busy)
+    assert ed.items == before and not ed.dirty
+    assert "⚠: 시간 초과" in panel.log_box.get("1.0", "end") and panel.text.get("1.0", "end").strip() == "바꿔줘"
+    assert panel.history == []
+
+
+def test_editor_ai_chat_capture_adds_images_and_names_new_macro(gui):
+    from hotkeys import HOTKEY_CAPTURE, HOTKEY_RECORD
+    gui.grabber = ScreenGrabber()
+    gui.toggle_macros_enabled()
+    gui.open_editor(None)
+    ed = gui.editor
+    ed.show_panel("ai")
+    panel = ed.ai_panel
+    panel.start_capture()
+    gui.root.update()
+    assert not ed.top.winfo_viewable()
+    b = gui.hotkey_bindings()
+    b[HOTKEY_CAPTURE]()
+    b[HOTKEY_RECORD]()
+    pump(gui)
+    assert ed.top.winfo_viewable() and panel.v_shots.get() == "화면 1장" and gui.capture_session is None
+    answer = {"name": "버튼 클릭", "notes": "", "events": [
+        {"type": "click_image", "delay_ms": 0, "cond": {"kind": "image",
+                                                         "crop": {"capture": 1, "rect": [420, 300, 60, 30]}}}]}
+    gui.ai_provider_factory = lambda: FakeAiProvider(answer)
+    panel.text.insert("1.0", "버튼 클릭")
+    panel.send()
+    assert wait_for(gui, lambda: not panel.busy)
+    assert ed.items[0]["cond"]["template"] == "ai_1_1.png" and (ed.assets_dir / "ai_1_1.png").is_file()
+    assert ed.v_name.get() == "버튼 클릭"  # 새 매크로는 AI 가 붙인 이름
+    assert panel.captures == [] and panel.v_shots.get() == "화면 없음"
+    assert "새 이미지 1개" in panel.log_box.get("1.0", "end")
+
+
+def test_editor_close_cancels_ai_chat(gui):
+    ed = open_editor_ai(gui)
+    provider = FakeAiProvider({})
+    ed.ai_panel.worker.provider = provider
+    ed.dirty = False
+    ed.close()
+    assert provider.cancelled and gui.editor is None

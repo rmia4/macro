@@ -270,7 +270,7 @@ def test_prompt_lists_captures():
     system = ai_gen.build_system_prompt(req)
     assert "capture_1.png (이미지 1568x882) — 메뉴" in system and "capture_2.png (이미지 200x100)" in system
     assert "crop" in system and "Read" in system
-    assert "만들 수 없다" in ai_gen.build_system_prompt(GenRequest("x"))
+    assert "잘라낼 수 없다" in ai_gen.build_system_prompt(GenRequest("x"))
 
 
 def test_generate_sends_capture_pngs_and_limit():
@@ -299,3 +299,46 @@ def test_cli_with_images_uses_read_tool_in_temp_dir():
     assert cmd[cmd.index("--tools") + 1] == "Read" and cmd[cmd.index("--allowedTools") + 1] == "Read"
     assert seen["files"] == ["capture_1.png", "capture_2.png"] and seen["data"] == b"two"
     assert not seen["cwd"].exists()  # 끝나면 지운다
+
+
+# ---- 수정 모드 (기존 매크로 고치기) ----
+CURRENT = [{"t": 0.0, "type": "kdown", "key": "a"}, {"t": 0.05, "type": "kup", "key": "a"},
+           {"t": 0.05, "type": "wait_until", "cond": {"kind": "image", "template": "btn.png"}},
+           {"t": 0.5, "type": "set_image", "name": "first", "capture": [0, 0, 10, 10]}]
+
+
+def test_from_events_round_trips_through_to_events():
+    steps = ai_gen.from_events(CURRENT)
+    assert steps[1] == {"type": "kup", "delay_ms": 50, "key": "a"}
+    assert steps[3] == {"type": "set_image", "delay_ms": 450, "name": "first", "capture": [0, 0, 10, 10]}
+    req = GenRequest("x", current=CURRENT, templates=("btn.png",))
+    _, macro, _, assets = to_macro({"name": "", "notes": "", "events": steps}, req)
+    assert macro.events == CURRENT and assets == {}
+
+
+def test_edit_prompt_includes_current_templates_and_history():
+    req = GenRequest("x", current=CURRENT, templates=("btn.png",),
+                     history=[("user", "a 눌러"), ("ai", "만들었습니다")])
+    system = ai_gen.build_system_prompt(req)
+    assert "수정 모드" in system and '"key": "a"' in system and "btn.png" in system
+    assert "- 사용자: a 눌러" in system and "- AI: 만들었습니다" in system
+
+
+def test_edit_mode_rejects_unknown_template_and_new_set_image():
+    req = GenRequest("x", current=CURRENT, templates=("btn.png",))
+    bad = {"type": "wait_until", "delay_ms": 0, "cond": {"kind": "image", "template": "nope.png"}}
+    with pytest.raises(MacroFormatError, match="첨부 화면이 없어"):
+        to_macro({"name": "", "notes": "", "events": [bad]}, req)
+    new_img = {"type": "set_image", "delay_ms": 0, "name": "v", "template": "nope.png"}
+    with pytest.raises(MacroFormatError, match="지원하지 않는 type"):
+        to_macro({"name": "", "notes": "", "events": [new_img]}, req)
+    ok = {"type": "click_image", "delay_ms": 0, "cond": {"kind": "image", "image_var": "first"}}
+    to_macro({"name": "", "notes": "", "events": [ok]}, req)
+
+
+def test_new_crops_avoid_existing_names():
+    req = GenRequest("x", captures=[Capture(screen())], templates=("ai_1_1.png",))
+    data = {"name": "", "notes": "", "events": [
+        {"type": "wait_until", "delay_ms": 0, "cond": {"kind": "image", "crop": {"capture": 1, "rect": [0, 0, 10, 10]}}}]}
+    _, macro, _, assets = to_macro(data, req)
+    assert list(assets) == ["ai_1_2.png"] and macro.events[0]["cond"]["template"] == "ai_1_2.png"

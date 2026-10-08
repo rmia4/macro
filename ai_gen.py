@@ -76,6 +76,9 @@ class GenRequest:
     window_title: str = ""
     captures: list[Capture] = field(default_factory=list)
     recorded: list[dict] | None = None  # 3차: 녹화한 이벤트 (캡처의 event_index 가 가리킴)
+    current: list[dict] | None = None   # 고칠 기존 매크로 이벤트 (절대 t). 있으면 수정 모드
+    templates: tuple[str, ...] = ()     # 이미 있는 이미지 파일 이름 (조건에서 그대로 쓸 수 있음)
+    history: list[tuple[str, str]] = field(default_factory=list)  # 이전 대화 (역할 "user"/"ai", 내용)
 
 
 class Provider(Protocol):
@@ -107,6 +110,17 @@ def image_name(i: int) -> str:
     return f"capture_{i + 1}.png"
 
 
+def from_events(events: list[dict]) -> list[dict]:
+    """저장 이벤트(절대 t) -> AI 단계(delay_ms). 수정 모드에서 현재 매크로를 보여 줄 때 쓴다."""
+    steps, prev = [], 0.0
+    for ev in events:
+        step = {"type": ev["type"], "delay_ms": round(max(0.0, ev["t"] - prev) * 1000)}
+        step.update({k: v for k, v in ev.items() if k not in ("t", "type")})
+        prev = ev["t"]
+        steps.append(step)
+    return steps
+
+
 # ---- 프롬프트 ----
 def build_system_prompt(req: GenRequest) -> str:
     w, h = req.screen
@@ -131,11 +145,24 @@ def build_system_prompt(req: GenRequest) -> str:
   이미지를 찾을 때까지 기다렸다가 그 가운데를 클릭. 화면이 바뀐 뒤 나오는 버튼 클릭에 쓴다.
 - 화면이 바뀌는 동작 뒤에는 wait_until(이미지 조건) 또는 click_image 로 다음 화면을 기다린다.
 """
-        image_rule = "- 이미지 조건은 반드시 첨부 화면의 crop 으로 만든다 (template·image_var 를 직접 쓰지 않는다)."
+        image_rule = ("- 새 이미지 조건은 첨부 화면의 crop 으로 만든다 (이미 있는 이미지 파일·이미지 변수는 "
+                      "template·image_var 로 그대로 써도 된다).")
     else:
         screens = ""
-        image_rule = ("- 첨부 화면이 없으므로 이미지 조건·click_image 는 만들 수 없다. 필요하면 notes 에 "
-                      "화면을 캡처해서 다시 만들거나 기록 화면에서 직접 추가하라고 적는다.")
+        image_rule = ("- 첨부 화면이 없으므로 새 이미지는 잘라낼 수 없다 (이미 있는 이미지 파일·이미지 변수만 "
+                      "template·image_var 로 쓸 수 있다). 필요하면 notes 에 화면을 캡처해서 다시 요청하라고 적는다.")
+    current = ""
+    if req.current is not None:
+        current = ("\n지금 매크로 (수정 모드): 아래 단계 목록을 사용자 요청대로 고친 **전체** 목록으로 답한다. "
+                   "요청과 관계없는 단계는 값·순서를 그대로 둔다(kdown/kup 등 펼쳐진 형태 그대로 써도 된다). "
+                   "name 은 지금 이름을 유지하려면 빈 문자열로 둔다.\n"
+                   + json.dumps(from_events(req.current), ensure_ascii=False)[:30000] + "\n")
+    if req.templates:
+        current += ("이미 있는 이미지 파일 (이미지 조건 {\"kind\":\"image\",\"template\":이름} 으로 그대로 쓸 수 있음): "
+                    + ", ".join(req.templates) + "\n")
+    if req.history:
+        current += "\n이전 대화 (참고):\n" + "\n".join(
+            f"- {'사용자' if role == 'user' else 'AI'}: {text}" for role, text in req.history[-10:]) + "\n"
     recorded = ""
     if req.recorded:
         recorded = ("\n사용자가 녹화한 입력(절대 시각 t): "
@@ -166,7 +193,7 @@ def build_system_prompt(req: GenRequest) -> str:
 - 변수: {{"kind":"var","name":"이름"}}
 - 여러 조건: {{"kind":"all"|"any","conds":[잎 조건 2개 이상]}} (중첩 금지)
 - 모든 조건에 "negate": true 로 반대 조건.
-{screens}{recorded}
+{screens}{recorded}{current}
 규칙:
 - 블록 시작/끝은 반드시 짝을 맞추고 엇갈리지 않게 중첩한다.
 {image_rule}
@@ -188,6 +215,7 @@ class _Converter:
 
     def __init__(self, req: GenRequest) -> None:
         self.captures = req.captures
+        self.templates = set(req.templates)
         self.assets: dict[str, bytes] = {}
         self._by_png: dict[bytes, str] = {}
 
@@ -211,6 +239,10 @@ class _Converter:
         if w < 1 or h < 1 or x < 0 or y < 0 or x + w > W or y + h > H:
             raise MacroFormatError(f"{where}: {label} 가 화면 밖입니다 ({rect})")
         return [x, y, w, h]
+
+    def keeps_set_image(self, step: dict) -> bool:
+        """수정 모드에서 기존 이미지 변수 지정은 그대로 둘 수 있다 (새로 만들지는 않는다)."""
+        return ("capture" in step and isinstance(step["capture"], list)) or step.get("template") in self.templates
 
     def point(self, obj: dict, where: str) -> None:
         cap = self.capture(obj, where)
@@ -241,6 +273,10 @@ class _Converter:
 
     def image(self, cond: dict, where: str) -> None:
         crop = cond.pop("crop", None)
+        if crop is None and "image_var" in cond:
+            return  # 이미지 변수 참조 (이름은 profiles 검증기가 본다)
+        if crop is None and cond.get("template") in self.templates:
+            return  # 이미 있는 이미지 파일
         if "template" in cond or "image_var" in cond or not isinstance(crop, dict):
             if not self.captures:
                 raise MacroFormatError(f"{where}: 첨부 화면이 없어 이미지 조건을 만들 수 없습니다")
@@ -255,7 +291,11 @@ class _Converter:
         name = self._by_png.get(png)
         if name is None:
             n = next(i for i, c in enumerate(self.captures) if c is cap) + 1
-            name = self._by_png[png] = f"ai_{n}_{len(self.assets) + 1}.png"
+            k = len(self.assets) + 1
+            while f"ai_{n}_{k}.png" in self.templates:  # 이전 대화에서 만든 이미지와 겹치지 않게
+                k += 1
+            name = self._by_png[png] = f"ai_{n}_{k}.png"
+            self.templates.add(name)
             self.assets[name] = png
         cond["template"] = name
         if "region" in cond:
@@ -275,13 +315,14 @@ def to_events(steps: list, conv: _Converter | None = None) -> list[dict]:
         if not isinstance(step, dict):
             raise MacroFormatError(f"{where}: 객체가 아닙니다")
         typ = step.get("type")
-        if typ not in ALLOWED_TYPES:
+        if typ not in ALLOWED_TYPES and not (typ == "set_image" and conv.keeps_set_image(step)):
             raise MacroFormatError(f"{where}: 지원하지 않는 type {typ!r}")
         delay = step.get("delay_ms", 0)
         if not _num(delay) or delay < 0:
             raise MacroFormatError(f"{where}: delay_ms 는 0 이상의 숫자여야 합니다")
         t = round(t + delay / 1000, 4)
-        conv.point(step, where)
+        if typ != "set_image":  # set_image 의 capture 는 화면 번호가 아니라 캡처 영역
+            conv.point(step, where)
         if "cond" in step:
             conv.cond(step["cond"], where)
         fields = {k: v for k, v in step.items() if k not in ("type", "delay_ms", "hold_ms")}
