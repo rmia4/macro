@@ -35,6 +35,7 @@ class App:
         self.macro: Macro | None = None     # REPL 용 현재 매크로
         self.macro_name: str | None = None  # 저장/불러온 이름 (새 녹화는 None)
         self.library: dict[str, Macro] = {}  # 저장된 매크로 (GUI 목록)
+        self.library_sig: tuple = ()  # 마지막으로 반영한 폴더 상태 (자동 새로고침용)
         self.playing_name: str | None = None
         self.playing_macro: Macro | None = None
         self.playing_keys: frozenset[str] = frozenset()
@@ -168,6 +169,24 @@ class App:
             except (OSError, ValueError) as e:  # MacroFormatError 포함
                 self.log(f"불러오기 실패 '{name}': {e}")
         self.library = lib
+        self.library_sig = self.library_signature()
+
+    def library_signature(self) -> tuple:
+        """매크로 폴더의 json 파일 (이름, 수정 시각, 크기). 바뀌었으면 밖에서 파일이 바뀐 것."""
+        d = Path(self.macros_dir)
+        if not d.is_dir():
+            return ()
+        sig = []
+        for p in sorted(d.glob("*.json")):
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            sig.append((p.name, st.st_mtime_ns, st.st_size))
+        return tuple(sig)
+
+    def library_changed(self) -> bool:
+        return self.library_signature() != self.library_sig
 
     def store(self, name: str, macro: Macro, old_name: str | None = None,
               assets: dict[str, Path] | None = None) -> str:
@@ -202,6 +221,7 @@ class App:
                 delete_macro(self.macros_dir, old_name)
             except (ValueError, OSError):
                 pass
+        self.library_sig = self.library_signature()
         self.log(f"저장: {name}")
         return name
 
@@ -218,6 +238,7 @@ class App:
         path = save_macro(self.macro, macro_path(self.macros_dir, name))
         self.macro_name = path.stem
         self.library[path.stem] = self.macro
+        self.library_sig = self.library_signature()
         self.log(f"저장: {path}")
 
     def load(self, name: str) -> None:
@@ -239,6 +260,7 @@ class App:
             shutil.rmtree(assets)
         if self.macro_name == path.stem:
             self.macro_name = None  # 메모리의 매크로는 유지 (다시 저장 가능)
+        self.library_sig = self.library_signature()
         self.log(f"삭제: {path}")
 
     # ---- REPL ----

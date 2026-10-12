@@ -73,7 +73,7 @@ def test_macro_settings_buttons_follow_enable_state(gui):
     assert all(button.instate(["disabled"]) for button in gui.macro_settings_buttons)
 
 
-@pytest.mark.parametrize("action", ["on_add", "on_edit", "on_duplicate", "on_delete"])
+@pytest.mark.parametrize("action", ["on_add", "on_edit", "on_delete"])
 def test_macro_settings_blocked_when_enabled(gui, monkeypatch, action):
     gui.tree.selection_set("alpha")
     confirmations = []
@@ -93,11 +93,12 @@ def test_play_selected_and_stop(gui):
     pump(gui)
     assert gui.app.playing and gui.app.playing_name == "beta"
     assert gui.status.cget("text") == "▶ 재생 중"
-    assert gui.progress_label.cget("text").startswith("beta · 루프 1/1 · 이벤트 1/6")
-    gui.on_stop()
+    assert gui.btn_play.cget("text") == "■ 중지 (F9)"     # 재생/중지 한 버튼
+    gui.btn_play.invoke()
     gui.app._thread.join(1)
     pump(gui)
     assert not gui.app.playing and gui.status.cget("text") == "대기 중"
+    assert gui.btn_play.cget("text") == "▶ 재생 (F9)"
 
 
 def test_macro_hotkey_toggles_that_macro(gui):
@@ -118,25 +119,104 @@ def test_countdown_cancel(gui):
     gui.tree.selection_set("beta")
     gui.on_play()
     pump(gui)
-    assert gui.status.cget("text") == "5초 후 재생"
-    gui.on_stop()
+    assert gui.status.cget("text") == "5초 후 재생" and gui.btn_play.cget("text") == "■ 중지 (F9)"
+    gui.btn_play.invoke()
     pump(gui)
     assert gui.status.cget("text") == "대기 중" and not gui.app.playing
 
 
-def test_duplicate_and_delete(gui, monkeypatch, tmp_path):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+def test_delete(gui, monkeypatch, tmp_path):
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     gui.tree.selection_set("alpha")
-    gui.on_duplicate()
-    assert "alpha 복사" in gui.app.library and gui.app.library["alpha 복사"].hotkey is None
-    assert gui.selected() == "alpha 복사"
     monkeypatch.setattr("gui.messagebox.askyesno", lambda *a, **k: False)
     gui.on_delete()
-    assert (tmp_path / "alpha 복사.json").exists()
+    assert (tmp_path / "alpha.json").exists()
     monkeypatch.setattr("gui.messagebox.askyesno", lambda *a, **k: True)
     gui.on_delete()
-    assert not (tmp_path / "alpha 복사.json").exists()
-    assert gui.tree.get_children() == ("alpha", "beta")
+    assert not (tmp_path / "alpha.json").exists()
+    assert gui.tree.get_children() == ("beta",)
+
+
+def test_auto_reload_external_changes(gui, tmp_path):
+    reloads = []
+    orig = gui.reload
+    gui.reload = lambda: (reloads.append(1), orig())
+    gui._auto_reload()
+    assert reloads == []                                    # 바뀐 것 없음
+    gui.tree.selection_set("beta")
+    (tmp_path / "gamma.json").write_text((tmp_path / "beta.json").read_text(encoding="utf-8"), encoding="utf-8")
+    gui._auto_reload()
+    assert gui.tree.get_children() == ("alpha", "beta", "gamma") and gui.selected() == "beta"
+    (tmp_path / "alpha.json").unlink()
+    gui._auto_reload()
+    assert gui.tree.get_children() == ("beta", "gamma")
+    n = len(reloads)
+    gui.app.store("delta", Macro(events=list(EVENTS)))      # 이 프로그램이 저장한 것은 다시 읽지 않는다
+    gui._auto_reload()
+    assert len(reloads) == n
+
+
+def test_settings_dialog_apply_and_cancel(gui, monkeypatch):
+    import gui as gui_mod
+    d = gui_mod.SettingsDialog.open(gui)
+    assert gui_mod.SettingsDialog.open(gui) is d             # 하나만
+    d.v_delay.set("9")
+    d.v_overlay.set("↙ 왼쪽 아래")
+    monkeypatch.setattr(gui_mod.HotkeyCaptureDialog, "ask", classmethod(lambda cls, parent: "shift+f11"))
+    d.capture_hotkey()
+    assert d.hotkey_labels["toggle"].cget("text") == "SHIFT + F11"
+    d.close()                                                 # 취소: 적용 안 함
+    assert gui.delay.get() == "0" and gui.settings["overlay_position"] == "ne"
+    assert gui.toggle_hotkey == "ctrl+f12" and gui.settings_dialog is None
+    d = gui_mod.SettingsDialog.open(gui)
+    d.v_delay.set("9")
+    d.v_overlay.set("↙ 왼쪽 아래")
+    d.capture_hotkey()
+    d.ok()
+    assert gui.delay.get() == "9" and gui.settings["start_delay"] == 9
+    assert gui.settings["overlay_position"] == "sw" and gui.toggle_hotkey == "shift+f11"
+    assert "SHIFT + F11" in gui.btn_power.cget("text") and gui.settings_dialog is None
+    gui.set_overlay_position("off")
+
+
+def test_settings_dialog_rejects_bad_hotkey(gui, monkeypatch):
+    import gui as gui_mod
+    d = gui_mod.SettingsDialog.open(gui)
+    monkeypatch.setattr(gui_mod.HotkeyCaptureDialog, "ask", classmethod(lambda cls, parent: "f6"))
+    d.capture_hotkey()
+    d.ok()                                                    # alpha 의 핫키 -> 오류, 창 유지
+    assert gui.shown and gui.settings_dialog is d and gui.toggle_hotkey == "ctrl+f12"
+    d.close()
+
+
+def test_settings_dialog_changes_play_and_record_keys(gui, monkeypatch):
+    import gui as gui_mod
+    import hotkeys as hk
+    import editor_model as em
+    d = gui_mod.SettingsDialog.open(gui)
+    for which, key in (("play", "f6"), ("record", "f2")):   # f6 은 alpha 의 핫키 -> 거부
+        monkeypatch.setattr(gui_mod.HotkeyCaptureDialog, "ask", classmethod(lambda cls, parent, k=key: k))
+        d.capture_hotkey(which)
+    d.ok()
+    assert gui.shown and hk.HOTKEY_PLAY == "f9" and gui.settings_dialog is d
+    for which, key in (("play", "f11"), ("record", "f11")):  # 같은 키 -> 거부
+        monkeypatch.setattr(gui_mod.HotkeyCaptureDialog, "ask", classmethod(lambda cls, parent, k=key: k))
+        d.capture_hotkey(which)
+    d.ok()
+    assert "같습니다" in gui.shown[-1][1] and gui.settings_dialog is d
+    monkeypatch.setattr(gui_mod.HotkeyCaptureDialog, "ask", classmethod(lambda cls, parent: "f2"))
+    d.capture_hotkey("record")
+    d.ok()
+    assert (hk.HOTKEY_PLAY, hk.HOTKEY_RECORD) == ("f11", "f2") and gui.settings_dialog is None
+    assert (gui.settings["play_hotkey"], gui.settings["record_hotkey"]) == ("f11", "f2")
+    b = gui.hotkey_bindings()
+    assert "f11" in b and "f2" in b and "f9" not in b and "f8" not in b
+    assert gui.btn_play.cget("text") == "▶ 재생 (F11)" and "F11: 선택한 매크로" in gui.hint.cget("text")
+    assert {"f2", "f11"} <= gui.recording_ignore_keys() and "f9" not in gui.recording_ignore_keys()
+    assert "f9" in em.hotkey_choices() and "f11" not in em.hotkey_choices()
+    assert gui.set_toggle_hotkey("f2") is not None           # 이제 제어 키
+    assert gui.set_control_hotkeys("ctrl+f3", "f9") is not None   # 한 키만
+    assert gui.set_control_hotkeys("f10", "f9") is not None       # 종료 키와 같음
 
 
 def test_hotkey_calls_run_on_tk_thread(gui):
@@ -150,7 +230,7 @@ def test_hotkey_calls_run_on_tk_thread(gui):
 
 # ---- 기록 화면 ----
 def test_add_opens_editor_and_records(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     gui.on_add()
     ed = gui.editor
     assert ed is not None and ed.v_name.get() == "새 매크로"
@@ -174,7 +254,7 @@ def test_add_opens_editor_and_records(gui):
 
 
 def test_editor_insert_edit_delete_move(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     gui.on_add()
     ed = gui.editor
     import editor_model as em
@@ -195,7 +275,7 @@ def test_editor_insert_edit_delete_move(gui):
 
 
 def test_editor_groups_moves_and_edits_path(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     gui.tree.selection_set("beta")
     gui.on_edit()
     ed = gui.editor
@@ -212,7 +292,7 @@ def test_editor_groups_moves_and_edits_path(gui):
 
 
 def test_editor_save_new_with_hotkey_and_options(gui, tmp_path):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -232,7 +312,7 @@ def test_editor_save_new_with_hotkey_and_options(gui, tmp_path):
 
 
 def test_editor_save_validation_errors(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     gui.on_add()
     ed = gui.editor
     ed.v_name.set("beta")       # 이미 있는 이름
@@ -249,7 +329,7 @@ def test_editor_save_validation_errors(gui):
 
 
 def test_editor_rename_existing(gui, tmp_path):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     gui.tree.selection_set("beta")
     gui.on_edit()
     ed = gui.editor
@@ -260,7 +340,7 @@ def test_editor_rename_existing(gui, tmp_path):
 
 
 def test_editor_test_play(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -277,7 +357,7 @@ def test_editor_test_play(gui):
 
 
 def test_editor_close_asks_when_dirty(gui, monkeypatch):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -290,7 +370,7 @@ def test_editor_close_asks_when_dirty(gui, monkeypatch):
 
 
 def test_editor_pick_position_window_space(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     gui.on_add()
     ed = gui.editor
     gui.app.backend.cursor = (150, 90)
@@ -339,9 +419,9 @@ def test_event_dialog_fields_follow_kind(gui):
 
 
 def test_no_selection_does_nothing(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     gui.tree.selection_remove(gui.tree.selection())
-    for fn in (gui.on_edit, gui.on_duplicate, gui.on_delete):
+    for fn in (gui.on_edit, gui.on_delete):
         fn()
     assert gui.shown == [] and gui.editor is None
     assert set(gui.app.library) == {"alpha", "beta"}
@@ -381,7 +461,7 @@ def test_event_dialog_cursor_option_and_path(gui):
 
 
 def test_editor_record_button_countdown_shown_in_editor(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     gui.on_add()
     ed = gui.editor
     gui.delay.set("3")
@@ -397,11 +477,11 @@ def test_editor_record_button_countdown_shown_in_editor(gui):
 def test_global_enable_toggle(gui):
     gui.tree.selection_set("beta")
     gui.toggle_macros_enabled()
-    assert not gui.macros_enabled and "실행 불가" in gui.btn_power.cget("text")
+    assert not gui.macros_enabled and "편집모드" in gui.btn_power.cget("text")
     gui.on_play(immediate=True)
     gui.hotkey_bindings()["f6"]()   # 매크로 핫키도 무시
     pump(gui)
-    assert not gui.app.playing and "실행이 꺼져" in logs(gui)
+    assert not gui.app.playing and "편집모드입니다" in logs(gui)
     gui.toggle_macros_enabled()
     gui.on_play(immediate=True)
     pump(gui)
@@ -412,7 +492,7 @@ def test_global_enable_toggle(gui):
 
 
 def test_editor_combo_hotkey_save_and_binding(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -460,7 +540,7 @@ def test_toggle_hotkey_binding_and_change(gui):
 
 
 def test_editor_rejects_toggle_hotkey(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -470,7 +550,7 @@ def test_editor_rejects_toggle_hotkey(gui):
 
 
 def test_editor_undo_redo(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -502,7 +582,7 @@ def test_editor_undo_redo(gui):
 
 
 def test_editor_undo_shortcut_ignored_in_entry(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -517,7 +597,7 @@ def test_editor_undo_shortcut_ignored_in_entry(gui):
 
 
 def test_max_minutes_field_saved(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -555,7 +635,7 @@ def test_settings_persist_across_restart(tmp_path):
     app = App(FakeBackend(), macros_dir=tmp_path / "m", recorder_factory=FakeRecorder, player_factory=FakePlayer)
     g = gui_mod.Gui(root, app, Settings(path))
     root.update()
-    assert not g.macros_enabled and g.delay.get() == "7" and "실행 불가" in g.btn_power.cget("text")
+    assert not g.macros_enabled and g.delay.get() == "7" and "편집모드" in g.btn_power.cget("text")
     assert all(button.instate(["!disabled"]) for button in g.macro_settings_buttons)
     assert root.geometry().startswith("800x600")
     g.close()
@@ -586,7 +666,7 @@ def test_overlay_shows_flash_and_playback(gui):
     assert not ov.visible                       # 평소에는 숨김
     gui.toggle_macros_enabled()                 # 전환하면 잠깐 표시
     pump(gui)
-    assert ov.visible and ov.label.cget("text") == "○ 매크로 실행 불가"
+    assert ov.visible and ov.label.cget("text") == "○ 매크로 편집모드"
     gui._flash_until = 0
     pump(gui)
     assert not ov.visible
@@ -604,8 +684,7 @@ def test_overlay_shows_flash_and_playback(gui):
 
 
 def test_overlay_position_change_and_off(gui):
-    gui.v_overlay.set("↙ 왼쪽 아래")
-    gui.set_overlay_position(gui._overlay_key())
+    gui.set_overlay_position("sw")
     assert gui.settings["overlay_position"] == "sw"
     pump(gui)
     ov = gui.overlay
@@ -619,7 +698,7 @@ def test_overlay_position_change_and_off(gui):
 
 
 def test_overlay_shows_editor_recording(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     gui.on_add()
     gui.editor.toggle_record(immediate=True)
     pump(gui)
@@ -627,7 +706,7 @@ def test_overlay_shows_editor_recording(gui):
 
 
 def test_editor_relative_recording_flag(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     gui.on_add()
     ed = gui.editor
     assert "mouse_mode" not in ed.v_opts  # 매크로 설정이 아니라 녹화 방식 체크
@@ -684,7 +763,7 @@ def test_small_dialogs_centered_on_parent(gui):
 
 
 def test_editor_first_open_centered(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     gui.root.geometry("1000x700+100+50")
     gui.root.update()
     gui.settings["editor_geometry"] = ""
@@ -697,7 +776,7 @@ def test_editor_first_open_centered(gui):
 
 
 def test_editor_repeat_block_ui(gui, monkeypatch):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -737,7 +816,7 @@ def test_editor_repeat_block_ui(gui, monkeypatch):
 
 
 def test_editor_wrap_overlapping_selection_shows_error(gui):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -775,7 +854,7 @@ class Ev:
 
 def _open_condition(gui):
     if gui.macros_enabled:
-        gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+        gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     from gui import ConditionDialog
     gui.grabber = ScreenGrabber()
     gui.delay.set("0")
@@ -855,7 +934,7 @@ def test_condition_dialog_color_range_pick_and_window_coords(gui):
 
 
 def test_editor_condition_edit_and_assets_lifecycle(gui, tmp_path):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     import shutil
     ed, d = _open_condition(gui)
     d.on_crop()
@@ -866,9 +945,6 @@ def test_editor_condition_edit_and_assets_lifecycle(gui, tmp_path):
     assert ed.on_save()
     staging = ed.assets_dir
     assert not staging.exists()                                           # 닫으면 작업 폴더 삭제
-    gui.tree.selection_set("원본")
-    gui.on_duplicate()
-    assert (tmp_path / "원본 복사" / "이미지1.png").is_file()                # 복제 시 이미지도 복사
     gui.tree.selection_set("원본")
     gui.on_edit()
     ed = gui.editor
@@ -972,7 +1048,7 @@ def test_click_and_break_dialogs(gui):
 
 
 def test_edit_routes_condition_modes(gui, monkeypatch):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     import editor_model as em
     seen = []
     import gui as gui_mod
@@ -1120,7 +1196,7 @@ def test_group_condition_dialog(gui, monkeypatch):
 
 
 def test_infinite_repeat_summary(gui, monkeypatch):
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     import editor_model as em
     gui.on_add()
     ed = gui.editor
@@ -1149,7 +1225,7 @@ def test_event_dialog_capture_key(gui):
 def test_move_record_inserts_only_moves_after_selection(gui):
     import editor_model as em
     from gui import EventDialog
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     gui.on_add()
     ed = gui.editor
     # 이동 녹화 버튼은 마우스 이동 종류에서만 보인다
@@ -1183,7 +1259,7 @@ def test_move_record_inserts_only_moves_after_selection(gui):
 def test_editor_add_buttons_limit_kinds(gui, monkeypatch):
     import editor_model as em
     from gui import EventDialog
-    gui.toggle_macros_enabled()  # 설정 작업은 실행 불가 상태에서 수행
+    gui.toggle_macros_enabled()  # 설정 작업은 편집모드에서 수행
     gui.on_add()
     seen = []
     monkeypatch.setattr(EventDialog, "ask", classmethod(lambda cls, parent, kinds, **kw: seen.append(
@@ -1331,7 +1407,7 @@ def test_ai_dialog_opens_unsaved_draft(gui):
         {"type": "tap", "key": "f", "delay_ms": 0}, {"type": "click", "x": 3, "y": 4, "delay_ms": 500}]}
     gui.ai_provider_factory = lambda: FakeAiProvider(answer)
     gui.on_ai_add()
-    assert gui.ai_dialog is None  # 실행 가능 상태에서는 무동작
+    assert gui.ai_dialog is None  # 실행모드에서는 무동작
     gui.toggle_macros_enabled()
     gui.on_ai_add()
     dlg = gui.ai_dialog
@@ -1565,3 +1641,111 @@ def test_editor_close_cancels_ai_chat(gui):
     ed.dirty = False
     ed.close()
     assert provider.cancelled and gui.editor is None
+
+
+def test_settings_dialog_layout_and_quit_capture_keys(gui, monkeypatch):
+    import gui as gui_mod
+    import hotkeys as hk
+    d = gui_mod.SettingsDialog.open(gui)
+    tabs = [d.notebook.tab(t, "text") for t in d.notebook.tabs()]
+    assert tabs == ["기본 설정", "고급"]
+    assert [w for w, _ in d.KEY_ROWS] == ["capture", "record", "play", "quit", "toggle"]   # F7~F12 순서
+    assert [d.hotkey_labels[w].cget("text") for w, _ in d.KEY_ROWS] == ["F7", "F8", "F9", "F10", "CTRL + F12"]
+    for which, key in (("quit", "f4"), ("capture", "f3")):
+        monkeypatch.setattr(gui_mod.HotkeyCaptureDialog, "ask", classmethod(lambda cls, parent, k=key: k))
+        d.capture_hotkey(which)
+    d.ok()
+    assert (hk.HOTKEY_QUIT, hk.HOTKEY_CAPTURE) == ("f4", "f3") and gui.settings["quit_hotkey"] == "f4"
+    b = gui.hotkey_bindings()
+    assert "f4" in b and "f10" not in b and "F4: 종료" in gui.hint.cget("text")
+    assert "f4" in gui.recording_ignore_keys() and "f10" not in gui.recording_ignore_keys()
+    assert "F3 한 장씩" in gui_mod.ai_guide()
+    gui.capture_session = type("S", (), {"capture_one": lambda self: None, "finish_capture": lambda self: None})()
+    assert "f3" in gui.hotkey_bindings() and "f7" not in gui.hotkey_bindings()
+    gui.capture_session = None
+
+
+def test_settings_dialog_advanced_values(gui, monkeypatch):
+    import gui as gui_mod
+    import ai_gen
+    import recorder
+    from settings import DEFAULTS
+    d = gui_mod.SettingsDialog.open(gui)
+    d.v_num["key_hold_ms"].set("6000")                       # 범위 밖 -> 오류, 창 유지
+    d.ok()
+    assert "키 누름 유지" in gui.shown[-1][1] and gui.settings_dialog is d
+    d.v_num["undo_limit"].set("12.5")                        # 정수 칸
+    d.v_num["key_hold_ms"].set("70")
+    d.ok()
+    assert "되돌리기" in gui.shown[-1][1]
+    new = {"event_delay_ms": "250", "key_hold_ms": "70", "click_hold_ms": "90", "relpath_scale_pct": "150",
+           "default_threshold": "92", "default_tolerance": "33", "cond_timeout_s": "5", "cond_interval_ms": "200",
+           "move_interval_ms": "20", "undo_limit": "10", "flash_seconds": "0.5", "ai_max_captures": "3"}
+    for k, v in new.items():
+        d.v_num[k].set(v)
+    d.ok()
+    s = gui.settings
+    assert gui.settings_dialog is None and s["flash_seconds"] == 0.5 and s["undo_limit"] == 10
+    assert recorder.MOVE_INTERVAL == 0.02 and ai_gen.MAX_CAPTURES == 3
+    assert recorder.RecorderCore().move_interval == 0.02
+    d = gui_mod.SettingsDialog.open(gui)                      # 기본값으로: 칸만 바뀌고 취소하면 그대로
+    d.reset_advanced()
+    assert d.v_num["undo_limit"].get() == str(DEFAULTS["undo_limit"]) and d.v_num["flash_seconds"].get() == "2"
+    d.close()
+    assert s["undo_limit"] == 10
+
+    # 직접 추가 기본값: 새 이벤트·조건 대화상자
+    from gui import ConditionDialog, EventDialog
+    import editor_model as em
+    ed, c = _open_condition(gui)
+    assert (c.v_threshold.get(), c.v_tol.get(), c.v_timeout.get(), c.v_interval.get(), c.v_hold.get()) == \
+        ("92", "33", "5", "200", "90")
+    c.top.destroy()
+    defaults = gui.event_defaults()
+    e = EventDialog(gui.root, em.ADD_KINDS, kind="tap", defaults=defaults)
+    assert e.v["delay_ms"].get() == "250" and e.v["hold_ms"].get() == "70" and e.v["scale_pct"].get() == "150"
+    e.top.destroy()
+    e = EventDialog(gui.root, em.ADD_KINDS, kind="click", defaults=defaults)
+    assert e.v["hold_ms"].get() == "90"
+    e.top.destroy()
+    # 기존 항목 수정은 저장된 값 유지
+    item = em.build_items("tap", delay_ms="30", key="a", hold_ms="40")
+    e = EventDialog(gui.root, em.EDIT_KINDS, item=item[0], defaults=defaults)
+    assert e.v["delay_ms"].get() == "30"
+    e.top.destroy()
+    # 되돌리기 개수 제한
+    for _ in range(15):
+        ed._snapshot()
+    assert len(ed._undo) == 10
+    # 전환 표시 시간
+    gui.toggle_macros_enabled()
+    assert gui._flash_until - time.monotonic() <= 0.5
+
+
+def test_settings_dialog_reset_basic(gui, monkeypatch):
+    import gui as gui_mod
+    gui.settings["ai_provider"] = "anthropic"
+    d = gui_mod.SettingsDialog.open(gui)
+    monkeypatch.setattr(gui_mod.HotkeyCaptureDialog, "ask", classmethod(lambda cls, parent: "f4"))
+    d.capture_hotkey("quit")
+    d.v_delay.set("9")
+    d.v_overlay.set("↙ 왼쪽 아래")
+    d.v_num["undo_limit"].set("20")
+    d.reset_basic()                                    # 기본 설정 칸만 (고급·AI 설정은 그대로)
+    assert d.hotkey_labels["quit"].cget("text") == "F10" and d.hotkeys["toggle"] == "ctrl+f12"
+    assert d.v_delay.get() == "3" and d.v_overlay.get() == "↗ 오른쪽 위"
+    assert d.v_num["undo_limit"].get() == "20" and gui.settings["ai_provider"] == "anthropic"
+    d.ok()
+    assert gui.delay.get() == "3" and gui.settings["undo_limit"] == 20
+
+
+def test_settings_dialog_author_link(gui, monkeypatch):
+    import gui as gui_mod
+    opened = []
+    monkeypatch.setattr(gui_mod.webbrowser, "open", opened.append)
+    d = gui_mod.SettingsDialog.open(gui)
+    assert d.author_link.cget("text") == "제작자"
+    d.top.update()
+    d.author_link.event_generate("<Button-1>")
+    assert opened == ["https://github.com/rmia4/macro"]
+    d.close()

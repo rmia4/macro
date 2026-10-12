@@ -11,7 +11,7 @@ import re
 
 import keys
 import vision
-from hotkeys import CONTROL_KEYS
+import hotkeys as hk
 from profiles import BUTTONS, MAX_REPEAT, block_pairs, blocks, macro_path
 
 EVENT_LABELS = {"move": "마우스 이동", "mdown": "마우스 누름", "mup": "마우스 뗌",
@@ -63,7 +63,11 @@ def _key_order(k: str):
 
 
 KEY_CHOICES = sorted(keys.NAME_TO_SCAN, key=_key_order)
-HOTKEY_CHOICES = [k for k in KEY_CHOICES if k not in CONTROL_KEYS]
+
+
+def hotkey_choices() -> list[str]:
+    """매크로 시작 핫키로 고를 수 있는 키 (제어 키 제외, 제어 키는 설정에서 바뀔 수 있다)."""
+    return [k for k in KEY_CHOICES if k not in hk.CONTROL_KEYS]
 
 
 def moves_only(events: list[dict]) -> list[dict]:
@@ -591,8 +595,8 @@ def validate_for_save(name: str, hotkey: str | None, items: list[dict],
             errors.append(f"핫키: {e}")
             hotkey = None
     if hotkey:
-        if any(p in CONTROL_KEYS for p in parts):
-            errors.append(f"핫키: {', '.join(k.upper() for k in CONTROL_KEYS)} 는 제어 키라 쓸 수 없습니다")
+        if any(p in hk.CONTROL_KEYS for p in parts):
+            errors.append(f"핫키: {', '.join(k.upper() for k in hk.CONTROL_KEYS)} 는 제어 키라 쓸 수 없습니다")
         elif hotkey in reserved:
             errors.append(f"핫키: {hotkey.upper()} 는 전체 실행 전환 키로 쓰이고 있습니다")
         else:
@@ -616,7 +620,7 @@ def validate_for_save(name: str, hotkey: str | None, items: list[dict],
         if missing:
             errors.append(f"조건 이미지가 없습니다: {', '.join(missing)}")
     used_keys = {keys.hotkey_key(i["key"]) for i in items if "key" in i}
-    bad = sorted(k for k in CONTROL_KEYS if k in used_keys)
+    bad = sorted(k for k in hk.CONTROL_KEYS if k in used_keys)
     for combo in ([hotkey] if parts else []) + [r for r in reserved if r]:
         if all(p in used_keys for p in keys.hotkey_parts(combo)):
             bad.append(combo)
