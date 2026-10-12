@@ -33,6 +33,7 @@ DEFAULT_HOLD_MS = 50
 MAX_CAPTURES = 8        # 한 번에 보내는 화면 수 (사용량·시간)
 AI_IMAGE_MAX = 1568     # AI 에 보내는 이미지의 긴 변 (넘으면 줄인다)
 MIN_CROP = 8            # 잘라낼 이미지의 최소 변 (원본 픽셀)
+MAX_CURRENT_CHARS = 30000  # 수정 모드에서 보내는 지금 매크로 JSON 의 최대 길이 (넘으면 마우스 이동을 줄인다)
 
 OUTPUT_SCHEMA = {
     "type": "object",
@@ -123,6 +124,47 @@ def from_events(events: list[dict]) -> list[dict]:
     return steps
 
 
+def thin_moves(steps: list[dict], stride: int) -> list[dict]:
+    """연속된 move(또는 rmove) 묶음에서 stride 개마다 하나와 마지막만 남긴다. 버린 단계의 지연은 다음 남는
+    단계에 더하고 rmove 는 이동량도 더해서, 걸리는 시간과 도착 위치는 그대로다."""
+    out: list[dict] = []
+    prev, run = None, 0
+    carry_ms, carry = 0, [0, 0]
+    for i, step in enumerate(steps):
+        typ = step["type"]
+        run = run + 1 if typ == prev else 1
+        prev = typ
+        if typ not in ("move", "rmove"):
+            out.append(step)
+            continue
+        last = i + 1 == len(steps) or steps[i + 1]["type"] != typ
+        if run % stride and not last:
+            carry_ms += step["delay_ms"]
+            if typ == "rmove":
+                carry = [carry[0] + step["dx"], carry[1] + step["dy"]]
+            continue
+        step = dict(step, delay_ms=step["delay_ms"] + carry_ms)
+        if typ == "rmove":
+            step.update(dx=step["dx"] + carry[0], dy=step["dy"] + carry[1])
+        carry_ms, carry = 0, [0, 0]
+        out.append(step)
+    return out
+
+
+def current_steps(events: list[dict]) -> tuple[list[dict], int]:
+    """수정 모드에서 보낼 지금 매크로 단계와 줄인 마우스 이동 수. 길면 이동을 점점 성기게 줄이고,
+    그래도 넘으면 AiError (잘라서 보내면 AI 가 뒷부분 없는 목록을 답해 이벤트가 사라진다)."""
+    steps = from_events(events)
+    stride = 1
+    while True:
+        thinned = thin_moves(steps, stride) if stride > 1 else steps
+        if len(json.dumps(thinned, ensure_ascii=False)) <= MAX_CURRENT_CHARS:
+            return thinned, len(steps) - len(thinned)
+        if stride > len(steps):
+            raise AiError("매크로가 너무 길어 AI 로 고칠 수 없습니다. 구간을 나눠 다른 매크로로 만들어 주세요.")
+        stride *= 2
+
+
 # ---- 프롬프트 ----
 def build_system_prompt(req: GenRequest, image_files: bool = True) -> str:
     """image_files: 화면을 작업 폴더 파일로 두고 Read 도구로 읽게 할지 (CLI). 아니면 요청에 바로 첨부된다."""
@@ -161,7 +203,7 @@ def build_system_prompt(req: GenRequest, image_files: bool = True) -> str:
         current = ("\n지금 매크로 (수정 모드): 아래 단계 목록을 사용자 요청대로 고친 **전체** 목록으로 답한다. "
                    "요청과 관계없는 단계는 값·순서를 그대로 둔다(kdown/kup 등 펼쳐진 형태 그대로 써도 된다). "
                    "name 은 지금 이름을 유지하려면 빈 문자열로 둔다.\n"
-                   + json.dumps(from_events(req.current), ensure_ascii=False)[:30000] + "\n")
+                   + json.dumps(current_steps(req.current)[0], ensure_ascii=False) + "\n")
     if req.templates:
         current += ("이미 있는 이미지 파일 (이미지 조건 {\"kind\":\"image\",\"template\":이름} 으로 그대로 쓸 수 있음): "
                     + ", ".join(req.templates) + "\n")
@@ -383,14 +425,20 @@ def generate_macro(req: GenRequest, provider: Provider,
     if len(req.captures) > MAX_CAPTURES:
         raise AiError(f"화면은 {MAX_CAPTURES}장까지 보낼 수 있습니다.")
     system = build_system_prompt(req, getattr(provider, "image_files", True))
+    thinned = current_steps(req.current)[1] if req.current is not None else 0
     images = [capture_png(c) for c in req.captures]
     prompt = text
     for attempt in range(retries + 1):
         data = provider.generate(system, prompt, OUTPUT_SCHEMA, images)
         try:
-            return to_macro(data, req)
+            name, macro, notes, assets = to_macro(data, req)
         except MacroFormatError as e:
             error = str(e)
+        else:
+            if thinned:
+                notes = (f"매크로가 길어 마우스 이동 {thinned}개를 줄여 보냈습니다 (결과에도 반영됨, "
+                         f"↶ 되돌리기로 취소). {notes}").strip()
+            return name, macro, notes, assets
         prompt = (f"{text}\n\n[이전 답의 오류] {error}\n"
                   f"이전 답: {json.dumps(data, ensure_ascii=False)[:4000]}\n오류를 고쳐 전체를 다시 답하라.")
     raise AiError(f"AI 가 만든 매크로가 형식에 맞지 않습니다: {error}")

@@ -466,3 +466,38 @@ def test_new_crops_avoid_existing_names():
         {"type": "wait_until", "delay_ms": 0, "cond": {"kind": "image", "crop": {"capture": 1, "rect": [0, 0, 10, 10]}}}]}
     _, macro, _, assets = to_macro(data, req)
     assert list(assets) == ["ai_1_2.png"] and macro.events[0]["cond"]["template"] == "ai_1_2.png"
+
+
+# ---- 수정 모드: 긴 매크로는 마우스 이동을 줄여 보낸다 ----
+def test_thin_moves_keeps_time_end_point_and_relative_total():
+    steps = ([{"type": "move", "delay_ms": 10, "x": i, "y": i} for i in range(5)]
+             + [{"type": "kdown", "delay_ms": 0, "key": "a"}]
+             + [{"type": "rmove", "delay_ms": 10, "dx": 1, "dy": -2} for _ in range(5)])
+    out = ai_gen.thin_moves(steps, 2)
+    assert [s["type"] for s in out] == ["move", "move", "move", "kdown", "rmove", "rmove", "rmove"]
+    assert out[2] == {"type": "move", "delay_ms": 10, "x": 4, "y": 4}  # 묶음 끝은 남는다
+    assert sum(s["delay_ms"] for s in out) == sum(s["delay_ms"] for s in steps)
+    rm = [s for s in out if s["type"] == "rmove"]
+    assert sum(s["dx"] for s in rm) == 5 and sum(s["dy"] for s in rm) == -10
+
+
+def test_long_current_is_thinned_not_truncated(monkeypatch):
+    monkeypatch.setattr(ai_gen, "MAX_CURRENT_CHARS", 2000)
+    events = [{"t": i * 0.01, "type": "move", "x": i, "y": i} for i in range(200)]
+    events.append({"t": 2.5, "type": "kdown", "key": "z"})
+    steps, thinned = ai_gen.current_steps(events)
+    assert thinned > 0 and len(json.dumps(steps, ensure_ascii=False)) <= 2000
+    assert steps[-1]["key"] == "z" and steps[-2]["x"] == 199  # 뒷부분이 빠지지 않는다
+    system = ai_gen.build_system_prompt(GenRequest("x", current=events))
+    assert '"key": "z"' in system
+    p = FakeProvider({"name": "", "notes": "확인", "events": steps})
+    _, macro, notes, _ = generate_macro(GenRequest("x", current=events), p)
+    assert f"마우스 이동 {thinned}개" in notes and notes.endswith("확인")
+    assert macro.events[-1]["t"] == 2.5
+
+
+def test_too_long_current_without_moves_is_an_error(monkeypatch):
+    monkeypatch.setattr(ai_gen, "MAX_CURRENT_CHARS", 200)
+    events = [{"t": i * 0.1, "type": "kdown", "key": "a"} for i in range(50)]
+    with pytest.raises(AiError, match="너무 길어"):
+        generate_macro(GenRequest("x", current=events), FakeProvider())
