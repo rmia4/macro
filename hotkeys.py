@@ -1,4 +1,7 @@
-"""전역 핫키. 상수를 바꾸면 키가 변경된다 (이름은 keys.py 기준)."""
+"""전역 핫키 (이름은 keys.py 기준). 녹화·재생·종료·캡처 키는 설정에서 바꿀 수 있다 (set_control_keys).
+
+바뀔 수 있으니 다른 모듈은 `from hotkeys import HOTKEY_PLAY` 처럼 값을 복사하지 말고
+`hotkeys.HOTKEY_PLAY` 로 쓸 때마다 읽는다."""
 from __future__ import annotations
 
 from typing import Callable
@@ -10,6 +13,38 @@ HOTKEY_PLAY = "f9"
 HOTKEY_QUIT = "f10"
 HOTKEY_CAPTURE = "f7"  # AI 로 만들기의 화면 캡처 모드에서만 (끝은 HOTKEY_RECORD)
 CONTROL_KEYS = (HOTKEY_RECORD, HOTKEY_PLAY, HOTKEY_QUIT)  # 녹화에서 제외되는 키
+DEFAULT_RECORD, DEFAULT_PLAY, DEFAULT_QUIT, DEFAULT_CAPTURE = HOTKEY_RECORD, HOTKEY_PLAY, HOTKEY_QUIT, HOTKEY_CAPTURE
+CONTROL_LABELS = {"capture": "AI 화면 캡처", "record": "녹화 시작/종료", "play": "재생/중지", "quit": "프로그램 종료"}
+
+
+def control_key_error(record: str, play: str, quit: str, capture: str) -> str | None:
+    """녹화·재생·종료·캡처 키 검사 (각각 한 키, 수정키 아님, 서로 다름). 문제 없으면 None."""
+    parsed = {}
+    for which, key in (("capture", capture), ("record", record), ("play", play), ("quit", quit)):
+        label = CONTROL_LABELS[which]
+        try:
+            value = keys.parse_hotkey(key)
+        except ValueError as e:
+            return f"{label} 키: {e}"
+        if value is None:
+            return f"{label} 키를 지정하세요"
+        if "+" in value:
+            return f"{label} 키는 한 키만 지정할 수 있습니다"
+        if value in keys.MODIFIERS:
+            return f"{label} 키로 {value.upper()} 같은 수정키는 쓸 수 없습니다"
+        for other, used in parsed.items():
+            if used == value:
+                return f"{CONTROL_LABELS[other]} 키와 {label} 키가 같습니다 ({value.upper()})"
+        parsed[which] = value
+    return None
+
+
+def set_control_keys(record: str, play: str, quit: str, capture: str) -> None:
+    """녹화·재생·종료·캡처 키 변경 (control_key_error 로 검사한 값)."""
+    global HOTKEY_RECORD, HOTKEY_PLAY, HOTKEY_QUIT, HOTKEY_CAPTURE, CONTROL_KEYS
+    HOTKEY_RECORD, HOTKEY_PLAY = keys.parse_hotkey(record), keys.parse_hotkey(play)
+    HOTKEY_QUIT, HOTKEY_CAPTURE = keys.parse_hotkey(quit), keys.parse_hotkey(capture)
+    CONTROL_KEYS = (HOTKEY_RECORD, HOTKEY_PLAY, HOTKEY_QUIT)
 
 
 class HotkeyDispatcher:

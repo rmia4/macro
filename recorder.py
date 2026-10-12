@@ -11,7 +11,7 @@ LEAD_TIME = 0.2        # 첫 실제 입력 전 대기 상한(초)
 
 
 class RecorderCore:
-    def __init__(self, ignore_keys=(), move_interval: float = MOVE_INTERVAL,
+    def __init__(self, ignore_keys=(), move_interval: float | None = None,
                  lead: float = LEAD_TIME, origin: tuple[int, int] = (0, 0), relative: bool = False) -> None:
         """relative: 커서 좌표 대신 Raw Input 이동량(on_raw_move)을 rmove 로 기록하고,
         버튼/스크롤은 좌표 없이(현재 커서 위치) 기록한다."""
@@ -20,7 +20,7 @@ class RecorderCore:
         self._rel = [0, 0]
         self._rel_t = 0.0
         self._last_rel_t: float | None = None
-        self.move_interval = move_interval
+        self.move_interval = MOVE_INTERVAL if move_interval is None else move_interval  # 설정에서 바뀔 수 있어 그때 읽음
         self.lead = lead
         self.origin = origin
         self._raw: list[dict] = []

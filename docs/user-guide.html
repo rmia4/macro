@@ -141,6 +141,7 @@ details[open] summary { margin-bottom: 6px; }
     <li><a href="#vision">화면을 보고 반응하기</a></li>
     <li><a href="#ai">AI로 매크로 만들기</a></li>
     <li><a href="#settings">매크로 설정 항목</a></li>
+    <li><a href="#app-settings">프로그램 설정 (⚙ 설정)</a></li>
     <li><a href="#keys">단축키 한눈에 보기</a></li>
     <li><a href="#faq">문제 해결 · 자주 묻는 질문</a></li>
     <li><a href="#cli">부록: 콘솔 모드</a></li>
@@ -204,36 +205,33 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
   <div class="bar">MacroTool</div>
   <div class="body">
     <div class="row">
-      <span class="pill" style="background:var(--idle)">대기 중</span><span class="callout">1</span>
-      <span class="btn">▶ 재생 (F9)</span> <span class="btn">■ 중지</span><span class="callout">2</span>
-      <span class="label">버튼 시작 지연(초)</span> <span class="btn">3</span><span class="callout">3</span>
-    </div>
-    <div class="row">
-      <span class="pill" style="background:var(--ok)">● 매크로 실행 가능 (CTRL + F12)</span><span class="callout">4</span>
-      <span class="btn">단축키 변경</span>
-      <span class="label" style="margin-left:auto">상태 오버레이 위치</span> <span class="btn">↘ 오른쪽 아래</span><span class="callout">5</span>
+      <span class="pill" style="background:var(--ok)">● 매크로 실행모드 (CTRL+F12)</span><span class="callout">1</span>
+      <span class="btn">▶ 재생 (F9)</span><span class="callout">2</span>
+      <span class="pill" style="background:var(--idle)">대기 중</span><span class="callout">3</span>
+      <span class="btn" style="margin-left:auto">⚙ 설정</span><span class="callout">4</span>
     </div>
     <div class="grid">
       <div><span>이름</span><span>시작 핫키</span><span>반복</span><span>대상 창</span></div>
       <div class="sel"><span>나무 베기</span><span>f6</span><span>∞</span><span>Stardew Valley</span></div>
       <div><span>제작 반복</span><span>ctrl+f1</span><span>50</span><span></span></div>
     </div>
-    <div class="row"><span class="btn">+ 추가</span><span class="btn">✨ AI로 만들기</span><span class="btn">편집</span><span class="btn">복제</span><span class="btn">삭제</span><span class="btn">새로고침</span><span class="callout">6</span></div>
+    <div class="row"><span class="btn">+ 추가</span><span class="btn">✨ AI로 만들기</span><span class="btn">편집</span><span class="btn">삭제</span><span class="callout">5</span></div>
   </div>
 </div>
 <ul class="legend">
-  <li><span class="callout">1</span><span><b>상태 표시</b> — 대기 중 / 녹화 중 / 재생 중 등을 색으로 보여 줍니다.</span></li>
-  <li><span class="callout">2</span><span><b>재생 · 중지</b> — 목록에서 고른 매크로를 실행하거나 멈춥니다.</span></li>
-  <li><span class="callout">3</span><span><b>버튼 시작 지연</b> — <span class="btn">▶ 재생</span>을 누른 뒤 실제로 시작하기까지의 초(기본 3초). 이 사이에 게임 창을 클릭해 앞으로 가져옵니다.</span></li>
-  <li><span class="callout">4</span><span><b>매크로 실행 가능/불가</b> — 모든 매크로를 한꺼번에 켜고 끄는 스위치. 아래 설명을 꼭 읽어 주세요.</span></li>
-  <li><span class="callout">5</span><span><b>상태 오버레이</b> — 재생·녹화 중일 때 화면 구석에 작은 반투명 표시줄을 띄울 위치(끄기도 가능).</span></li>
-  <li><span class="callout">6</span><span><b>매크로 관리</b> — 새로 만들기, AI로 만들기(<a href="#ai">아래 장</a>), 편집(목록 더블클릭도 가능), 복제, 삭제(<kbd>Delete</kbd> 키).</span></li>
+  <li><span class="callout">1</span><span><b>매크로 실행모드/편집모드</b> — 모든 매크로를 한꺼번에 켜고 끄는 스위치. 아래 설명을 꼭 읽어 주세요.</span></li>
+  <li><span class="callout">2</span><span><b>재생 / 중지</b> — 목록에서 고른 매크로를 실행합니다. 재생 중에는 같은 버튼이 <span class="btn">■ 중지 (F9)</span>로 바뀝니다.
+    누른 뒤 <b>버튼 시작 지연</b>(기본 3초) 동안 게임 창을 클릭해 앞으로 가져오세요.</span></li>
+  <li><span class="callout">3</span><span><b>상태 표시</b> — 대기 중 / 몇 초 후 재생 / 재생 중을 색으로 보여 줍니다.</span></li>
+  <li><span class="callout">4</span><span><b>⚙ 설정</b> — 단축키, 버튼 시작 지연, 상태 오버레이 위치, AI 설정 등(<a href="#app-settings">아래 장</a>).</span></li>
+  <li><span class="callout">5</span><span><b>매크로 관리</b> — 새로 만들기, AI로 만들기(<a href="#ai">아래 장</a>), 편집(목록 더블클릭도 가능), 삭제(<kbd>Delete</kbd> 키).
+    <code>macros</code> 폴더의 파일이 바뀌면 목록이 저절로 새로고침됩니다.</span></li>
 </ul>
 <div class="warn"><b>"편집·추가 버튼이 안 눌려요!"</b>
-<b>매크로 실행 가능</b>(초록) 상태에서는 매크로를 만들거나 고칠 수 없게 버튼이 잠깁니다.
-버튼을 눌러(또는 <kbd>Ctrl</kbd>+<kbd>F12</kbd>) <b>○ 매크로 실행 불가</b>(회색)로 바꾸면 <span class="btn">+ 추가</span>·<span class="btn">편집</span> 등이 풀립니다.
-다 만들었으면 다시 <b>실행 가능</b>으로 돌려 놓아야 게임에서 단축키가 동작합니다.</div>
-<p>이 스위치는 게임 중 <b>채팅할 때</b>도 유용합니다. 실행 불가로 두면 매크로 단축키를 눌러도 아무 일도 일어나지 않고 그 키가 게임에 그대로 전달됩니다.
+<b>매크로 실행모드</b>(초록) 상태에서는 매크로를 만들거나 고칠 수 없게 버튼이 잠깁니다.
+버튼을 눌러(또는 <kbd>Ctrl</kbd>+<kbd>F12</kbd>) <b>○ 매크로 편집모드</b>(회색)로 바꾸면 <span class="btn">+ 추가</span>·<span class="btn">편집</span> 등이 풀립니다.
+다 만들었으면 다시 <b>실행모드</b>로 돌려 놓아야 게임에서 단축키가 동작합니다.</div>
+<p>이 스위치는 게임 중 <b>채팅할 때</b>도 유용합니다. 편집모드로 두면 매크로 단축키를 눌러도 아무 일도 일어나지 않고 그 키가 게임에 그대로 전달됩니다.
 재생 중에 끄면 실행 중이던 매크로도 즉시 멈춥니다.</p>
 
 <h3>기록 화면 — 매크로 하나를 만들고 고치는 곳</h3>
@@ -268,8 +266,8 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
 <ol class="steps">
   <li><strong>게임과 MacroTool을 함께 켭니다</strong>
     게임은 창 모드로 두고, 녹화하려는 작업을 바로 시작할 수 있는 위치에 캐릭터를 세워 둡니다.</li>
-  <li><strong>편집할 수 있게 "실행 불가"로 바꿉니다</strong>
-    메인 화면의 초록 버튼 <b>● 매크로 실행 가능</b>을 눌러 회색 <b>○ 매크로 실행 불가</b>로 만듭니다.</li>
+  <li><strong>편집할 수 있게 "편집모드"로 바꿉니다</strong>
+    메인 화면의 초록 버튼 <b>● 매크로 실행모드</b>를 눌러 회색 <b>○ 매크로 편집모드</b>로 만듭니다.</li>
   <li><strong><span class="btn">+ 추가</span>를 누르고 이름과 시작 핫키를 정합니다</strong>
     이름은 알아보기 쉽게(예: <code>제작 반복</code>). 시작 핫키 칸 옆 <span class="btn">키 입력으로 지정</span>을 누른 뒤 원하는 키(예: <kbd>F6</kbd>)를 누르면 됩니다.
     <kbd>Ctrl</kbd>+<kbd>F1</kbd>처럼 두 키 조합도 됩니다. 게임에서 쓰지 않는 키를 고르세요.</li>
@@ -287,8 +285,8 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
     멈추려면 <kbd>F9</kbd>. 마음에 안 들면 <a href="#edit">다듬기</a>를 하거나 목록을 지우고 다시 녹화합니다.</li>
   <li><strong>반복 횟수를 정하고 저장합니다</strong>
     매크로 설정의 <b>반복 횟수</b>에 원하는 숫자(무한 반복은 <code>0</code>)를 적고 <span class="btn">저장</span>을 누릅니다. 저장하면 기록 화면이 닫힙니다.</li>
-  <li><strong>다시 "실행 가능"으로 바꾸고 게임에서 사용합니다</strong>
-    메인 화면 버튼을 눌러 <b>● 매크로 실행 가능</b>(초록)으로 돌립니다. 이제 게임 창에서 <kbd>F6</kbd>을 누르면 시작, 다시 누르면 멈춥니다.</li>
+  <li><strong>다시 "실행모드"로 바꾸고 게임에서 사용합니다</strong>
+    메인 화면 버튼을 눌러 <b>● 매크로 실행모드</b>(초록)로 돌립니다. 이제 게임 창에서 <kbd>F6</kbd>을 누르면 시작, 다시 누르면 멈춥니다.</li>
 </ol>
 <div class="note"><b>녹화를 이어 붙일 수 있어요</b>
 녹화를 여러 번 하면 새 녹화 내용이 목록 <b>끝에 추가</b>됩니다. 앞부분을 다시 하고 싶으면 그 항목들을 지우고 녹화한 뒤 <span class="btn">▲ 위로</span>로 옮기세요.</div>
@@ -301,12 +299,12 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
   <tr><th>하고 싶은 일</th><th>방법</th></tr>
   <tr><td>게임 안에서 바로 시작/중지</td><td>그 매크로의 <b>시작 핫키</b>(예: <kbd>F6</kbd>)</td></tr>
   <tr><td>목록에서 골라 시작</td><td>매크로 선택 → <span class="btn">▶ 재생</span> 또는 <kbd>F9</kbd> / <kbd>Enter</kbd>. 시작 지연(기본 3초) 동안 게임 창으로 전환</td></tr>
-  <tr><td>즉시 멈추기</td><td><kbd>F9</kbd> 또는 <span class="btn">■ 중지</span></td></tr>
-  <tr><td>모든 매크로 잠그기</td><td><kbd>Ctrl</kbd>+<kbd>F12</kbd> (실행 가능 ↔ 불가)</td></tr>
+  <tr><td>즉시 멈추기</td><td><kbd>F9</kbd> 또는 <span class="btn">■ 중지 (F9)</span></td></tr>
+  <tr><td>모든 매크로 잠그기</td><td><kbd>Ctrl</kbd>+<kbd>F12</kbd> (실행모드 ↔ 편집모드)</td></tr>
   <tr><td>프로그램 종료(비상용)</td><td><kbd>F10</kbd> — 눌려 있던 키·버튼을 모두 놓고 종료</td></tr>
 </table></div>
 <p>재생 중에는 화면 구석의 오버레이에 <code>▶ 제작 반복 · 3/50</code>처럼 <b>현재 회차/전체 회차</b>가 보입니다(무한 반복은 ∞).
-메인 화면에는 진행률과 경과 시간이 표시됩니다.</p>
+메인 화면의 상태 표시는 <b>▶ 재생 중</b>으로 바뀝니다.</p>
 <div class="note"><b>안전장치</b>
 재생 중 게임 창이 뒤로 가면(대상 창 제목을 지정한 경우) 눌린 키를 모두 놓고 <b>일시정지</b>했다가, 게임 창으로 돌아오면 이어서 진행합니다.
 재생이 멈추거나 오류가 나도 눌려 있던 키와 마우스 버튼은 항상 자동으로 떼어집니다.</div>
@@ -445,7 +443,7 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
 <p>만들 동작을 문장으로 적으면 AI가 매크로 목록을 만들어 줍니다. 예: "F 키를 0.5초마다 10번 누르기".
 게임 화면을 캡처해 함께 보내면 "화면 2의 확인 버튼 클릭"처럼 화면 속 위치를 가리킬 수 있고, 필요하면 이미지 조건도 만들어 줍니다.</p>
 <div class="note"><b>먼저 AI 설정이 필요합니다</b>
-처음 한 번 <span class="btn">⚙ AI 설정</span>에서 쓸 서비스를 고르고 키를 넣으세요. 키는 이 PC의 <code>settings.json</code>에만 저장됩니다.</div>
+처음 한 번 메인 화면 <span class="btn">⚙ 설정</span> → <span class="btn">⚙ AI 설정</span>에서 쓸 서비스를 고르고 키를 넣으세요. 키는 이 PC의 <code>settings.json</code>에만 저장됩니다.</div>
 <div class="table-scroll"><table>
   <tr><th>서비스</th><th>준비물</th><th>비용</th></tr>
   <tr><td>Gemini API (무료 등급 가능) — 기본</td><td>Google AI Studio에서 받은 API 키(<span class="btn">키 발급 페이지 열기</span>)</td><td>무료 등급은 분당·하루 요청 수 제한이 있고, 보낸 내용(화면 캡처 포함)이 Google의 서비스 개선에 쓰일 수 있습니다.</td></tr>
@@ -456,10 +454,10 @@ Defender의 <b>제외 목록</b>에 추가하세요.</div>
 
 <h3>새 매크로를 AI로 만들기</h3>
 <ol class="steps">
-  <li><strong>메인 화면에서 <span class="btn">✨ AI로 만들기</span></strong> 매크로 <b>실행 불가</b> 상태여야 눌립니다.</li>
+  <li><strong>메인 화면에서 <span class="btn">✨ AI로 만들기</span></strong> 매크로 <b>편집모드</b>여야 눌립니다.</li>
   <li><strong>만들 동작을 문장으로 적습니다</strong> 필요하면 <b>좌표 기준</b>과 <b>대상 창 제목</b>도 정합니다.</li>
   <li><strong>(선택) <span class="btn">📷 화면 캡처 시작</span></strong>
-    MacroTool 창이 숨겨집니다. 게임 화면에서 <kbd>F7</kbd>을 누를 때마다 한 장씩 캡처되고(최대 8장), <kbd>F8</kbd>을 누르면 끝나고 창이 돌아옵니다.
+    MacroTool 창이 숨겨집니다. 게임 화면에서 <kbd>F7</kbd>을 누를 때마다 한 장씩 캡처되고(기본 최대 8장, 설정의 고급에서 변경), <kbd>F8</kbd>을 누르면 끝나고 창이 돌아옵니다.
     캡처한 화면은 "화면 1", "화면 2"…로 가리켜 요청하세요. 필요 없는 화면은 <span class="btn">선택 삭제</span>.</li>
   <li><strong><span class="btn">만들기</span></strong>
     수십 초(화면이 있으면 1분 넘게) 걸릴 수 있습니다. 결과는 <b>저장 전 초안</b>으로 기록 화면에 열립니다.
@@ -507,6 +505,32 @@ AI가 만든 좌표·시간은 틀릴 수 있습니다. 저장 전에 목록을 
 </details>
 </section>
 
+<section id="app-settings">
+<h2>프로그램 설정 (⚙ 설정)</h2>
+<p>메인 화면 오른쪽 위 <span class="btn">⚙ 설정</span>을 누르면 열립니다. 탭이 두 개이고, <span class="btn">확인</span>을 눌러야 적용·저장됩니다(<span class="btn">취소</span>는 버림).
+각 탭의 <span class="btn">기본값으로</span>는 그 탭의 값만 처음 상태로 돌립니다.</p>
+<h3>기본 설정</h3>
+<div class="table-scroll"><table>
+  <tr><th>항목</th><th>기본값</th><th>설명</th></tr>
+  <tr><td>단축키</td><td>AI 화면 캡처 <kbd>F7</kbd> · 녹화 시작/종료 <kbd>F8</kbd> · 재생/중지 <kbd>F9</kbd> · 프로그램 종료 <kbd>F10</kbd> · 실행모드/편집모드 전환 <kbd>Ctrl</kbd>+<kbd>F12</kbd></td>
+    <td><span class="btn">키 입력으로 지정</span>을 누르고 원하는 키를 누릅니다. 전환 키만 두 키 조합을 쓸 수 있고, 나머지는 한 키입니다. 서로 겹치거나 매크로 시작 핫키와 겹치면 바꿀 수 없습니다.</td></tr>
+  <tr><td>버튼 시작 지연(초)</td><td>3</td><td><span class="btn">▶ 재생</span>을 누른 뒤 실제로 시작하기까지의 시간(0~30초).</td></tr>
+  <tr><td>상태 오버레이 위치</td><td>↗ 오른쪽 위</td><td>재생·녹화 중일 때 화면 구석에 띄우는 작은 반투명 표시줄의 위치. 끌 수도 있습니다.</td></tr>
+  <tr><td><span class="btn">⚙ AI 설정</span></td><td></td><td>AI로 만들기에 쓸 서비스와 키(<a href="#ai">AI 장</a> 참고).</td></tr>
+</table></div>
+<h3>고급</h3>
+<p>대부분은 기록 화면에서 항목을 <b>직접 추가할 때 처음 채워지는 값</b>입니다. 녹화한 이벤트나 이미 저장된 항목에는 영향이 없습니다.</p>
+<div class="table-scroll"><table>
+  <tr><th>묶음</th><th>항목 (기본값)</th></tr>
+  <tr><td>이벤트 직접 추가 기본값</td><td>앞 지연 100ms · 키 누름 유지 50ms · 클릭 누름 유지 60ms · 상대 이동 배율 100%</td></tr>
+  <tr><td>조건 직접 추가 기본값</td><td>이미지 일치도 85% · 색 허용 오차 20 · 최대 대기 10초(0=무제한) · 확인 간격 100ms</td></tr>
+  <tr><td>녹화·편집</td><td>마우스 이동 녹화 간격 10ms · 되돌리기 최대 개수 100</td></tr>
+  <tr><td>화면 표시</td><td>모드 전환 표시 시간 2초 (실행모드/편집모드를 바꿀 때 오버레이에 잠깐 보이는 시간)</td></tr>
+  <tr><td>AI</td><td>화면 캡처 최대 장수 8</td></tr>
+</table></div>
+<p>각 칸 옆에 넣을 수 있는 범위가 적혀 있고, 범위를 벗어난 값은 범위 안으로 맞춰집니다.</p>
+</section>
+
 <!-- 11 -->
 <section id="keys">
 <h2>단축키 한눈에 보기</h2>
@@ -517,11 +541,12 @@ AI가 만든 좌표·시간은 틀릴 수 있습니다. 저장 전에 목록을 
   <tr><td><kbd>F9</kbd></td><td>목록에서 선택한 매크로 재생/중지 · 테스트 재생 중지 · 이동 녹화 종료</td></tr>
   <tr><td><kbd>F10</kbd></td><td>프로그램 종료 (눌린 입력 모두 해제)</td></tr>
   <tr><td>매크로별 시작 핫키</td><td>그 매크로 재생/중지</td></tr>
-  <tr><td><kbd>Ctrl</kbd>+<kbd>F12</kbd></td><td>전체 매크로 실행 가능 ↔ 불가 (<span class="btn">단축키 변경</span>으로 바꿀 수 있음)</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>F12</kbd></td><td>매크로 실행모드 ↔ 편집모드</td></tr>
   <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>기록 화면에서 되돌리기 / 다시 실행</td></tr>
   <tr><td><kbd>Enter</kbd> / <kbd>Delete</kbd></td><td>메인 목록에서 재생 / 삭제</td></tr>
 </table></div>
-<p><kbd>F8</kbd>~<kbd>F10</kbd>은 프로그램 제어용이라 녹화되지 않으며, 매크로 시작 핫키로도 쓸 수 없습니다. 시작 핫키는 매크로끼리 겹칠 수 없습니다.</p>
+<p>위 키는 모두 기본값이며 <span class="btn">⚙ 설정</span>의 <b>단축키</b>에서 바꿀 수 있습니다.
+<kbd>F7</kbd>~<kbd>F10</kbd>(바꿨다면 바꾼 키)은 프로그램 제어용이라 녹화되지 않으며, 매크로 시작 핫키로도 쓸 수 없습니다. 시작 핫키는 매크로끼리 겹칠 수 없습니다.</p>
 <div class="tip"><b>시작 핫키 고르는 요령</b>
 게임에서 안 쓰는 키(<kbd>F5</kbd>~<kbd>F7</kbd>, <kbd>F11</kbd> 등)나 <kbd>Ctrl</kbd>+<kbd>F1</kbd> 같은 조합을 추천합니다.
 조합 핫키는 <kbd>Ctrl</kbd>을 누른 채 <kbd>F1</kbd>을 누를 때 실행되고, <kbd>W</kbd>로 이동하는 중에 눌러도 동작합니다.</div>
@@ -532,12 +557,12 @@ AI가 만든 좌표·시간은 틀릴 수 있습니다. 저장 전에 목록을 
 <h2>문제 해결 · 자주 묻는 질문</h2>
 <details open>
   <summary><span class="btn">+ 추가</span> / <span class="btn">편집</span> 버튼이 눌리지 않아요</summary>
-  <p>매크로 <b>실행 가능</b>(초록) 상태에서는 편집이 잠깁니다. <kbd>Ctrl</kbd>+<kbd>F12</kbd> 또는 버튼으로 <b>실행 불가</b>로 바꾸세요.</p>
+  <p>매크로 <b>실행모드</b>(초록) 상태에서는 편집이 잠깁니다. <kbd>Ctrl</kbd>+<kbd>F12</kbd> 또는 버튼으로 <b>편집모드</b>로 바꾸세요.</p>
 </details>
 <details>
   <summary>단축키를 눌러도 게임에서 매크로가 시작되지 않아요</summary>
   <ul>
-    <li>메인 화면이 <b>● 매크로 실행 가능</b>(초록)인지 확인하세요.</li>
+    <li>메인 화면이 <b>● 매크로 실행모드</b>(초록)인지 확인하세요.</li>
     <li>게임이 관리자 권한으로 실행 중이면 MacroTool도 <b>관리자 권한으로 실행</b>해야 합니다.</li>
     <li>매크로에 시작 핫키가 지정되어 있는지 목록의 "시작 핫키" 열을 확인하세요.</li>
   </ul>
@@ -566,7 +591,7 @@ AI가 만든 좌표·시간은 틀릴 수 있습니다. 저장 전에 목록을 
 </details>
 <details>
   <summary>게임에서 채팅할 때 매크로 키가 눌려 버려요</summary>
-  <p>채팅 전에 <kbd>Ctrl</kbd>+<kbd>F12</kbd>로 <b>실행 불가</b>로 바꾸세요. 그동안 매크로 키는 게임에 그대로 전달됩니다.</p>
+  <p>채팅 전에 <kbd>Ctrl</kbd>+<kbd>F12</kbd>로 <b>편집모드</b>로 바꾸세요. 그동안 매크로 키는 게임에 그대로 전달됩니다.</p>
 </details>
 <details>
   <summary>await가 항상 "시간 초과"로 끝나요</summary>
@@ -592,7 +617,8 @@ AI가 만든 좌표·시간은 틀릴 수 있습니다. 저장 전에 목록을 
 </details>
 <details>
   <summary>설정을 처음 상태로 돌리고 싶어요</summary>
-  <p>프로그램을 끄고 MacroTool 폴더의 <code>settings.json</code>을 지우면 됩니다. 매크로(<code>macros</code> 폴더)는 그대로 남습니다.</p>
+  <p><span class="btn">⚙ 설정</span>의 각 탭에 있는 <span class="btn">기본값으로</span>를 누르고 <span class="btn">확인</span>하세요.
+  창 위치까지 모두 처음으로 돌리려면 프로그램을 끄고 MacroTool 폴더의 <code>settings.json</code>을 지우면 됩니다. 매크로(<code>macros</code> 폴더)는 그대로 남습니다.</p>
 </details>
 <details>
   <summary>매크로를 다른 PC로 옮기거나 백업하려면?</summary>

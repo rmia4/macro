@@ -60,7 +60,7 @@ def test_unique_name():
 
 def test_key_choices_order():
     assert em.KEY_CHOICES[:3] == ["f1", "f2", "f3"]
-    assert "f8" not in em.HOTKEY_CHOICES and "f7" in em.HOTKEY_CHOICES
+    assert "f8" not in em.hotkey_choices() and "f7" in em.hotkey_choices()
 
 
 def test_validate_for_save():
