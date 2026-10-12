@@ -60,6 +60,7 @@ xvfb-run -a python3.12 -m pytest -q tests        # (Linux 클라우드) tkinter 
 - **병합 흐름: 작업 브랜치 → `dev` → `main`**
   - 작업 브랜치는 `dev`에서 만든다. 큰 기능은 별도 브랜치에서 하고, 기능이 완성되면 **먼저 `dev`로 병합**한다(요청 시, fast-forward 우선).
   - `main` 병합은 릴리스 때만: **버전을 올리고**(`build.py`의 `VERSION`, 필요하면 `v*` 태그) **`README.md`와 `docs/user-guide.html`을 함께 갱신**한 뒤 `dev` → `main`으로 병합한다.
+  - `dev` → `main` 병합(기능 추가·릴리스)은 **직접 병합하지 않고 PR 을 작성**해서 한다(`gh pr create --base main --head dev`, 제목·본문 한국어: 버전, 추가·변경 기능, 수정한 문제, 문서 갱신 내용).
   - `main`에 바로 기능 브랜치를 병합하지 않는다.
 - **브랜치 이름은 작업 내용이 드러나게** 짓는다: `feature/<기능>`, `fix/<문제>`, `docs/<내용>` (영문 소문자·하이픈, 예: `feature/condition-variables-while`).
   세션이 자동으로 정한 무작위 이름(`claude/<형용사>-<이름>-<난수>`)은 쓰지 말고, 작업 시작 시 위 규칙의 브랜치를 만들어 그곳에 푸시한다.
