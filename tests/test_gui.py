@@ -568,7 +568,21 @@ def test_restore_geometry_offscreen(gui):
     top.update()
     assert top.geometry().startswith("500x400") and not top.geometry().endswith("+99999+99999")
     restore_geometry(top, "garbage")                 # 무시
+    restore_geometry(top, "520x410+-7+254")          # 왼쪽 끝에 붙인 창 (Windows 테두리) -> 그대로
+    top.update()
+    assert top.geometry() == "520x410+-7+254"
+    restore_geometry(top, "530x420+-3000+10")        # 왼쪽 다른 모니터 등 화면 밖 -> 크기만
+    top.update()
+    assert top.geometry().startswith("530x420") and "-3000" not in top.geometry()
     top.destroy()
+
+
+def test_editor_opens_with_negative_saved_position(gui):
+    gui.settings["editor_geometry"] = "900x560+-7+254"
+    gui.toggle_macros_enabled()
+    gui.open_editor("alpha")
+    gui.root.update()
+    assert gui.editor is not None and gui.editor.tree.get_children()
 
 
 def test_overlay_xy_eight_directions():

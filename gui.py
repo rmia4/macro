@@ -2658,14 +2658,16 @@ def center_on_parent(top, parent) -> None:
 
 
 def restore_geometry(window, geometry: str) -> None:
-    """저장된 'WxH+X+Y' 복원. 위치가 화면 밖이면(모니터 변경 등) 크기만 복원."""
+    """저장된 'WxH+X+Y' 복원. 위치가 화면 밖이면(모니터 변경 등) 크기만 복원.
+    왼쪽·위 끝에 붙이거나 최대화한 창은 Windows 테두리 때문에 '+-7' 처럼 음수 위치로 저장된다."""
     import re
-    m = re.fullmatch(r"(\d+)x(\d+)([+-]-?\d+)([+-]-?\d+)", geometry or "")
+    m = re.fullmatch(r"(\d+)x(\d+)([+-])(-?\d+)([+-])(-?\d+)", geometry or "")
     if not m:
         return
-    w, h, x, y = int(m[1]), int(m[2]), int(m[3]), int(m[4])
+    w, h, x, y = int(m[1]), int(m[2]), int(m[4]), int(m[6])
     sw, sh = window.winfo_screenwidth(), window.winfo_screenheight()
-    if 0 <= x < sw - 50 and 0 <= y < sh - 50:
+    # '-X' 는 오른쪽·아래 끝 기준이라 위치로 쓰지 않는다
+    if m[3] == m[5] == "+" and -50 < x < sw - 50 and -50 < y < sh - 50:
         window.geometry(f"{w}x{h}+{x}+{y}")
     else:
         window.geometry(f"{w}x{h}")
