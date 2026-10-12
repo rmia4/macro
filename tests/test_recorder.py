@@ -154,3 +154,34 @@ def test_recorder_serializes_listener_threads(monkeypatch):
     ev = rec.stop().events
     assert sum(e["dx"] for e in ev if e["type"] == "rmove") == 20000
     assert [e["t"] for e in ev] == sorted(e["t"] for e in ev)
+
+
+def test_recorder_start_failure_cleans_up(monkeypatch):
+    """키보드 리스너 시작이 실패하면 이미 시작한 리스너를 멈추고 녹화 상태를 되돌린다."""
+    import sys
+    import types
+
+    import pytest
+    from fakes import FakeBackend
+    from recorder import Recorder
+
+    stopped = []
+
+    class Mouse:
+        def __init__(self, **kw): pass
+        def start(self): pass
+        def stop(self): stopped.append("mouse")
+
+    class Keyboard(Mouse):
+        def start(self): raise RuntimeError("hook failed")
+        def stop(self): stopped.append("keyboard")
+
+    pynput = types.ModuleType("pynput")
+    pynput.mouse = types.SimpleNamespace(Listener=Mouse)
+    pynput.keyboard = types.SimpleNamespace(Listener=Keyboard)
+    monkeypatch.setitem(sys.modules, "pynput", pynput)
+    rec = Recorder(FakeBackend())
+    with pytest.raises(RuntimeError):
+        rec.start()
+    assert not rec.recording and stopped == ["mouse"]  # 시작하지 못한 키보드 리스너는 멈추지 않는다
+    assert rec._listeners == []

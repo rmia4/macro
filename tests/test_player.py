@@ -617,3 +617,25 @@ def test_repeat_lap_minimum_keeps_existing_timing():
 def test_set_option_rejects_non_finite(value):
     with pytest.raises(ValueError):
         set_option(PlayOptions(), "speed", value)
+
+
+def test_whole_macro_loop_has_min_lap_time():
+    """지연 없는 매크로를 반복 간 대기 0 으로 무한 반복해도 회차마다 최소 간격을 둔다."""
+    from player import MIN_WHILE_LAP
+    p, be, clock, m = build([key(0, "kdown"), key(0, "kup")], repeat=100)
+    p.run(m)
+    assert clock.t >= 99 * MIN_WHILE_LAP - 1e-9
+
+
+def test_min_lap_time_not_added_to_long_laps():
+    p, be, clock, m = build([key(0.1, "kdown"), key(0.2, "kup")], repeat=3)
+    p.run(m)
+    downs = [c[0] for c in be.calls if c[1] == "kdown"]
+    assert round(downs[1] - downs[0], 3) == 0.2
+
+
+def test_held_keys_released_between_laps():
+    """kup 없이 끝난 회차의 눌린 키는 다음 회차 전에 뗀다."""
+    p, be, clock, m = build([key(0.1, "kdown")], repeat=2, loop_delay=1.0)
+    p.run(m)
+    assert [c[1] for c in be.calls if c[1] in ("kdown", "kup")] == ["kdown", "kup", "kdown", "kup"]

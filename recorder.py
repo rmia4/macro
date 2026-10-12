@@ -215,8 +215,18 @@ class Recorder:
                 on_press=lambda k: on_key(keys.name_from_pynput(k), True),
                 on_release=lambda k: on_key(keys.name_from_pynput(k), False)),
         ]
-        for lst in self._listeners:
-            lst.start()
+        started = []
+        try:
+            for lst in self._listeners:
+                lst.start()
+                started.append(lst)
+        except Exception:  # 시작한 것까지 되돌린다 (멈추지 않은 리스너가 남지 않도록)
+            for lst in started:
+                lst.stop()
+            if self._raw is not None:
+                self._raw.stop()
+            self._core, self._raw, self._listeners = None, None, []
+            raise
         return "relative" if self.relative else ("window" if self._window else "screen")
 
     def stop(self) -> Macro:

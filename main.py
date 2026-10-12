@@ -175,7 +175,7 @@ class App:
                 macro = load_macro(macro_path(self.macros_dir, name))
                 options_from_dict(macro.options)  # 옵션 검증
                 lib[name] = macro
-            except (OSError, ValueError) as e:  # MacroFormatError 포함
+            except Exception as e:  # 파일 하나 때문에 목록 갱신(GUI 주기 갱신)이 멈추지 않도록
                 self.log(f"불러오기 실패 '{name}': {e}")
         self.library = lib
         self.library_sig = self.library_signature()

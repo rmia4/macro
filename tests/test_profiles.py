@@ -135,3 +135,16 @@ def test_non_finite_numbers_rejected(bad):
     with pytest.raises(MacroFormatError):
         Macro.from_dict({"version": 1, "events": [{"t": 0, "type": "wait_until",
                                                     "cond": {"kind": "pixel", "x": bad, "y": 1, "color": "#000000"}}]})
+
+
+@pytest.mark.parametrize("data", [
+    {"version": 1, "events": [{"t": 0, "type": ["x"]}]},                          # 해시할 수 없는 type
+    {"version": 1, "events": [{"t": 0, "type": "mdown", "button": ["left"]}]},
+    {"version": 1, "events": [{"t": 0, "type": "kdown", "key": ["a"]}]},
+    {"version": 1, "events": [], "screen": "abc"},
+    {"version": 1, "events": [], "window": {"title": 1}},
+    {"version": 1, "events": [], "window": {"title": "g", "width": "a", "height": 1}},
+])
+def test_wrong_value_types_are_format_errors(data):
+    with pytest.raises(MacroFormatError):
+        Macro.from_dict(data)

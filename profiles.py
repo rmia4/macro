@@ -73,11 +73,18 @@ class Macro:
         events = data.get("events")
         if not isinstance(events, list):
             raise MacroFormatError("events 배열이 없습니다")
-        _validate_events(events)
+        try:
+            _validate_events(events)
+        except TypeError as e:  # 목록·객체가 올 자리가 아닌 곳에 온 값 (해시할 수 없는 type/key 등)
+            raise MacroFormatError(f"events: 값의 자료형이 잘못되었습니다 ({e})") from None
         screen = data.get("screen") or {"width": 0, "height": 0}
+        if not isinstance(screen, dict):
+            raise MacroFormatError("screen 은 객체여야 합니다")
         window = data.get("window")
-        if window is not None and not isinstance(window, dict):
-            raise MacroFormatError("window 는 객체여야 합니다")
+        if window is not None and not (
+                isinstance(window, dict) and isinstance(window.get("title", ""), str)
+                and all(_is_num(window[k]) for k in ("width", "height") if k in window)):
+            raise MacroFormatError("window 는 {title: 문자열, width/height: 숫자} 객체여야 합니다")
         try:
             hotkey = keys.parse_hotkey(data.get("hotkey"))
         except ValueError as e:

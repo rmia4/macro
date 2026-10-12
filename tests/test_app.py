@@ -266,3 +266,21 @@ def test_stop_all_releases_keys_when_player_hangs(tmp_path):
     assert app.playing and be.names()[-1] == ("kup", "a")  # 스레드는 아직 멈춰 있지만 키는 뗐다
     gate.set()
     app._thread.join(2)
+
+
+def test_reload_library_skips_file_with_unexpected_error(tmp_path, monkeypatch):
+    """파일 하나에서 예상 못 한 예외가 나도 나머지는 불러온다 (GUI 주기 갱신이 끊기지 않도록)."""
+    import main
+    app, out = make_app(tmp_path)
+    save_macro(Macro(events=[{"t": 0, "type": "kdown", "key": "a"}]), macro_path(tmp_path, "good"))
+    save_macro(Macro(events=[{"t": 0, "type": "kdown", "key": "a"}]), macro_path(tmp_path, "bad"))
+    real = main.load_macro
+
+    def load(path):
+        if path.stem == "bad":
+            raise TypeError("boom")
+        return real(path)
+    monkeypatch.setattr(main, "load_macro", load)
+    app.reload_library()
+    assert list(app.library) == ["good"]
+    assert any("불러오기 실패 'bad'" in line for line in out)

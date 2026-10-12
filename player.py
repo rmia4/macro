@@ -162,11 +162,14 @@ class Player:
         n = 0
         try:
             while not self._stop.is_set() and (self.opt.repeat == 0 or n < self.opt.repeat):
-                if n and self._sleep(self.opt.loop_delay):
+                # 한 회차에 지연이 없어도 CPU·로그를 독점하지 않도록 회차 시작 간격을 최소 MIN_WHILE_LAP 둔다
+                if n and self._sleep(max(self.opt.loop_delay, lap_start + MIN_WHILE_LAP - self._clock())):
                     break
+                lap_start = self._clock()
                 self.loop_index, self.event_index = n + 1, -1
                 if not self._play_once(macro):
                     break
+                self.release_all()  # 회차 끝에 남은 키·버튼은 뗀다 (kup 이 없거나 분기로 건너뛴 경우)
                 n += 1
                 self._log(f"루프 {n} 완료")
         finally:
