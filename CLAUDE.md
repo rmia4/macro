@@ -46,7 +46,7 @@ xvfb-run -a python3.12 -m pytest -q tests        # (Linux 클라우드) tkinter 
 ```
 - **작업 후 테스트는 영향 범위만**: 바꾼 모듈과 그 모듈을 쓰는 곳의 테스트 파일(필요하면 `-k`로 해당 테스트)만 돌린다. 예) `player.py`만 고쳤으면 `tests/test_player.py tests/test_flow.py`. 전체 실행은 여러 모듈에 걸친 큰 변경이나 병합·릴리스 전에만.
 - 클라우드 환경: 기본 python3.11엔 tkinter 없음 → `/usr/bin/python3.12`(필요 시 `pip install --break-system-packages pytest opencv-python-headless mss numpy pynput`, `apt-get install python3-tk`).
-- 실제 Windows 동작은 CI(`Build Windows exe`)에서만 검증된다. Windows 전용 차이(창 테두리, 콘솔 인코딩 cp1252 등)에 주의.
+- 실제 Windows 동작은 CI 에서만 검증된다: `Tests`(dev 푸시·PR, 테스트만) / `Build Windows exe`(main 푸시·태그, 테스트+빌드). Windows 전용 차이(창 테두리, 콘솔 인코딩 cp1252 등)에 주의.
 
 ## 문서
 - **README.md 에는 사용 방법을 쓰지 않는다**: 소개·기술적 특징·exe 받기/빌드·소스 실행·저장 형식(JSON)·구조·알려진 한계만. 사용 방법은 가이드 링크로 대신한다.

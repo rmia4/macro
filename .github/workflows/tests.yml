@@ -1,0 +1,36 @@
+name: Tests
+
+# dev·작업 브랜치 검증용: exe 빌드(numpy 소스 빌드·부트로더 컴파일) 없이 Windows 에서 테스트만 돌린다.
+# main 푸시·태그는 Build Windows exe 워크플로가 테스트까지 한다.
+on:
+  push:
+    branches: [dev]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PYTHONUTF8: "1"  # 한글 출력이 cp1252 콘솔에서 실패하지 않도록
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests (Windows)
+        run: python -m pytest -q tests
