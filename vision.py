@@ -555,8 +555,12 @@ def shrink(img, f: int):
     import numpy as np
     img = np.asarray(img)
     h, w = img.shape[0] // f * f, img.shape[1] // f * f
-    a = img[:h, :w].astype(np.float64)
-    return a.reshape(h // f, f, w // f, f, *img.shape[2:]).mean(axis=(1, 3))
+    out = np.zeros((h // f, w // f, *img.shape[2:]))
+    for dy in range(f):  # 칸 안의 같은 자리끼리 더한다 (reshape+mean 보다 메모리를 차례로 읽어 빠르다)
+        for dx in range(f):
+            out += img[dy:h:f, dx:w:f]
+    out /= f * f
+    return out
 
 
 def _peaks(result, h: int, w: int, k: int) -> list[tuple[int, int]]:
