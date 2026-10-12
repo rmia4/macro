@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -243,8 +244,14 @@ def _validate_events(events: list) -> None:
 def save_macro(macro: Macro, path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(macro.to_dict(), f, ensure_ascii=False, indent=1)
+    tmp = path.with_name(path.name + ".tmp")  # 다 쓴 뒤에 바꿔 넣어 저장 도중 실패해도 원본이 남는다
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(macro.to_dict(), f, ensure_ascii=False, indent=1)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return path
 
 

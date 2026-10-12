@@ -146,3 +146,30 @@ def test_store_assets_replace_rename_delete(tmp_path):
     assert not (tmp_path / "m3").exists() and not (tmp_path / "m3.json").exists()
     app.reload_library()
     assert "m3" not in app.library and set(app.library) == {"m2"}   # 이미지 폴더는 목록에 안 나옴
+
+
+def test_store_asset_failure_keeps_old_images(tmp_path, monkeypatch):
+    from pathlib import Path
+    app, out = make_app(tmp_path)
+    src = tmp_path / "staging"
+    src.mkdir()
+    (src / "a.png").write_bytes(b"A")
+    m = Macro(events=[{"t": 0, "type": "kdown", "key": "a"}])
+    app.store("m1", m, assets={"a.png": src / "a.png"})
+    (src / "new.png").write_bytes(b"N")
+    (src / "b.png").write_bytes(b"B")
+    write = Path.write_bytes
+
+    def failing(self, data):
+        if self.name == "b.png":
+            raise OSError("disk full")
+        return write(self, data)
+    monkeypatch.setattr(Path, "write_bytes", failing)
+    try:
+        app.store("m1", m, old_name="m1", assets={"a.png": src / "new.png", "b.png": src / "b.png"})
+    except OSError:
+        pass
+    else:
+        raise AssertionError("쓰기 실패가 알려져야 함")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["m1", "m1.json", "staging"]
+    assert (tmp_path / "m1" / "a.png").read_bytes() == b"A"

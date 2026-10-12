@@ -199,20 +199,34 @@ class App:
         name = path.stem
         if name != old_name and path.exists():
             raise ValueError(f"같은 이름의 매크로가 이미 있습니다: {name}")
-        if assets is not None:  # 원본이 사라지기 전에 먼저 읽어 둔다
-            data = {fname: Path(src).read_bytes() for fname, src in assets.items()}
-        save_macro(macro, path)
-        self.library[name] = macro
         target = self.macros_dir / name
+        staged = None
+        if assets is not None and assets:
+            # 새 이미지는 임시 폴더에 다 쓴 뒤 바꿔 넣는다 (쓰다가 실패해도 기존 폴더가 남는다)
+            staged = self.macros_dir / f".{name}.saving"
+            if staged.is_dir():
+                shutil.rmtree(staged)
+            try:
+                staged.mkdir(parents=True)
+                for fname, src in assets.items():
+                    (staged / fname).write_bytes(Path(src).read_bytes())
+            except BaseException:
+                shutil.rmtree(staged, ignore_errors=True)
+                raise
+        try:
+            save_macro(macro, path)
+        except BaseException:
+            if staged is not None:
+                shutil.rmtree(staged, ignore_errors=True)
+            raise
+        self.library[name] = macro
         old_dir = self.macros_dir / old_name if old_name else None
         if assets is not None:
             for d in {target, old_dir} - {None}:
                 if d.is_dir():
                     shutil.rmtree(d)
-            if data:
-                target.mkdir(parents=True, exist_ok=True)
-                for fname, content in data.items():
-                    (target / fname).write_bytes(content)
+            if staged is not None:
+                staged.rename(target)
         elif old_dir and old_name != name and old_dir.is_dir() and not target.exists():
             old_dir.rename(target)
         if old_name and old_name != name:

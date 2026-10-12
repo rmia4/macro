@@ -108,6 +108,7 @@ class Player:
         self._scale = (1.0, 1.0)
         self._cursor: tuple[int, int] | None = None
         self._deadline: float | None = None
+        self._paused = 0.0      # 포커스를 잃어 일시정지한 누적 시간 (조건 대기 제한 시간에서 뺀다)
         self.loop_index = 0     # 진행 중인 루프 (1부터), GUI 표시용
         self.event_index = -1   # 마지막으로 전송한 이벤트 인덱스
 
@@ -215,7 +216,7 @@ class Player:
             elif typ == "set_image":
                 if "template" in ev:
                     self.vision.set_image(ev["name"], self.vision.template(ev["template"]))
-                elif not self.vision.capture_image(ev["name"], ev["capture"], self._win):
+                elif not self.vision.capture_image(ev["name"], self._scale_rect(ev["capture"]), self._win):
                     self._log(f"이미지 변수 '{ev['name']}': 캡처 영역이 화면 밖이라 비워 둡니다")
             elif not self._dispatch(ev):
                 return False
@@ -260,9 +261,12 @@ class Player:
 
     def _check(self, cond: dict):
         """조건 판정 (변수·여러 조건 포함). 결과는 last_match 에도 남긴다."""
+        cond, variables = self._scaled(cond), self.variables
+        if self._scale != (1.0, 1.0):
+            variables = {k: self._scaled(v) for k, v in variables.items()}
         frame = getattr(self.vision, "frame", None)  # 여러 화면 조건이면 캡처를 한 번에
-        with frame(cond, self._win, self.variables) if frame else nullcontext():
-            self.last_match = evaluate(cond, lambda c: self.vision.check(c, self._win), self.variables)
+        with frame(cond, self._win, variables) if frame else nullcontext():
+            self.last_match = evaluate(cond, lambda c: self.vision.check(c, self._win), variables)
         return self.last_match
 
     def _wait_until(self, cum: float) -> bool:
@@ -280,13 +284,13 @@ class Player:
         """조건이 맞을 때까지 대기. "ok" | "timeout" | "stopped"."""
         timeout = ev.get("timeout", 10)
         interval = ev.get("interval", 0.1)
-        start = self._clock()
+        start, paused = self._clock(), self._paused
         while True:
             if not self._wait_focus(macro):
                 return "stopped"
             if self._check(ev["cond"]).matched:
                 return "ok"
-            waited = self._clock() - start
+            waited = self._clock() - start - (self._paused - paused)  # 일시정지한 시간은 세지 않는다
             if timeout > 0 and waited >= timeout:
                 return "timeout"
             step = interval if timeout <= 0 else min(interval, timeout - waited)
@@ -296,6 +300,7 @@ class Player:
     def _click_found(self, ev: dict) -> bool:
         """click_image: 찾은 위치(+보정, +클릭 좌표 편차)를 클릭. 중단되면 False."""
         dx, dy = ev.get("offset", [0, 0])
+        dx, dy = dx * self._scale[0], dy * self._scale[1]
         x, y = self.last_match.pos
         x, y = int(round(x + dx)) + self._offset[0], int(round(y + dy)) + self._offset[1]
         button = ev.get("button", "left")
@@ -333,14 +338,22 @@ class Player:
         if not self.opt.window_title or self._focused():
             return True
         self._log("대상 창이 포커스를 잃어 일시정지합니다")
+        held = list(self._held_keys)
         self._release_all()
         start = self._clock()
         while not self._focused():
             if self._sleep(self.opt.focus_poll):
                 return False
-        self._origin += self._clock() - start
+        paused = self._clock() - start
+        self._origin += paused
+        self._paused += paused
         self._cursor = None
-        return self._locate_window(macro)
+        if not self._locate_window(macro):
+            return False
+        for key in held:  # 누르고 있던 키는 다시 누른다 (눌린 버튼·드래그는 복원하지 않음)
+            self._held_keys[key] = self._clock()
+            self.backend.key_down(key)
+        return True
 
     # ---- 좌표 ----
     def _roll_offset(self) -> None:
@@ -353,6 +366,26 @@ class Player:
     def _map(self, x, y) -> tuple[int, int]:
         return (round(x * self._scale[0]) + self._win[0] + self._offset[0],
                 round(y * self._scale[1]) + self._win[1] + self._offset[1])
+
+    def _scale_rect(self, rect) -> list[int]:
+        sx, sy = self._scale
+        x, y, w, h = rect
+        return [round(x * sx), round(y * sy), max(1, round(w * sx)), max(1, round(h * sy))]
+
+    def _scaled(self, cond):
+        """창 크기 비례 조정(scale_coords) 중이면 조건의 좌표·영역도 입력 좌표처럼 맞춘다 (이미지 크기는 그대로)."""
+        if not isinstance(cond, dict) or self._scale == (1.0, 1.0):
+            return cond
+        c = dict(cond)
+        if "conds" in c:
+            c["conds"] = [self._scaled(sub) for sub in c["conds"]]
+        if "x" in c:
+            c["x"], c["y"] = round(c["x"] * self._scale[0]), round(c["y"] * self._scale[1])
+        if "w" in c:
+            _, _, c["w"], c["h"] = self._scale_rect([0, 0, c["w"], c["h"]])
+        if c.get("region"):
+            c["region"] = self._scale_rect(c["region"])
+        return c
 
     def _goto(self, ev: dict) -> None:
         p = self._map(ev["x"], ev["y"])

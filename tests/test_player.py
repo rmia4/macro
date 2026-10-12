@@ -440,3 +440,61 @@ def test_click_image_stop_during_hold_releases_button():
     clock.on_wait = lambda: p.stop() if clock.t > 1 else None
     p.run(m)
     assert ("mup", "left") in be.names()
+
+
+def test_focus_pause_not_counted_in_condition_timeout():
+    """조건 대기 중 창을 벗어나 있던 시간은 제한 시간에 들어가지 않는다."""
+    evs = [{"t": 0, "type": "wait_until", "cond": PIX, "timeout": 1}, key(0.1, "kdown")]
+    p, be, clock, m = build(evs, window_title="Game")
+    p.vision = ScriptedVision([False] * 4 + [True])  # 돌아온 뒤 두 번째 확인에서 충족
+
+    def hook():
+        if 0.2 < clock.t < 5:
+            be.title = "Browser"   # 0.2초 뒤 5초 동안 다른 창
+        else:
+            be.title = "Game"
+    clock.on_wait = hook
+    p.run(m)
+    assert [c[1] for c in be.calls] == ["kdown", "kup"]   # 시간 초과로 멈추지 않음
+
+
+def test_held_key_pressed_again_after_focus_returns():
+    evs = [key(0.1, "kdown", "w"), key(0.5, "kup", "w")]
+    p, be, clock, m = build(evs, window_title="Game")
+    clock.on_wait = lambda: setattr(be, "title", "Browser" if 0.2 < clock.t < 2 else "Game")
+    p.run(m)
+    assert [c[1:] for c in be.calls] == [("kdown", "w"), ("kup", "w"), ("kdown", "w"), ("kup", "w")]
+
+
+class CondVision(ScriptedVision):
+    def check(self, cond, origin=(0, 0)):
+        self.checks.append(cond)
+        return self.Match(True, 1.0, (500, 400))
+
+    def capture_image(self, name, rect, origin=(0, 0)):
+        self.captured = rect
+        return True
+
+    def clear_images(self):
+        pass
+
+
+def test_scale_coords_scales_conditions_capture_and_offset():
+    """창이 녹화 때와 크기가 다르면 조건 좌표·영역, 이미지 캡처 영역, 클릭 보정도 비례 조정한다."""
+    clock = FakeClock()
+    be = FakeBackend(clock)   # 창 1280x720 = 녹화(640x360)의 2배
+    img = {"kind": "image", "template": "ok.png", "region": [10, 20, 30, 40]}
+    rng = {"kind": "pixel", "x": 5, "y": 6, "w": 7, "h": 8, "color": "#000000"}
+    evs = [{"t": 0, "type": "set_var", "name": "v", "cond": rng},
+           {"t": 0, "type": "if_start", "cond": {"kind": "all", "conds": [img, {"kind": "var", "name": "v"}]}},
+           {"t": 0, "type": "if_end"},
+           {"t": 0, "type": "set_image", "name": "s", "capture": [1, 2, 3, 4]},
+           {"t": 0, "type": "click_image", "cond": img, "offset": [5, -3], "hold": 0}]
+    m = Macro(events=evs, coord_space="window", window={"title": "Game", "width": 640, "height": 360})
+    v = CondVision([])
+    Player(be, PlayOptions(approach=False, scale_coords=True), clock=clock, waiter=clock.wait, vision=v).run(m)
+    assert v.checks[0]["region"] == [20, 40, 60, 80]
+    assert (v.checks[1]["x"], v.checks[1]["y"], v.checks[1]["w"], v.checks[1]["h"]) == (10, 12, 14, 16)
+    assert v.captured == [2, 4, 6, 8]
+    assert ("abs", 510, 394) in be.names()
+    assert img["region"] == [10, 20, 30, 40]   # 원본 매크로는 그대로

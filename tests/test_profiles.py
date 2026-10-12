@@ -112,3 +112,17 @@ def test_ai_history_roundtrip_and_validation(tmp_path):
     for bad in ([["bot", "x"]], [["user"]], "x", [["user", 1]]):
         with pytest.raises(MacroFormatError, match="ai_history"):
             Macro.from_dict({"version": 1, "events": [], "ai_history": bad})
+
+
+def test_save_failure_keeps_original(tmp_path, monkeypatch):
+    import json
+    path = save_macro(Macro(events=EV), macro_path(tmp_path, "t1"))
+    before = path.read_text(encoding="utf-8")
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(json, "dump", boom)
+    with pytest.raises(OSError):
+        save_macro(Macro(events=EV[:1]), path)
+    assert path.read_text(encoding="utf-8") == before
+    assert [p.name for p in tmp_path.iterdir()] == ["t1.json"]   # 임시 파일도 남지 않음
