@@ -466,3 +466,12 @@ def test_new_crops_avoid_existing_names():
         {"type": "wait_until", "delay_ms": 0, "cond": {"kind": "image", "crop": {"capture": 1, "rect": [0, 0, 10, 10]}}}]}
     _, macro, _, assets = to_macro(data, req)
     assert list(assets) == ["ai_1_2.png"] and macro.events[0]["cond"]["template"] == "ai_1_2.png"
+
+
+def test_trim_history_keeps_recent_and_cuts_long_text():
+    history = [("user", f"요청 {i}") for i in range(15)] + [("ai", "가" * 600)]
+    out = ai_gen.trim_history(history)
+    assert len(out) == ai_gen.HISTORY_MAX and out[0] == ("user", "요청 6")
+    assert len(out[-1][1]) == ai_gen.HISTORY_TEXT_MAX and out[-1][1].endswith("…")
+    system = ai_gen.build_system_prompt(GenRequest("x", current=CURRENT, history=history))
+    assert "요청 5" not in system and "요청 6" in system

@@ -33,6 +33,8 @@ DEFAULT_HOLD_MS = 50
 MAX_CAPTURES = 8        # 한 번에 보내는 화면 수 (사용량·시간)
 AI_IMAGE_MAX = 1568     # AI 에 보내는 이미지의 긴 변 (넘으면 줄인다)
 MIN_CROP = 8            # 잘라낼 이미지의 최소 변 (원본 픽셀)
+HISTORY_MAX = 10        # AI 에 보내고 매크로에 저장하는 최근 대화 수 (요청·답 각각 1개)
+HISTORY_TEXT_MAX = 500  # 대화 하나의 최대 글자 수
 
 OUTPUT_SCHEMA = {
     "type": "object",
@@ -123,6 +125,12 @@ def from_events(events: list[dict]) -> list[dict]:
     return steps
 
 
+def trim_history(history) -> list[tuple[str, str]]:
+    """최근 HISTORY_MAX 개만, 각 내용은 HISTORY_TEXT_MAX 자까지 (보낼 때와 저장할 때 같은 범위)."""
+    return [(role, text if len(text) <= HISTORY_TEXT_MAX else text[:HISTORY_TEXT_MAX - 1] + "…")
+            for role, text in list(history)[-HISTORY_MAX:]]
+
+
 # ---- 프롬프트 ----
 def build_system_prompt(req: GenRequest, image_files: bool = True) -> str:
     """image_files: 화면을 작업 폴더 파일로 두고 Read 도구로 읽게 할지 (CLI). 아니면 요청에 바로 첨부된다."""
@@ -167,7 +175,7 @@ def build_system_prompt(req: GenRequest, image_files: bool = True) -> str:
                     + ", ".join(req.templates) + "\n")
     if req.history:
         current += "\n이전 대화 (참고):\n" + "\n".join(
-            f"- {'사용자' if role == 'user' else 'AI'}: {text}" for role, text in req.history[-10:]) + "\n"
+            f"- {'사용자' if role == 'user' else 'AI'}: {text}" for role, text in trim_history(req.history)) + "\n"
     recorded = ""
     if req.recorded:
         recorded = ("\n사용자가 녹화한 입력(절대 시각 t): "

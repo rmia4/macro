@@ -102,3 +102,13 @@ def test_blocks_structure():
     b = blocks(evs)
     assert b.repeat == {0: 5} and b.if_end == {1: 4} and b.if_else == {1: 3} and b.else_end == {3: 4}
     assert b.parent_loop[2] == 0 and 0 not in b.parent_loop
+
+
+def test_ai_history_roundtrip_and_validation(tmp_path):
+    m = Macro(events=EV, ai_history=[["user", "a 눌러"], ["ai", "만들었습니다"]])
+    m2 = load_macro(save_macro(m, macro_path(tmp_path, "h")))
+    assert m2.ai_history == [["user", "a 눌러"], ["ai", "만들었습니다"]]
+    assert "ai_history" not in Macro(events=EV).to_dict()  # 없으면 파일에 쓰지 않는다
+    for bad in ([["bot", "x"]], [["user"]], "x", [["user", 1]]):
+        with pytest.raises(MacroFormatError, match="ai_history"):
+            Macro.from_dict({"version": 1, "events": [], "ai_history": bad})
