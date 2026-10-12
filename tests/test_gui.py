@@ -1606,6 +1606,32 @@ def test_editor_ai_chat_edits_existing_macro_with_undo(gui):
     assert "- 사용자: a 를 두 번만 누르게" in seen[1][0]
 
 
+def test_editor_ai_chat_history_saved_with_macro_and_restored(gui):
+    ed = open_editor_ai(gui)
+    answer = {"name": "", "notes": "두 번 누릅니다", "events": [
+        {"type": "tap", "key": "a", "delay_ms": 0}, {"type": "tap", "key": "a", "delay_ms": 300}]}
+    gui.ai_provider_factory = lambda: FakeAiProvider(answer)
+    ed.ai_panel.text.insert("1.0", "a 두 번")
+    ed.ai_panel.send()
+    assert wait_for(gui, lambda: not ed.ai_panel.busy)
+    assert ed.on_save()
+    assert gui.app.library.get("alpha").ai_history == [["user", "a 두 번"], ["ai", "두 번 누릅니다"]]
+    ed = open_editor_ai(gui)  # 다시 열면 이어서 보낸다
+    assert ed.ai_panel.history == [("user", "a 두 번"), ("ai", "두 번 누릅니다")]
+    assert "나: a 두 번" in ed.ai_panel.log_box.get("1.0", "end")
+    seen = []
+
+    class Provider(FakeAiProvider):
+        def generate(self, system, prompt, schema, images):
+            seen.append(system)
+            return super().generate(system, prompt, schema, images)
+    gui.ai_provider_factory = lambda: Provider(answer)
+    ed.ai_panel.text.insert("1.0", "간격 늘려")
+    ed.ai_panel.send()
+    assert wait_for(gui, lambda: not ed.ai_panel.busy)
+    assert "- 사용자: a 두 번" in seen[0] and "- AI: 두 번 누릅니다" in seen[0]
+
+
 def test_editor_ai_chat_error_keeps_text_and_items(gui):
     ed = open_editor_ai(gui)
     before = copy.deepcopy(ed.items)

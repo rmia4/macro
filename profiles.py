@@ -40,6 +40,7 @@ class Macro:
     version: int = VERSION
     hotkey: str | None = None   # 이 매크로를 시작/중지하는 전역 핫키 ('f6', 'ctrl+f1' 등)
     options: dict = field(default_factory=dict)  # 재생 옵션 (player.options_to_dict 형식)
+    ai_history: list = field(default_factory=list)  # 최근 AI 대화 [["user"|"ai", 내용], ...]
 
     @property
     def duration(self) -> float:
@@ -54,6 +55,7 @@ class Macro:
             "hotkey": self.hotkey,
             "options": self.options,
             "events": self.events,
+            **({"ai_history": self.ai_history} if self.ai_history else {}),
         }
 
     @classmethod
@@ -81,8 +83,13 @@ class Macro:
         options = data.get("options") or {}
         if not isinstance(options, dict):
             raise MacroFormatError("options 는 객체여야 합니다")
+        ai_history = data.get("ai_history") or []
+        if not (isinstance(ai_history, list) and all(
+                isinstance(h, list) and len(h) == 2 and h[0] in ("user", "ai") and isinstance(h[1], str)
+                for h in ai_history)):
+            raise MacroFormatError("ai_history 는 [역할, 내용] 목록이어야 합니다")
         return cls(events=events, screen=screen, coord_space=coord_space, window=window,
-                   version=version, hotkey=hotkey, options=options)
+                   version=version, hotkey=hotkey, options=options, ai_history=ai_history)
 
 
 def _is_num(v) -> bool:

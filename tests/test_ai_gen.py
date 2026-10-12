@@ -501,3 +501,12 @@ def test_too_long_current_without_moves_is_an_error(monkeypatch):
     events = [{"t": i * 0.1, "type": "kdown", "key": "a"} for i in range(50)]
     with pytest.raises(AiError, match="너무 길어"):
         generate_macro(GenRequest("x", current=events), FakeProvider())
+
+
+def test_trim_history_keeps_recent_and_cuts_long_text():
+    history = [("user", f"요청 {i}") for i in range(15)] + [("ai", "가" * 600)]
+    out = ai_gen.trim_history(history)
+    assert len(out) == ai_gen.HISTORY_MAX and out[0] == ("user", "요청 6")
+    assert len(out[-1][1]) == ai_gen.HISTORY_TEXT_MAX and out[-1][1].endswith("…")
+    system = ai_gen.build_system_prompt(GenRequest("x", current=CURRENT, history=history))
+    assert "요청 5" not in system and "요청 6" in system

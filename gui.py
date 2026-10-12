@@ -669,6 +669,7 @@ class EditorWindow:
             self.v_opts[fname] = (tk.BooleanVar(self.top, value=value) if kind == "check"
                                   else tk.StringVar(self.top, value=str(value)))
         self.dirty = draft is not None  # AI 초안은 저장 전 상태
+        self._ai_history = [tuple(h) for h in macro.ai_history] if macro else []
         self.v_rec_relative = tk.BooleanVar(  # 상대 이동이 있는 매크로는 상대 이동 녹화로 시작
             self.top, value=any(it["type"] in ("rmove", "relpath") for it in self.items))
         self._build()
@@ -769,6 +770,7 @@ class EditorWindow:
                             command=self.show_panel).pack(side="left", padx=(0, 2))
         right = self.settings_panel = ttk.LabelFrame(side, text="매크로 설정", padding=6)
         self.ai_panel = AiChatPanel(self, side)
+        self.ai_panel.restore(self._ai_history)
         self.show_panel()
         ttk.Label(right, text="대상 창 제목").grid(row=0, column=0, sticky="w", pady=2)
         ttk.Entry(right, textvariable=self.v_title, width=18).grid(row=0, column=1, sticky="w", padx=6)
@@ -1154,7 +1156,8 @@ class EditorWindow:
             window["title"] = opts.window_title or window.get("title", "")
         data = {"version": 1, "screen": self.screen or {"width": 0, "height": 0},
                 "coord_space": self.coord_space, "window": window, "hotkey": self._hotkey_value(),
-                "options": options_to_dict(opts), "events": em.to_events(self.items)}
+                "options": options_to_dict(opts), "events": em.to_events(self.items),
+                "ai_history": [list(h) for h in ai_gen.trim_history(self.ai_panel.history)]}
         return Macro.from_dict(data), opts
 
     def test_play(self) -> None:
@@ -2320,6 +2323,14 @@ class AiChatPanel:
         self.worker = AiWorker(self.gui, self.frame, self._on_result)
         self._update_shots()
         self.add("AI", ai_guide() + "\n지금 목록도 고칠 수 있고, ↶ 되돌리기로 취소합니다.")
+
+    def restore(self, history: list[tuple[str, str]]) -> None:
+        """매크로에 저장된 최근 대화를 이어 쓴다 (다음 요청의 맥락이 된다)."""
+        self.history = list(history)
+        if history:
+            self.add("AI", "이전 대화 (매크로에 저장된 최근 대화):")
+            for role, text in history:
+                self.add("나" if role == "user" else "AI", text)
 
     def add(self, who: str, text: str) -> None:
         self.log_box.configure(state="normal")
