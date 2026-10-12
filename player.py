@@ -31,7 +31,7 @@ class PlayOptions:
     focus_poll: float = 0.1
 
 
-MIN_WHILE_LAP = 0.01  # 동안 반복 한 바퀴의 최소 시간(초)
+MIN_WHILE_LAP = 0.01  # 반복 구간(동안 반복·일반 반복) 한 바퀴의 최소 시간(초)
 
 _MIN = {"repeat": 0, "speed": 0.01, "loop_delay": 0, "time_jitter": 0, "pos_jitter": 0,
         "approach_duration": 0, "min_key_hold": 0, "focus_poll": 0.01, "max_minutes": 0}
@@ -54,6 +54,8 @@ def set_option(opts: PlayOptions, name: str, value: str) -> None:
         parsed = "" if value in ("-", "none") else value
     else:
         parsed = int(value) if typ == "int" else float(value)
+        if not math.isfinite(parsed):
+            raise ValueError(f"{name} 은(는) 숫자여야 합니다")
         if name in _MIN and parsed < _MIN[name]:
             raise ValueError(f"{name} 은(는) {_MIN[name]} 이상이어야 합니다")
         if name in _MAX and parsed > _MAX[name]:
@@ -108,8 +110,10 @@ class Player:
         self._scale = (1.0, 1.0)
         self._cursor: tuple[int, int] | None = None
         self._deadline: float | None = None
+        self._paused = 0.0      # 포커스를 잃어 일시정지한 누적 시간 (조건 대기 제한 시간에서 뺀다)
         self.loop_index = 0     # 진행 중인 루프 (1부터), GUI 표시용
         self.event_index = -1   # 마지막으로 전송한 이벤트 인덱스
+        self.stop_reason: str | None = None  # 끝까지 못 가고 멈춘 이유 (사용자 중지·정상 종료는 None)
 
     def stop(self) -> None:
         self._stop.set()
@@ -129,14 +133,21 @@ class Player:
 
     def _expire(self) -> None:
         if not self._stop.is_set():
-            self._log(f"최대 실행 시간({self.opt.max_minutes:g}분)이 지나 재생을 멈춥니다")
+            self._abort(f"최대 실행 시간({self.opt.max_minutes:g}분)이 지나 재생을 멈춥니다")
         self._stop.set()
+
+    def _abort(self, msg: str) -> None:
+        """재생을 멈추게 된 이유를 남긴다 (처음 것만)."""
+        self._log(msg)
+        if self.stop_reason is None:
+            self.stop_reason = msg
 
     # ---- 실행 ----
     def run(self, macro: Macro) -> None:
         for ev in macro.events:
             if ev["type"] in ("kdown", "kup") and not keys.is_known(ev["key"]):
                 raise ValueError(f"알 수 없는 키: {ev['key']}")
+        self.stop_reason = None
         conds = conditions_in(macro.events)
         images = [ev for ev in macro.events if ev["type"] == "set_image"]
         if conds or images:  # 입력을 보내기 전에 화면 인식 준비가 되었는지 확인
@@ -147,24 +158,27 @@ class Player:
                 if "template" in ev:
                     self.vision.template(ev["template"])
         self.opt = dataclasses.replace(self.options)
-        self._stop.clear()
         self._deadline = self._clock() + self.opt.max_minutes * 60 if self.opt.max_minutes > 0 else None
         n = 0
         try:
             while not self._stop.is_set() and (self.opt.repeat == 0 or n < self.opt.repeat):
-                if n and self._sleep(self.opt.loop_delay):
+                # 한 회차에 지연이 없어도 CPU·로그를 독점하지 않도록 회차 시작 간격을 최소 MIN_WHILE_LAP 둔다
+                if n and self._sleep(max(self.opt.loop_delay, lap_start + MIN_WHILE_LAP - self._clock())):
                     break
+                lap_start = self._clock()
                 self.loop_index, self.event_index = n + 1, -1
                 if not self._play_once(macro):
                     break
+                self.release_all()  # 회차 끝에 남은 키·버튼은 뗀다 (kup 이 없거나 분기로 건너뛴 경우)
                 n += 1
                 self._log(f"루프 {n} 완료")
         finally:
-            self._release_all()
+            self.release_all()
+            self._stop.clear()  # 다음 run 을 위해 (시작 전·준비 중 들어온 중지는 위에서 지켜진다)
 
     def _play_once(self, macro: Macro) -> bool:
         o = self.opt
-        if not self._locate_window(macro):
+        if not self._locate_window(macro) or not self._wait_focus(macro):
             return False
         events = macro.events
         bl = blocks(events)
@@ -174,7 +188,7 @@ class Player:
         self.variables = {}
         if self.vision is not None and hasattr(self.vision, "clear_images"):
             self.vision.clear_images()  # 이미지 변수도 회차마다 비운다
-        lap_cum: dict[int, float] = {}                   # 동안 반복 -> 이번 회차 시작 시각(cum)
+        lap_cum: dict[int, float] = {}                   # 반복 시작 -> 이번 회차 시작 시각(cum)
         first = next((e for e in events if "x" in e), None)
         self._roll_offset()
         self._cursor = self.backend.cursor_pos()
@@ -200,7 +214,7 @@ class Player:
                 if result == "stopped":
                     return False
                 if result == "timeout" and ev.get("on_timeout", "stop") == "stop":
-                    self._log(f"조건 대기 시간 초과로 재생을 멈춥니다 ({ev.get('timeout', 10):g}초)")
+                    self._abort(f"조건 대기 시간 초과로 재생을 멈춥니다 ({ev.get('timeout', 10):g}초)")
                     self._stop.set()
                     return False
                 if result == "timeout":
@@ -210,22 +224,27 @@ class Player:
                 self._origin = self._clock() - cum  # 대기한 만큼 이후 시간표를 뒤로 민다
             elif typ in ("if_start", "break_if", "while_start"):
                 self._check(ev["cond"])
+                # 판정이 시간표보다 늦어졌으면 그만큼 이후를 민다 (안 그러면 반복마다 쌓여 뒤의 지연이 사라진다)
+                self._origin = max(self._origin, self._clock() - cum)
             elif typ == "set_var":
                 self.variables[ev["name"]] = ev["cond"]  # 지금 판정하지 않고, 변수가 쓰일 때 판정한다
             elif typ == "set_image":
                 if "template" in ev:
                     self.vision.set_image(ev["name"], self.vision.template(ev["template"]))
-                elif not self.vision.capture_image(ev["name"], ev["capture"], self._win):
+                elif not self.vision.capture_image(ev["name"], self._scale_rect(ev["capture"]), self._win):
                     self._log(f"이미지 변수 '{ev['name']}': 캡처 영역이 화면 밖이라 비워 둡니다")
             elif not self._dispatch(ev):
                 return False
             self.event_index = i
             if typ == "repeat_start":
                 remaining[ends[i]] = ev["count"] - 1 if ev["count"] > 0 else -1  # -1 = 무한
+                lap_cum[i] = cum
             elif typ == "repeat_end" and remaining.get(i, 0) != 0:
                 if remaining[i] > 0:
                     remaining[i] -= 1
                 start = starts[i]
+                # 한 바퀴에 지연이 없어도 CPU 를 독점하지 않도록 최소 간격을 둔다 (반복 시작 표시는 다시 안 지나므로 여기서 기록)
+                cum = lap_cum[start] = max(cum, lap_cum.get(start, cum) + MIN_WHILE_LAP)
                 i = start + 1  # 구간 처음으로 (반복 시작 표시는 다시 실행하지 않음)
                 continue
             elif typ == "while_start":
@@ -260,33 +279,45 @@ class Player:
 
     def _check(self, cond: dict):
         """조건 판정 (변수·여러 조건 포함). 결과는 last_match 에도 남긴다."""
+        cond, variables = self._scaled(cond), self.variables
+        if self._scale != (1.0, 1.0):
+            variables = {k: self._scaled(v) for k, v in variables.items()}
         frame = getattr(self.vision, "frame", None)  # 여러 화면 조건이면 캡처를 한 번에
-        with frame(cond, self._win, self.variables) if frame else nullcontext():
-            self.last_match = evaluate(cond, lambda c: self.vision.check(c, self._win), self.variables)
+        with frame(cond, self._win, variables) if frame else nullcontext():
+            self.last_match = evaluate(cond, lambda c: self.vision.check(c, self._win), variables)
         return self.last_match
 
     def _wait_until(self, cum: float) -> bool:
         while True:
             remaining = self._origin + cum - self._clock()
             if remaining <= 0:
-                if self._deadline is not None and self._clock() >= self._deadline:
-                    self._expire()
-                return not self._stop.is_set()
+                return not self._halted()
             if self._sleep(remaining):
                 return False
+
+    def _halted(self) -> bool:
+        """중지 요청이 있거나 최대 실행 시간에 도달했으면 True."""
+        if self._deadline is not None and self._clock() >= self._deadline:
+            self._expire()
+        return self._stop.is_set()
 
     # ---- 화면 조건 ----
     def _wait_condition(self, ev: dict, macro: Macro) -> str:
         """조건이 맞을 때까지 대기. "ok" | "timeout" | "stopped"."""
         timeout = ev.get("timeout", 10)
         interval = ev.get("interval", 0.1)
-        start = self._clock()
+        start, paused = self._clock(), self._paused
         while True:
             if not self._wait_focus(macro):
                 return "stopped"
             if self._check(ev["cond"]).matched:
-                return "ok"
-            waited = self._clock() - start
+                # 판정에 시간이 걸리므로 입력을 보내기 전에 중지·시간 제한·포커스를 다시 본다
+                if self._halted():
+                    return "stopped"
+                if not self.opt.window_title or self._focused():
+                    return "ok"
+                continue  # 판정 중 포커스를 잃었으면 돌아온 뒤 다시 판정
+            waited = self._clock() - start - (self._paused - paused)  # 일시정지한 시간은 세지 않는다
             if timeout > 0 and waited >= timeout:
                 return "timeout"
             step = interval if timeout <= 0 else min(interval, timeout - waited)
@@ -296,6 +327,7 @@ class Player:
     def _click_found(self, ev: dict) -> bool:
         """click_image: 찾은 위치(+보정, +클릭 좌표 편차)를 클릭. 중단되면 False."""
         dx, dy = ev.get("offset", [0, 0])
+        dx, dy = dx * self._scale[0], dy * self._scale[1]
         x, y = self.last_match.pos
         x, y = int(round(x + dx)) + self._offset[0], int(round(y + dy)) + self._offset[1]
         button = ev.get("button", "left")
@@ -318,7 +350,7 @@ class Player:
         title = self.opt.window_title or (macro.window or {}).get("title", "")
         rect = self.backend.find_window_rect(title) if title else None
         if rect is None:
-            self._log(f"창을 찾을 수 없어 중단합니다: {title!r}")
+            self._abort(f"창을 찾을 수 없어 중단합니다: {title!r}")
             return False
         self._win = (rect[0], rect[1])
         rec = macro.window or {}
@@ -333,14 +365,22 @@ class Player:
         if not self.opt.window_title or self._focused():
             return True
         self._log("대상 창이 포커스를 잃어 일시정지합니다")
-        self._release_all()
+        held = list(self._held_keys)
+        self.release_all()
         start = self._clock()
         while not self._focused():
             if self._sleep(self.opt.focus_poll):
                 return False
-        self._origin += self._clock() - start
+        paused = self._clock() - start
+        self._origin += paused
+        self._paused += paused
         self._cursor = None
-        return self._locate_window(macro)
+        if not self._locate_window(macro):
+            return False
+        for key in held:  # 누르고 있던 키는 다시 누른다 (눌린 버튼·드래그는 복원하지 않음)
+            self._held_keys[key] = self._clock()
+            self.backend.key_down(key)
+        return True
 
     # ---- 좌표 ----
     def _roll_offset(self) -> None:
@@ -353,6 +393,26 @@ class Player:
     def _map(self, x, y) -> tuple[int, int]:
         return (round(x * self._scale[0]) + self._win[0] + self._offset[0],
                 round(y * self._scale[1]) + self._win[1] + self._offset[1])
+
+    def _scale_rect(self, rect) -> list[int]:
+        sx, sy = self._scale
+        x, y, w, h = rect
+        return [round(x * sx), round(y * sy), max(1, round(w * sx)), max(1, round(h * sy))]
+
+    def _scaled(self, cond):
+        """창 크기 비례 조정(scale_coords) 중이면 조건의 좌표·영역도 입력 좌표처럼 맞춘다 (이미지 크기는 그대로)."""
+        if not isinstance(cond, dict) or self._scale == (1.0, 1.0):
+            return cond
+        c = dict(cond)
+        if "conds" in c:
+            c["conds"] = [self._scaled(sub) for sub in c["conds"]]
+        if "x" in c:
+            c["x"], c["y"] = round(c["x"] * self._scale[0]), round(c["y"] * self._scale[1])
+        if "w" in c:
+            _, _, c["w"], c["h"] = self._scale_rect([0, 0, c["w"], c["h"]])
+        if c.get("region"):
+            c["region"] = self._scale_rect(c["region"])
+        return c
 
     def _goto(self, ev: dict) -> None:
         p = self._map(ev["x"], ev["y"])
@@ -380,6 +440,8 @@ class Player:
             s = i / steps
             e = s * s * (3 - 2 * s)  # smoothstep 가감속
             x, y = round(sx + (tx - sx) * e), round(sy + (ty - sy) * e)
+            if self.opt.window_title and not self._focused():
+                return True  # 창을 벗어나면 보간을 그만둔다 (첫 이벤트 전에 포커스를 기다림)
             self.backend.mouse_move_abs(x, y)
             self._cursor = (x, y)
             if self._sleep(dur / steps):
@@ -421,7 +483,8 @@ class Player:
         # "wait", "repeat_start", "repeat_end": 대기는 이미 타임라인에 반영됨, 반복은 _play_once 가 처리
         return True
 
-    def _release_all(self) -> None:
+    def release_all(self) -> None:
+        """눌린 키·버튼을 모두 뗀다 (재생 끝·포커스 잃음, 멈추지 않는 재생을 밖에서 정리할 때)."""
         for key in list(self._held_keys):
             try:
                 self.backend.key_up(key)

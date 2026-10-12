@@ -440,3 +440,202 @@ def test_click_image_stop_during_hold_releases_button():
     clock.on_wait = lambda: p.stop() if clock.t > 1 else None
     p.run(m)
     assert ("mup", "left") in be.names()
+
+
+def test_focus_pause_not_counted_in_condition_timeout():
+    """조건 대기 중 창을 벗어나 있던 시간은 제한 시간에 들어가지 않는다."""
+    evs = [{"t": 0, "type": "wait_until", "cond": PIX, "timeout": 1}, key(0.1, "kdown")]
+    p, be, clock, m = build(evs, window_title="Game")
+    p.vision = ScriptedVision([False] * 4 + [True])  # 돌아온 뒤 두 번째 확인에서 충족
+
+    def hook():
+        if 0.2 < clock.t < 5:
+            be.title = "Browser"   # 0.2초 뒤 5초 동안 다른 창
+        else:
+            be.title = "Game"
+    clock.on_wait = hook
+    p.run(m)
+    assert [c[1] for c in be.calls] == ["kdown", "kup"]   # 시간 초과로 멈추지 않음
+
+
+def test_held_key_pressed_again_after_focus_returns():
+    evs = [key(0.1, "kdown", "w"), key(0.5, "kup", "w")]
+    p, be, clock, m = build(evs, window_title="Game")
+    clock.on_wait = lambda: setattr(be, "title", "Browser" if 0.2 < clock.t < 2 else "Game")
+    p.run(m)
+    assert [c[1:] for c in be.calls] == [("kdown", "w"), ("kup", "w"), ("kdown", "w"), ("kup", "w")]
+
+
+class CondVision(ScriptedVision):
+    def check(self, cond, origin=(0, 0)):
+        self.checks.append(cond)
+        return self.Match(True, 1.0, (500, 400))
+
+    def capture_image(self, name, rect, origin=(0, 0)):
+        self.captured = rect
+        return True
+
+    def clear_images(self):
+        pass
+
+
+def test_scale_coords_scales_conditions_capture_and_offset():
+    """창이 녹화 때와 크기가 다르면 조건 좌표·영역, 이미지 캡처 영역, 클릭 보정도 비례 조정한다."""
+    clock = FakeClock()
+    be = FakeBackend(clock)   # 창 1280x720 = 녹화(640x360)의 2배
+    img = {"kind": "image", "template": "ok.png", "region": [10, 20, 30, 40]}
+    rng = {"kind": "pixel", "x": 5, "y": 6, "w": 7, "h": 8, "color": "#000000"}
+    evs = [{"t": 0, "type": "set_var", "name": "v", "cond": rng},
+           {"t": 0, "type": "if_start", "cond": {"kind": "all", "conds": [img, {"kind": "var", "name": "v"}]}},
+           {"t": 0, "type": "if_end"},
+           {"t": 0, "type": "set_image", "name": "s", "capture": [1, 2, 3, 4]},
+           {"t": 0, "type": "click_image", "cond": img, "offset": [5, -3], "hold": 0}]
+    m = Macro(events=evs, coord_space="window", window={"title": "Game", "width": 640, "height": 360})
+    v = CondVision([])
+    Player(be, PlayOptions(approach=False, scale_coords=True), clock=clock, waiter=clock.wait, vision=v).run(m)
+    assert v.checks[0]["region"] == [20, 40, 60, 80]
+    assert (v.checks[1]["x"], v.checks[1]["y"], v.checks[1]["w"], v.checks[1]["h"]) == (10, 12, 14, 16)
+    assert v.captured == [2, 4, 6, 8]
+    assert ("abs", 510, 394) in be.names()
+    assert img["region"] == [10, 20, 30, 40]   # 원본 매크로는 그대로
+
+
+def test_stop_reason_set_only_for_abnormal_stops():
+    evs = [{"t": 0, "type": "wait_until", "cond": PIX, "timeout": 1}, key(0.1, "kdown")]
+    p, be, clock, m = build(evs)
+    p.vision = ScriptedVision([])
+    p.run(m)
+    assert p.stop_reason.startswith("조건 대기 시간 초과")
+    p, be, clock, m = build([key(0, "kdown"), key(100, "kup")], max_minutes=0.01)
+    p.run(m)
+    assert p.stop_reason.startswith("최대 실행 시간")
+    clock = FakeClock()
+    be = FakeBackend(clock)
+    be.find_window_rect = lambda t: None
+    p = Player(be, PlayOptions(), clock=clock, waiter=clock.wait)
+    p.run(Macro(events=[key(0, "kdown")], coord_space="window", window={"title": "Game"}))
+    assert p.stop_reason.startswith("창을 찾을 수 없어")
+    p, be, clock, m = build([key(0, "kdown"), key(10, "kup")])
+    clock.on_wait = lambda: p.stop() if clock.t > 1 else None
+    p.run(m)
+    assert p.stop_reason is None   # 사용자가 멈춘 것
+    p, be, clock, m = build([key(0, "kdown"), key(0.1, "kup")])
+    p.run(m)
+    assert p.stop_reason is None   # 정상 종료
+
+
+def test_stop_during_preload_is_kept():
+    """화면 인식 준비 중에 들어온 중지 요청도 지켜져 입력을 보내지 않는다."""
+    p, be, clock, m = build([{"t": 0, "type": "wait_until", "cond": PIX}, key(0.1, "kdown")])
+    v = ScriptedVision([True])
+    v.preload = lambda conds: p.stop()
+    p.vision = v
+    p.run(m)
+    assert be.calls == [] and v.checks == []
+    v.preload = lambda conds: None
+    p.run(m)  # 끝난 뒤에는 다시 재생할 수 있다
+    assert [c[1] for c in be.calls] == ["kdown", "kup"]
+
+
+def _click_after_check(hook, on_wait=None, **opt):
+    """click_image 판정 중에 hook(p, be, clock) 을 부른다 (판정은 늘 일치)."""
+    evs = [{"t": 0, "type": "click_image", "cond": PIX, "hold": 0}]
+    p, be, clock, m = build(evs, **opt)
+    v = ScriptedVision([])
+
+    def check(cond, origin=(0, 0)):
+        v.checks.append(origin)
+        hook(p, be, clock)
+        return v.Match(True, 1.0, (10, 20))
+    v.check = check
+    p.vision = v
+    clock.on_wait = on_wait and (lambda: on_wait(be, clock))
+    p.run(m)
+    return be, v
+
+
+def test_click_image_not_sent_when_stopped_during_check():
+    be, _ = _click_after_check(lambda p, be, clock: p.stop())
+    assert be.calls == []
+
+
+def test_click_image_not_sent_when_time_limit_passes_during_check():
+    def slow(p, be, clock):
+        clock.t += 10   # 판정에 10초 (제한 6초)
+    be, _ = _click_after_check(slow, max_minutes=0.1)
+    assert be.calls == []
+
+
+def test_click_image_rechecks_after_focus_lost_during_check():
+    def lose_once(p, be, clock):
+        if clock.t < 1:
+            be.title = "Browser"   # 첫 판정 중에 다른 창으로
+
+    def come_back(be, clock):
+        if clock.t > 1:
+            be.title = "Game"
+    be, v = _click_after_check(lose_once, come_back, window_title="Game")
+    assert len(v.checks) == 2   # 포커스가 돌아온 뒤 다시 판정하고
+    assert be.calls[0][0] > 1 and be.names()[0] == ("abs", 10, 20)   # 그 뒤에 클릭
+
+
+def test_approach_waits_for_target_window_focus():
+    p, be, clock, m = build([mv(0.1, 800, 600)], window_title="Game", approach=True)
+    be.title = "Browser"
+    clock.on_wait = lambda: setattr(be, "title", "Game") if clock.t > 1 else None
+    p.run(m)
+    assert be.calls and all(c[0] > 1 for c in be.calls)   # 창이 돌아오기 전에는 커서를 움직이지 않는다
+
+
+def test_approach_stops_when_focus_lost_midway():
+    p, be, clock, m = build([mv(0.1, 800, 600)], window_title="Game", approach=True)
+    clock.on_wait = lambda: setattr(be, "title", "Browser" if 0.05 < clock.t < 2 else "Game")
+    p.run(m)
+    assert not any(0.05 < c[0] < 2 for c in be.calls)
+
+
+def test_zero_delay_infinite_repeat_waits_between_laps():
+    """지연 없는 무한 반복도 한 바퀴마다 최소 간격(MIN_WHILE_LAP)을 둔다."""
+    evs = [{"t": 0, "type": "repeat_start", "count": 0}, key(0, "kdown"), key(0, "kup"),
+           {"t": 0, "type": "repeat_end"}]
+    p, be, clock, m = build(evs)
+    clock.on_wait = lambda: p.stop() if clock.t >= 0.1 else None
+    p.run(m)
+    assert 9 <= sum(c[1] == "kdown" for c in be.calls) <= 11
+
+
+def test_repeat_lap_minimum_keeps_existing_timing():
+    """한 바퀴가 최소 간격보다 길면 시간표는 그대로다."""
+    evs = [{"t": 0, "type": "repeat_start", "count": 3}, key(0.1, "kdown"), key(0.2, "kup"),
+           {"t": 0.2, "type": "repeat_end"}]
+    p, be, clock, m = build(evs)
+    p.run(m)
+    assert [round(c[0], 6) for c in be.calls] == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_set_option_rejects_non_finite(value):
+    with pytest.raises(ValueError):
+        set_option(PlayOptions(), "speed", value)
+
+
+def test_whole_macro_loop_has_min_lap_time():
+    """지연 없는 매크로를 반복 간 대기 0 으로 무한 반복해도 회차마다 최소 간격을 둔다."""
+    from player import MIN_WHILE_LAP
+    p, be, clock, m = build([key(0, "kdown"), key(0, "kup")], repeat=100)
+    p.run(m)
+    assert clock.t >= 99 * MIN_WHILE_LAP - 1e-9
+
+
+def test_min_lap_time_not_added_to_long_laps():
+    p, be, clock, m = build([key(0.1, "kdown"), key(0.2, "kup")], repeat=3)
+    p.run(m)
+    downs = [c[0] for c in be.calls if c[1] == "kdown"]
+    assert round(downs[1] - downs[0], 3) == 0.2
+
+
+def test_held_keys_released_between_laps():
+    """kup 없이 끝난 회차의 눌린 키는 다음 회차 전에 뗀다."""
+    p, be, clock, m = build([key(0.1, "kdown")], repeat=2, loop_delay=1.0)
+    p.run(m)
+    assert [c[1] for c in be.calls if c[1] in ("kdown", "kup")] == ["kdown", "kup", "kdown", "kup"]

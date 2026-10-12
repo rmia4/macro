@@ -1,6 +1,6 @@
 # macro_tool — 싱글 플레이 게임용 입력 녹화/재생 (Windows)
 
-Steam 싱글 플레이 게임의 반복 작업(클릭·드래그·키·스크롤)을 녹화하고 재생한다. 현재 버전 **1.3.0**.
+Steam 싱글 플레이 게임의 반복 작업(클릭·드래그·키·스크롤)을 녹화하고 재생한다. 현재 버전 **1.3.1**.
 
 ## 한눈에 보기
 - **녹화·재생**: 마우스(절대/상대 이동)·키보드·스크롤을 녹화하고, 지터·보간·반복 횟수를 정해 재생한다.
@@ -35,7 +35,7 @@ MacroTool/
 "관리자 권한으로 실행"한다. 오류로 종료되면 같은 폴더에 `crash.log`가 남는다.
 
 - **GitHub에서 받기**: 저장소 Actions 탭 → `Build Windows exe` → 최근 실행 → Artifacts의 `MacroTool-windows`
-  (받은 zip 안의 `MacroTool` 폴더를 사용). `v1.3.0` 같은 태그를 푸시하면 Releases에 `MacroTool-windows.zip`이 올라간다.
+  (받은 zip 안의 `MacroTool` 폴더를 사용). `v1.3.1` 같은 태그를 푸시하면 Releases에 `MacroTool-windows.zip`이 올라간다.
   (Windows에서 테스트 → 빌드 → exe 자가진단까지 자동 실행)
 - **직접 빌드** (Windows):
   ```
@@ -77,6 +77,7 @@ Windows, Python 3.11+ (tkinter 포함 설치 필요).
 (아래 "조건 이벤트" 참고).
 `mdown`/`mup`/`scroll`은 `x`, `y`를 생략하면 현재 커서 위치에서 입력한다. `hotkey`는 `"f6"`, `"ctrl+f1"` 형식.
 GUI로 저장하면 `"hotkey": "f6"`과 `"options": {"repeat": 0, "speed": 1.0, ...}`(재생 옵션)도 함께 저장된다. 드래그는 별도 이벤트 없이 `mdown → move… → mup` 이다.
+AI 대화로 만들거나 고친 매크로는 최근 대화 `"ai_history": [["user", "요청"], ["ai", "답"], ...]`(최근 10개, 하나당 500자까지)도 저장되어, 다시 열어 AI 로 고칠 때 맥락으로 함께 보낸다.
 
 ### 조건 이벤트
 조건(`cond`)은 `image`(템플릿 `template` 또는 이미지 변수 `image_var`, `region`, `threshold`) / `pixel`(범위 `x,y,w,h`, `color`,

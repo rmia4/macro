@@ -26,6 +26,8 @@ HELP = """명령: record | play | stop | save <이름> | load <이름> | delete 
 
 
 class App:
+    STOP_TIMEOUT = 2.0  # 종료할 때 재생이 멈추기를 기다리는 시간(초)
+
     def __init__(self, backend, macros_dir: Path = MACROS_DIR, log=print,
                  recorder_factory=Recorder, player_factory=Player, vision_factory=Vision) -> None:
         self.backend = backend
@@ -39,6 +41,7 @@ class App:
         self.playing_name: str | None = None
         self.playing_macro: Macro | None = None
         self.playing_keys: frozenset[str] = frozenset()
+        self.play_end_reason: str | None = None  # 마지막 재생이 오류 등으로 멈췄으면 그 이유 (GUI 가 읽고 비운다)
         self._recorder_factory = recorder_factory
         self._player_factory = player_factory
         self._vision_factory = vision_factory
@@ -120,6 +123,7 @@ class App:
                 vision = self._vision_factory(assets_dir or self.assets_dir(name))
             player = self._player_factory(self.backend, options, log=self.log, vision=vision)
             self._player = player
+            self.play_end_reason = None
             self.playing_macro, self.playing_name = macro, name
             self.playing_keys = frozenset(keys.hotkey_key(ev["key"]) for ev in macro.events if "key" in ev)
             self._thread = threading.Thread(target=self._play, args=(player, macro), daemon=True)
@@ -143,14 +147,19 @@ class App:
     def _play(self, player, macro: Macro) -> None:
         try:
             player.run(macro)
+            self.play_end_reason = getattr(player, "stop_reason", None)
         except Exception as e:  # 입력은 Player 의 finally 에서 이미 해제됨
-            self.log(f"재생 오류: {e}")
+            self.play_end_reason = f"재생 오류: {e}"
+            self.log(self.play_end_reason)
         self.log("■ 재생 종료")
 
     def stop_all(self) -> None:
         if self.playing:
             self._player.stop()
-            self._thread.join(timeout=2)
+            self._thread.join(timeout=self.STOP_TIMEOUT)
+            if self._thread.is_alive():  # 판정·입력이 막혀 멈추지 않으면 (데몬 스레드라 finally 가 안 돌 수 있다)
+                self.log("재생이 멈추지 않아 눌린 키·버튼을 직접 해제합니다")
+                self._player.release_all()
         if self.recording:
             self.toggle_record()
 
@@ -166,7 +175,7 @@ class App:
                 macro = load_macro(macro_path(self.macros_dir, name))
                 options_from_dict(macro.options)  # 옵션 검증
                 lib[name] = macro
-            except (OSError, ValueError) as e:  # MacroFormatError 포함
+            except Exception as e:  # 파일 하나 때문에 목록 갱신(GUI 주기 갱신)이 멈추지 않도록
                 self.log(f"불러오기 실패 '{name}': {e}")
         self.library = lib
         self.library_sig = self.library_signature()
@@ -199,21 +208,47 @@ class App:
         name = path.stem
         if name != old_name and path.exists():
             raise ValueError(f"같은 이름의 매크로가 이미 있습니다: {name}")
-        if assets is not None:  # 원본이 사라지기 전에 먼저 읽어 둔다
-            data = {fname: Path(src).read_bytes() for fname, src in assets.items()}
-        save_macro(macro, path)
-        self.library[name] = macro
         target = self.macros_dir / name
+        staged = None
+        if assets is not None and assets:
+            # 새 이미지는 임시 폴더에 다 쓴 뒤 바꿔 넣는다 (쓰다가 실패해도 기존 폴더가 남는다)
+            staged = self.macros_dir / f".{name}.saving"
+            if staged.is_dir():
+                shutil.rmtree(staged)
+            try:
+                staged.mkdir(parents=True)
+                for fname, src in assets.items():
+                    (staged / fname).write_bytes(Path(src).read_bytes())
+            except BaseException:
+                shutil.rmtree(staged, ignore_errors=True)
+                raise
         old_dir = self.macros_dir / old_name if old_name else None
-        if assets is not None:
-            for d in {target, old_dir} - {None}:
-                if d.is_dir():
-                    shutil.rmtree(d)
-            if data:
-                target.mkdir(parents=True, exist_ok=True)
-                for fname, content in data.items():
-                    (target / fname).write_bytes(content)
-        elif old_dir and old_name != name and old_dir.is_dir() and not target.exists():
+        backups: list[tuple[Path, Path]] = []  # (원래 폴더, 잠시 옮겨 둔 곳)
+        placed = False
+        try:
+            if assets is not None:  # 기존 폴더는 지우지 않고 옮겨 두었다가, 다 끝나면 지운다
+                for d in {target, old_dir} - {None}:
+                    if d.is_dir():
+                        bak = d.with_name(f".{d.name}.old")
+                        if bak.is_dir():
+                            shutil.rmtree(bak)
+                        d.rename(bak)
+                        backups.append((d, bak))
+                if staged is not None:
+                    staged.rename(target)
+                    placed = True
+            save_macro(macro, path)
+        except BaseException:  # 실패하면 새 폴더를 빼고 원래 폴더를 되돌린다
+            if staged is not None:
+                shutil.rmtree(target if placed else staged, ignore_errors=True)
+            for d, bak in backups:
+                if not d.exists():
+                    bak.rename(d)
+            raise
+        for _, bak in backups:
+            shutil.rmtree(bak, ignore_errors=True)
+        self.library[name] = macro
+        if assets is None and old_dir and old_name != name and old_dir.is_dir() and not target.exists():
             old_dir.rename(target)
         if old_name and old_name != name:
             self.library.pop(old_name, None)

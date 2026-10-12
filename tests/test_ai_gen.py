@@ -1,5 +1,6 @@
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -140,13 +141,17 @@ def test_cli_command_and_structured_output():
 
     def popen(cmd, **kw):
         seen["cmd"], seen["kw"] = cmd, kw
+        seen["system"] = Path(cmd[cmd.index("--system-prompt-file") + 1]).read_text(encoding="utf-8")
         seen["proc"] = FakeProc(out=envelope(structured_output=GOOD))
         return seen["proc"]
     p = ClaudeCliProvider("claude-not-on-path", model="sonnet", popen=popen)
-    assert p.generate("SYS", "한글 설명", {"type": "object"}, []) == GOOD
+    system = "시스템 " + "x" * 40000  # Windows 명령줄 한도(32767자)보다 길어도 파일로 넘긴다
+    assert p.generate(system, "한글 설명", {"type": "object"}, []) == GOOD
     cmd = seen["cmd"]
     assert cmd[0] == "claude-not-on-path" and cmd[1] == "-p"
-    assert cmd[cmd.index("--system-prompt") + 1] == "SYS"
+    assert seen["system"] == system and "--system-prompt" not in cmd
+    assert sum(len(a) for a in cmd) < 2000
+    assert not Path(cmd[cmd.index("--system-prompt-file") + 1]).exists()  # 끝나면 지운다
     assert cmd[cmd.index("--tools") + 1] == "" and "--no-session-persistence" in cmd
     assert cmd[cmd.index("--model") + 1] == "sonnet"
     assert json.loads(cmd[cmd.index("--json-schema") + 1]) == {"type": "object"}
@@ -466,3 +471,47 @@ def test_new_crops_avoid_existing_names():
         {"type": "wait_until", "delay_ms": 0, "cond": {"kind": "image", "crop": {"capture": 1, "rect": [0, 0, 10, 10]}}}]}
     _, macro, _, assets = to_macro(data, req)
     assert list(assets) == ["ai_1_2.png"] and macro.events[0]["cond"]["template"] == "ai_1_2.png"
+
+
+# ---- 수정 모드: 긴 매크로는 마우스 이동을 줄여 보낸다 ----
+def test_thin_moves_keeps_time_end_point_and_relative_total():
+    steps = ([{"type": "move", "delay_ms": 10, "x": i, "y": i} for i in range(5)]
+             + [{"type": "kdown", "delay_ms": 0, "key": "a"}]
+             + [{"type": "rmove", "delay_ms": 10, "dx": 1, "dy": -2} for _ in range(5)])
+    out = ai_gen.thin_moves(steps, 2)
+    assert [s["type"] for s in out] == ["move", "move", "move", "kdown", "rmove", "rmove", "rmove"]
+    assert out[2] == {"type": "move", "delay_ms": 10, "x": 4, "y": 4}  # 묶음 끝은 남는다
+    assert sum(s["delay_ms"] for s in out) == sum(s["delay_ms"] for s in steps)
+    rm = [s for s in out if s["type"] == "rmove"]
+    assert sum(s["dx"] for s in rm) == 5 and sum(s["dy"] for s in rm) == -10
+
+
+def test_long_current_is_thinned_not_truncated(monkeypatch):
+    monkeypatch.setattr(ai_gen, "MAX_CURRENT_CHARS", 2000)
+    events = [{"t": i * 0.01, "type": "move", "x": i, "y": i} for i in range(200)]
+    events.append({"t": 2.5, "type": "kdown", "key": "z"})
+    steps, thinned = ai_gen.current_steps(events)
+    assert thinned > 0 and len(json.dumps(steps, ensure_ascii=False)) <= 2000
+    assert steps[-1]["key"] == "z" and steps[-2]["x"] == 199  # 뒷부분이 빠지지 않는다
+    system = ai_gen.build_system_prompt(GenRequest("x", current=events))
+    assert '"key": "z"' in system
+    p = FakeProvider({"name": "", "notes": "확인", "events": steps})
+    _, macro, notes, _ = generate_macro(GenRequest("x", current=events), p)
+    assert f"마우스 이동 {thinned}개" in notes and notes.endswith("확인")
+    assert macro.events[-1]["t"] == 2.5
+
+
+def test_too_long_current_without_moves_is_an_error(monkeypatch):
+    monkeypatch.setattr(ai_gen, "MAX_CURRENT_CHARS", 200)
+    events = [{"t": i * 0.1, "type": "kdown", "key": "a"} for i in range(50)]
+    with pytest.raises(AiError, match="너무 길어"):
+        generate_macro(GenRequest("x", current=events), FakeProvider())
+
+
+def test_trim_history_keeps_recent_and_cuts_long_text():
+    history = [("user", f"요청 {i}") for i in range(15)] + [("ai", "가" * 600)]
+    out = ai_gen.trim_history(history)
+    assert len(out) == ai_gen.HISTORY_MAX and out[0] == ("user", "요청 6")
+    assert len(out[-1][1]) == ai_gen.HISTORY_TEXT_MAX and out[-1][1].endswith("…")
+    system = ai_gen.build_system_prompt(GenRequest("x", current=CURRENT, history=history))
+    assert "요청 5" not in system and "요청 6" in system

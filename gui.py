@@ -50,6 +50,8 @@ OVERLAY_LABELS = {"off": "끄기", "nw": "↖ 왼쪽 위", "n": "↑ 위 가운�
                   "w": "← 왼쪽 가운데", "e": "→ 오른쪽 가운데", "sw": "↙ 왼쪽 아래",
                   "s": "↓ 아래 가운데", "se": "↘ 오른쪽 아래"}
 COLORS = {"idle": "#555555", "rec": "#c62828", "play": "#2e7d32", "wait": "#ef6c00"}
+MAX_LOG_LINES = 1000      # 메인 화면 로그 창에 남기는 줄 수 (오래된 줄부터 지움)
+STOP_NOTICE_SECONDS = 6   # 재생이 오류 등으로 멈췄을 때 오버레이에 이유를 보여주는 시간
 NO_HOTKEY = "(없음)"
 REPO_URL = "https://github.com/rmia4/macro"  # 설정 창의 '제작자' 링크
 COORD_LABELS = {"screen": "화면 기준", "window": "창 기준"}
@@ -75,7 +77,7 @@ class Gui:
         self._countdown_what = ""
         self.macros_enabled = bool(self.settings["macros_enabled"])  # True=실행모드, False=편집모드
         self._flash_until = 0.0  # 실행모드/편집모드 전환 직후 오버레이에 잠깐 상태 표시
-        self._notice: tuple[str, float] | None = None  # 오버레이 안내 (문구, 만료 시각)
+        self._notice: tuple[str, float, str] | None = None  # 오버레이 안내 (문구, 만료 시각, 색)
         self.grabber = None  # 화면 캡처. None 이면 처음 쓸 때 MssGrabber 생성 (테스트에서 주입)
         self._after_id = None
         self._closed = False
@@ -349,7 +351,7 @@ class Gui:
     def overlay_state(self) -> tuple[str, str] | None:
         """오버레이에 보여줄 (문구, 색상). 보여줄 게 없으면 None."""
         if self._notice and time.monotonic() < self._notice[1]:
-            return self._notice[0], COLORS["wait"]
+            return self._notice[0], self._notice[2]
         cd = self.countdown_for("main") or self.countdown_for("editor")
         if cd:
             return f"{cd[0]}초 후 {cd[1]}", COLORS["wait"]
@@ -379,7 +381,7 @@ class Gui:
         return self.grabber
 
     def notice(self, text: str, seconds: float = 1.2) -> None:
-        self._notice = (text, time.monotonic() + seconds)
+        self._notice = (text, time.monotonic() + seconds, COLORS["wait"])
         self.log(text)
 
     def run_screen_action(self, windows, label: str, action) -> None:
@@ -570,8 +572,15 @@ class Gui:
         if lines:
             self.log_box.configure(state="normal")
             self.log_box.insert("end", "\n".join(lines) + "\n")
+            extra = int(self.log_box.index("end-1c").split(".")[0]) - MAX_LOG_LINES
+            if extra > 0:
+                self.log_box.delete("1.0", f"{extra + 1}.0")
             self.log_box.see("end")
             self.log_box.configure(state="disabled")
+        reason = self.app.play_end_reason
+        if reason and not self.app.playing:  # 게임 화면에서도 왜 멈췄는지 보이게
+            self.app.play_end_reason = None
+            self._notice = (f"■ {reason}", time.monotonic() + STOP_NOTICE_SECONDS, COLORS["rec"])
         self._poll_count += 1
         if self._poll_count % 20 == 0:  # 약 1초마다: 밖에서 바뀐 매크로 파일 반영
             self._auto_reload()
@@ -669,6 +678,7 @@ class EditorWindow:
             self.v_opts[fname] = (tk.BooleanVar(self.top, value=value) if kind == "check"
                                   else tk.StringVar(self.top, value=str(value)))
         self.dirty = draft is not None  # AI 초안은 저장 전 상태
+        self._ai_history = [tuple(h) for h in macro.ai_history] if macro else []
         self.v_rec_relative = tk.BooleanVar(  # 상대 이동이 있는 매크로는 상대 이동 녹화로 시작
             self.top, value=any(it["type"] in ("rmove", "relpath") for it in self.items))
         self._build()
@@ -769,6 +779,7 @@ class EditorWindow:
                             command=self.show_panel).pack(side="left", padx=(0, 2))
         right = self.settings_panel = ttk.LabelFrame(side, text="매크로 설정", padding=6)
         self.ai_panel = AiChatPanel(self, side)
+        self.ai_panel.restore(self._ai_history)
         self.show_panel()
         ttk.Label(right, text="대상 창 제목").grid(row=0, column=0, sticky="w", pady=2)
         ttk.Entry(right, textvariable=self.v_title, width=18).grid(row=0, column=1, sticky="w", padx=6)
@@ -1154,7 +1165,8 @@ class EditorWindow:
             window["title"] = opts.window_title or window.get("title", "")
         data = {"version": 1, "screen": self.screen or {"width": 0, "height": 0},
                 "coord_space": self.coord_space, "window": window, "hotkey": self._hotkey_value(),
-                "options": options_to_dict(opts), "events": em.to_events(self.items)}
+                "options": options_to_dict(opts), "events": em.to_events(self.items),
+                "ai_history": [list(h) for h in ai_gen.trim_history(self.ai_panel.history)]}
         return Macro.from_dict(data), opts
 
     def test_play(self) -> None:
@@ -2321,6 +2333,14 @@ class AiChatPanel:
         self._update_shots()
         self.add("AI", ai_guide() + "\n지금 목록도 고칠 수 있고, ↶ 되돌리기로 취소합니다.")
 
+    def restore(self, history: list[tuple[str, str]]) -> None:
+        """매크로에 저장된 최근 대화를 이어 쓴다 (다음 요청의 맥락이 된다)."""
+        self.history = list(history)
+        if history:
+            self.add("AI", "이전 대화 (매크로에 저장된 최근 대화):")
+            for role, text in history:
+                self.add("나" if role == "user" else "AI", text)
+
     def add(self, who: str, text: str) -> None:
         self.log_box.configure(state="normal")
         self.log_box.insert("end", f"{who}: {text}\n\n")
@@ -2375,6 +2395,7 @@ class AiChatPanel:
         if not text:
             return
         self._pending = text
+        self._sent = em.to_events(self.editor.items)  # 응답이 올 때 그사이 손으로 고쳤는지 비교
         self.add("나", self.with_shots(text, len(self.captures)))
         self.text.delete("1.0", "end")
         self.btn_send.state(["disabled"])
@@ -2390,6 +2411,13 @@ class AiChatPanel:
             self.text.insert("1.0", text)  # 고쳐서 다시 보낼 수 있게
             return
         name, macro, notes, assets = value
+        if em.to_events(self.editor.items) != self._sent and not messagebox.askyesno(
+                "AI 결과 적용", "요청을 보낸 뒤 목록이 바뀌었습니다.\n"
+                "AI 결과로 바꾸면 그 변경은 사라집니다(되돌리기 가능). 적용할까요?",
+                parent=self.editor.top):
+            self.add("AI", "목록이 바뀌어 결과를 적용하지 않았습니다. 다시 보내 주세요.")
+            self.text.insert("1.0", text)
+            return
         count = self.editor.apply_ai(macro, assets, name)
         self.reply(text, notes or "반영했습니다.", count, len(assets))
         if self.captures:

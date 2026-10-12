@@ -1,5 +1,7 @@
 import threading
 
+import pytest
+
 from fakes import FakeBackend
 from hotkeys import HotkeyDispatcher
 from main import App
@@ -146,3 +148,139 @@ def test_store_assets_replace_rename_delete(tmp_path):
     assert not (tmp_path / "m3").exists() and not (tmp_path / "m3.json").exists()
     app.reload_library()
     assert "m3" not in app.library and set(app.library) == {"m2"}   # 이미지 폴더는 목록에 안 나옴
+
+
+def test_store_asset_failure_keeps_old_images(tmp_path, monkeypatch):
+    from pathlib import Path
+    app, out = make_app(tmp_path)
+    src = tmp_path / "staging"
+    src.mkdir()
+    (src / "a.png").write_bytes(b"A")
+    m = Macro(events=[{"t": 0, "type": "kdown", "key": "a"}])
+    app.store("m1", m, assets={"a.png": src / "a.png"})
+    (src / "new.png").write_bytes(b"N")
+    (src / "b.png").write_bytes(b"B")
+    write = Path.write_bytes
+
+    def failing(self, data):
+        if self.name == "b.png":
+            raise OSError("disk full")
+        return write(self, data)
+    monkeypatch.setattr(Path, "write_bytes", failing)
+    try:
+        app.store("m1", m, old_name="m1", assets={"a.png": src / "new.png", "b.png": src / "b.png"})
+    except OSError:
+        pass
+    else:
+        raise AssertionError("쓰기 실패가 알려져야 함")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["m1", "m1.json", "staging"]
+    assert (tmp_path / "m1" / "a.png").read_bytes() == b"A"
+
+
+def test_play_end_reason_from_error_and_player(tmp_path):
+    class Broken(FakePlayer):
+        def run(self, macro):
+            raise OSError("SendInput 실패")
+
+    class Timeout(FakePlayer):
+        stop_reason = "조건 대기 시간 초과로 재생을 멈춥니다 (10초)"
+
+        def run(self, macro):
+            pass
+
+    m = Macro(events=[{"t": 0, "type": "kdown", "key": "a"}])
+    for factory, reason in ((Broken, "재생 오류: SendInput 실패"), (Timeout, Timeout.stop_reason)):
+        app = App(FakeBackend(), macros_dir=tmp_path, log=lambda s: None, player_factory=factory)
+        app.play_end_reason = "이전 것"
+        app.start_play(m, PlayOptions())
+        app._thread.join(1)
+        assert app.play_end_reason == reason
+
+
+def _store_with_images(tmp_path):
+    app, _ = make_app(tmp_path)
+    src = tmp_path / "staging"
+    src.mkdir()
+    (src / "a.png").write_bytes(b"A")
+    (src / "new.png").write_bytes(b"N")
+    m = Macro(events=[{"t": 0, "type": "kdown", "key": "a"}])
+    app.store("m1", m, assets={"a.png": src / "a.png"})
+    return app, src, (tmp_path / "m1.json").read_text(encoding="utf-8")
+
+
+def test_store_folder_swap_failure_restores_old_images(tmp_path, monkeypatch):
+    """새 폴더를 바꿔 넣다 실패해도 기존 이미지와 JSON 이 그대로 남는다."""
+    from pathlib import Path
+    app, src, before = _store_with_images(tmp_path)
+    rename = Path.rename
+
+    def failing(self, target):
+        if self.name.endswith(".saving"):
+            raise OSError("locked")
+        return rename(self, target)
+    monkeypatch.setattr(Path, "rename", failing)
+    m2 = Macro(events=[{"t": 0, "type": "kdown", "key": "b"}])
+    with pytest.raises(OSError):
+        app.store("m1", m2, old_name="m1", assets={"a.png": src / "new.png"})
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["m1", "m1.json", "staging"]
+    assert (tmp_path / "m1" / "a.png").read_bytes() == b"A"
+    assert (tmp_path / "m1.json").read_text(encoding="utf-8") == before
+
+
+def test_store_json_failure_restores_old_images(tmp_path, monkeypatch):
+    import main
+    app, src, before = _store_with_images(tmp_path)
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(main, "save_macro", boom)
+    with pytest.raises(OSError):
+        app.store("m1", Macro(events=[]), old_name="m1", assets={"a.png": src / "new.png"})
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["m1", "m1.json", "staging"]
+    assert (tmp_path / "m1" / "a.png").read_bytes() == b"A"
+
+
+def test_stop_all_releases_keys_when_player_hangs(tmp_path):
+    import time
+    from player import PlayOptions
+    from vision import Match
+    gate = threading.Event()
+
+    class HangVision:  # 판정이 멈춰 중지 요청을 못 보는 상태
+        def preload(self, conds): pass
+
+        def check(self, cond, origin=(0, 0)):
+            gate.wait(5)
+            return Match(False, 0.0)
+    be = FakeBackend()
+    app = App(be, macros_dir=tmp_path, log=lambda m: None, vision_factory=lambda d: HangVision())
+    app.STOP_TIMEOUT = 0.2
+    pix = {"kind": "pixel", "x": 0, "y": 0, "color": "#000000"}
+    app.start_play(Macro(events=[{"t": 0, "type": "kdown", "key": "a"},
+                                 {"t": 0, "type": "wait_until", "cond": pix},
+                                 {"t": 0.1, "type": "kup", "key": "a"}]), PlayOptions(approach=False))
+    deadline = time.monotonic() + 2
+    while ("kdown", "a") not in be.names() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    app.stop_all()
+    assert app.playing and be.names()[-1] == ("kup", "a")  # 스레드는 아직 멈춰 있지만 키는 뗐다
+    gate.set()
+    app._thread.join(2)
+
+
+def test_reload_library_skips_file_with_unexpected_error(tmp_path, monkeypatch):
+    """파일 하나에서 예상 못 한 예외가 나도 나머지는 불러온다 (GUI 주기 갱신이 끊기지 않도록)."""
+    import main
+    app, out = make_app(tmp_path)
+    save_macro(Macro(events=[{"t": 0, "type": "kdown", "key": "a"}]), macro_path(tmp_path, "good"))
+    save_macro(Macro(events=[{"t": 0, "type": "kdown", "key": "a"}]), macro_path(tmp_path, "bad"))
+    real = main.load_macro
+
+    def load(path):
+        if path.stem == "bad":
+            raise TypeError("boom")
+        return real(path)
+    monkeypatch.setattr(main, "load_macro", load)
+    app.reload_library()
+    assert list(app.library) == ["good"]
+    assert any("불러오기 실패 'bad'" in line for line in out)

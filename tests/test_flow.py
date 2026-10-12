@@ -131,6 +131,23 @@ def test_zero_delay_while_still_advances_time():
     assert keys_pressed(be) == "z" and clock() >= 0.49
 
 
+def test_slow_checks_do_not_eat_later_delays():
+    # 판정이 한 바퀴 예정 시간보다 오래 걸려도 루프 뒤의 지연은 그대로 지켜진다
+    evs = [ev(0, "while_start", cond=PIX), *_kd(0.01, "a"), ev(0.02, "while_end"), *_kd(2.02, "z")]
+    p, be, clock, m = build(evs)
+    vis = p.vision = ScriptedVision([True] * 100 + [False])
+    check = vis.check
+
+    def slow_check(cond, origin=(0, 0)):
+        clock.t += 0.05
+        return check(cond, origin)
+    vis.check = slow_check
+    p.run(m)
+    last_a = max(c[0] for c in be.calls if c[1:] == ("kup", "a"))
+    first_z = next(c[0] for c in be.calls if c[1:] == ("kdown", "z"))
+    assert first_z - last_a >= 2.0
+
+
 def test_variable_not_judged_until_used():
     # 저장 위치가 아니라 쓰이는 위치에서 판정: 반복 회차마다 새로 판정된다
     evs = [ev(0, "set_var", name="go", cond=PIX), ev(0, "repeat_start", count=3),

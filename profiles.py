@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import math
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,6 +42,7 @@ class Macro:
     version: int = VERSION
     hotkey: str | None = None   # 이 매크로를 시작/중지하는 전역 핫키 ('f6', 'ctrl+f1' 등)
     options: dict = field(default_factory=dict)  # 재생 옵션 (player.options_to_dict 형식)
+    ai_history: list = field(default_factory=list)  # 최근 AI 대화 [["user"|"ai", 내용], ...]
 
     @property
     def duration(self) -> float:
@@ -54,6 +57,7 @@ class Macro:
             "hotkey": self.hotkey,
             "options": self.options,
             "events": self.events,
+            **({"ai_history": self.ai_history} if self.ai_history else {}),
         }
 
     @classmethod
@@ -69,11 +73,18 @@ class Macro:
         events = data.get("events")
         if not isinstance(events, list):
             raise MacroFormatError("events 배열이 없습니다")
-        _validate_events(events)
+        try:
+            _validate_events(events)
+        except TypeError as e:  # 목록·객체가 올 자리가 아닌 곳에 온 값 (해시할 수 없는 type/key 등)
+            raise MacroFormatError(f"events: 값의 자료형이 잘못되었습니다 ({e})") from None
         screen = data.get("screen") or {"width": 0, "height": 0}
+        if not isinstance(screen, dict):
+            raise MacroFormatError("screen 은 객체여야 합니다")
         window = data.get("window")
-        if window is not None and not isinstance(window, dict):
-            raise MacroFormatError("window 는 객체여야 합니다")
+        if window is not None and not (
+                isinstance(window, dict) and isinstance(window.get("title", ""), str)
+                and all(_is_num(window[k]) for k in ("width", "height") if k in window)):
+            raise MacroFormatError("window 는 {title: 문자열, width/height: 숫자} 객체여야 합니다")
         try:
             hotkey = keys.parse_hotkey(data.get("hotkey"))
         except ValueError as e:
@@ -81,12 +92,17 @@ class Macro:
         options = data.get("options") or {}
         if not isinstance(options, dict):
             raise MacroFormatError("options 는 객체여야 합니다")
+        ai_history = data.get("ai_history") or []
+        if not (isinstance(ai_history, list) and all(
+                isinstance(h, list) and len(h) == 2 and h[0] in ("user", "ai") and isinstance(h[1], str)
+                for h in ai_history)):
+            raise MacroFormatError("ai_history 는 [역할, 내용] 목록이어야 합니다")
         return cls(events=events, screen=screen, coord_space=coord_space, window=window,
-                   version=version, hotkey=hotkey, options=options)
+                   version=version, hotkey=hotkey, options=options, ai_history=ai_history)
 
 
 def _is_num(v) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
 @dataclass
@@ -236,8 +252,14 @@ def _validate_events(events: list) -> None:
 def save_macro(macro: Macro, path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(macro.to_dict(), f, ensure_ascii=False, indent=1)
+    tmp = path.with_name(path.name + ".tmp")  # 다 쓴 뒤에 바꿔 넣어 저장 도중 실패해도 원본이 남는다
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(macro.to_dict(), f, ensure_ascii=False, indent=1)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return path
 
 

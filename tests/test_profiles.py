@@ -102,3 +102,49 @@ def test_blocks_structure():
     b = blocks(evs)
     assert b.repeat == {0: 5} and b.if_end == {1: 4} and b.if_else == {1: 3} and b.else_end == {3: 4}
     assert b.parent_loop[2] == 0 and 0 not in b.parent_loop
+
+
+def test_ai_history_roundtrip_and_validation(tmp_path):
+    m = Macro(events=EV, ai_history=[["user", "a 눌러"], ["ai", "만들었습니다"]])
+    m2 = load_macro(save_macro(m, macro_path(tmp_path, "h")))
+    assert m2.ai_history == [["user", "a 눌러"], ["ai", "만들었습니다"]]
+    assert "ai_history" not in Macro(events=EV).to_dict()  # 없으면 파일에 쓰지 않는다
+    for bad in ([["bot", "x"]], [["user"]], "x", [["user", 1]]):
+        with pytest.raises(MacroFormatError, match="ai_history"):
+            Macro.from_dict({"version": 1, "events": [], "ai_history": bad})
+
+
+def test_save_failure_keeps_original(tmp_path, monkeypatch):
+    import json
+    path = save_macro(Macro(events=EV), macro_path(tmp_path, "t1"))
+    before = path.read_text(encoding="utf-8")
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(json, "dump", boom)
+    with pytest.raises(OSError):
+        save_macro(Macro(events=EV[:1]), path)
+    assert path.read_text(encoding="utf-8") == before
+    assert [p.name for p in tmp_path.iterdir()] == ["t1.json"]   # 임시 파일도 남지 않음
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_non_finite_numbers_rejected(bad):
+    with pytest.raises(MacroFormatError):
+        Macro.from_dict({"version": 1, "events": [{"t": 0, "type": "move", "x": bad, "y": 1}]})
+    with pytest.raises(MacroFormatError):
+        Macro.from_dict({"version": 1, "events": [{"t": 0, "type": "wait_until",
+                                                    "cond": {"kind": "pixel", "x": bad, "y": 1, "color": "#000000"}}]})
+
+
+@pytest.mark.parametrize("data", [
+    {"version": 1, "events": [{"t": 0, "type": ["x"]}]},                          # 해시할 수 없는 type
+    {"version": 1, "events": [{"t": 0, "type": "mdown", "button": ["left"]}]},
+    {"version": 1, "events": [{"t": 0, "type": "kdown", "key": ["a"]}]},
+    {"version": 1, "events": [], "screen": "abc"},
+    {"version": 1, "events": [], "window": {"title": 1}},
+    {"version": 1, "events": [], "window": {"title": "g", "width": "a", "height": 1}},
+])
+def test_wrong_value_types_are_format_errors(data):
+    with pytest.raises(MacroFormatError):
+        Macro.from_dict(data)

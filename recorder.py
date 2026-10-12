@@ -1,6 +1,7 @@
 """입력 녹화. RecorderCore 는 순수 로직(시간은 인자로 받음), Recorder 는 pynput 연결부."""
 from __future__ import annotations
 
+import threading
 import time
 
 import keys
@@ -161,6 +162,7 @@ class Recorder:
         self._core: RecorderCore | None = None
         self._listeners: list = []
         self._window: dict | None = None
+        self._lock = threading.Lock()  # 마우스·키보드·Raw Input 리스너는 서로 다른 스레드에서 부른다
 
     @property
     def recording(self) -> bool:
@@ -186,10 +188,19 @@ class Recorder:
 
         self._core = core = RecorderCore(self.ignore_keys, origin=origin, relative=self.relative)
         core.start(self._clock(), self.backend.cursor_pos())
-        clock = self._clock
+        clock, lock = self._clock, self._lock
+
+        def locked(fn):
+            def call(*args):
+                with lock:  # 시각도 잠금 안에서 읽어 기록 순서와 시간 순서가 같게 한다
+                    fn(*args, clock())
+            return call
+
+        on_move, on_click, on_scroll = locked(core.on_move), locked(core.on_click), locked(core.on_scroll)
+        on_key, on_raw = locked(core.on_key), locked(core.on_raw_move)
         if self.relative:
             from input_backend import RawMouseListener
-            self._raw = RawMouseListener(lambda dx, dy: core.on_raw_move(dx, dy, clock()))
+            self._raw = RawMouseListener(on_raw)
             try:
                 self._raw.start()
             except Exception:
@@ -197,15 +208,25 @@ class Recorder:
                 raise
         self._listeners = [
             mouse.Listener(
-                on_move=lambda x, y: core.on_move(x, y, clock()),
-                on_click=lambda x, y, b, p: core.on_click(x, y, b.name, p, clock()),
-                on_scroll=lambda x, y, dx, dy: core.on_scroll(x, y, dx, dy, clock())),
+                on_move=on_move,
+                on_click=lambda x, y, b, p: on_click(x, y, b.name, p),
+                on_scroll=on_scroll),
             keyboard.Listener(
-                on_press=lambda k: core.on_key(keys.name_from_pynput(k), True, clock()),
-                on_release=lambda k: core.on_key(keys.name_from_pynput(k), False, clock())),
+                on_press=lambda k: on_key(keys.name_from_pynput(k), True),
+                on_release=lambda k: on_key(keys.name_from_pynput(k), False)),
         ]
-        for lst in self._listeners:
-            lst.start()
+        started = []
+        try:
+            for lst in self._listeners:
+                lst.start()
+                started.append(lst)
+        except Exception:  # 시작한 것까지 되돌린다 (멈추지 않은 리스너가 남지 않도록)
+            for lst in started:
+                lst.stop()
+            if self._raw is not None:
+                self._raw.stop()
+            self._core, self._raw, self._listeners = None, None, []
+            raise
         return "relative" if self.relative else ("window" if self._window else "screen")
 
     def stop(self) -> Macro:
@@ -218,7 +239,8 @@ class Recorder:
         if self._raw is not None:
             self._raw.stop()
             self._raw = None
-        events = core.finish(self._clock())
+        with self._lock:
+            events = core.finish(self._clock())
         w, h = self.backend.screen_size()
         return Macro(events=events, screen={"width": w, "height": h},
                      coord_space="window" if self._window else "screen",

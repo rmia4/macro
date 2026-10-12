@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 
@@ -64,6 +65,8 @@ CONTROL_SETTINGS = ("record_hotkey", "play_hotkey", "quit_hotkey", "capture_hotk
 def clamp(key: str, value):
     """숫자 설정을 범위 안으로, 기본값과 같은 형(int/float)으로."""
     lo, hi = RANGES[key]
+    if not math.isfinite(value):  # nan·무한대는 기본값으로
+        return DEFAULTS[key]
     return type(DEFAULTS[key])(min(max(value, lo), hi))
 
 
@@ -88,7 +91,7 @@ class Settings:
             if isinstance(default, bool):
                 ok = isinstance(value, bool)
             elif isinstance(default, (int, float)):
-                ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+                ok = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
                 value = type(default)(value) if ok else value
             else:
                 ok = isinstance(value, type(default))

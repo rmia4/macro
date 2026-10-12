@@ -1606,6 +1606,32 @@ def test_editor_ai_chat_edits_existing_macro_with_undo(gui):
     assert "- 사용자: a 를 두 번만 누르게" in seen[1][0]
 
 
+def test_editor_ai_chat_history_saved_with_macro_and_restored(gui):
+    ed = open_editor_ai(gui)
+    answer = {"name": "", "notes": "두 번 누릅니다", "events": [
+        {"type": "tap", "key": "a", "delay_ms": 0}, {"type": "tap", "key": "a", "delay_ms": 300}]}
+    gui.ai_provider_factory = lambda: FakeAiProvider(answer)
+    ed.ai_panel.text.insert("1.0", "a 두 번")
+    ed.ai_panel.send()
+    assert wait_for(gui, lambda: not ed.ai_panel.busy)
+    assert ed.on_save()
+    assert gui.app.library.get("alpha").ai_history == [["user", "a 두 번"], ["ai", "두 번 누릅니다"]]
+    ed = open_editor_ai(gui)  # 다시 열면 이어서 보낸다
+    assert ed.ai_panel.history == [("user", "a 두 번"), ("ai", "두 번 누릅니다")]
+    assert "나: a 두 번" in ed.ai_panel.log_box.get("1.0", "end")
+    seen = []
+
+    class Provider(FakeAiProvider):
+        def generate(self, system, prompt, schema, images):
+            seen.append(system)
+            return super().generate(system, prompt, schema, images)
+    gui.ai_provider_factory = lambda: Provider(answer)
+    ed.ai_panel.text.insert("1.0", "간격 늘려")
+    ed.ai_panel.send()
+    assert wait_for(gui, lambda: not ed.ai_panel.busy)
+    assert "- 사용자: a 두 번" in seen[0] and "- AI: 두 번 누릅니다" in seen[0]
+
+
 def test_editor_ai_chat_error_keeps_text_and_items(gui):
     ed = open_editor_ai(gui)
     before = copy.deepcopy(ed.items)
@@ -1763,3 +1789,65 @@ def test_settings_dialog_author_link(gui, monkeypatch):
     d.author_link.event_generate("<Button-1>")
     assert opened == ["https://github.com/rmia4/macro"]
     d.close()
+
+
+def test_log_box_keeps_recent_lines_only(gui):
+    import gui as gui_mod
+    for i in range(gui_mod.MAX_LOG_LINES + 300):
+        gui.log(f"줄 {i}")
+    pump(gui)
+    text = logs(gui).strip().splitlines()
+    assert len(text) <= gui_mod.MAX_LOG_LINES
+    assert text[-1] == f"줄 {gui_mod.MAX_LOG_LINES + 299}"
+
+
+def test_abnormal_stop_reason_shown_on_overlay(gui):
+    import gui as gui_mod
+    gui.app.play_end_reason = "창을 찾을 수 없어 중단합니다: 'Game'"
+    pump(gui)
+    assert gui.overlay_state() == ("■ 창을 찾을 수 없어 중단합니다: 'Game'", gui_mod.COLORS["rec"])
+    assert gui.app.play_end_reason is None   # 한 번만 보여준다
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_editor_ai_chat_asks_before_overwriting_edits_made_while_waiting(gui, monkeypatch, apply):
+    """요청을 보낸 뒤 손으로 고쳤으면 AI 결과로 덮어쓸지 묻는다."""
+    import threading
+    ed = open_editor_ai(gui)
+    go = threading.Event()
+    answer = {"name": "", "notes": "두 번", "events": [
+        {"type": "tap", "key": "a", "delay_ms": 0}, {"type": "tap", "key": "a", "delay_ms": 300}]}
+
+    class Slow(FakeAiProvider):
+        def generate(self, system, prompt, schema, images):
+            go.wait(3)
+            return super().generate(system, prompt, schema, images)
+    gui.ai_provider_factory = lambda: Slow(answer)
+    asked = []
+    monkeypatch.setattr("gui.messagebox.askyesno", lambda *a, **k: asked.append(a) or apply)
+    panel = ed.ai_panel
+    panel.text.insert("1.0", "a 두 번")
+    panel.send()
+    ed.items = ed.items[:-1]   # 기다리는 동안 손으로 고침
+    edited = copy.deepcopy(ed.items)
+    go.set()
+    assert wait_for(gui, lambda: not panel.busy)
+    assert len(asked) == 1
+    if apply:
+        assert [i["type"] for i in ed.items] == ["kdown", "kup", "kdown", "kup"]
+        ed.undo()
+        assert ed.items == edited
+    else:
+        assert ed.items == edited and panel.history == []
+        assert panel.text.get("1.0", "end").strip() == "a 두 번"
+
+
+def test_editor_ai_chat_applies_without_asking_when_unchanged(gui, monkeypatch):
+    ed = open_editor_ai(gui)
+    gui.ai_provider_factory = lambda: FakeAiProvider({"name": "", "notes": "", "events": [
+        {"type": "tap", "key": "a", "delay_ms": 0}]})
+    monkeypatch.setattr("gui.messagebox.askyesno", lambda *a, **k: pytest.fail("묻지 않아야 함"))
+    ed.ai_panel.text.insert("1.0", "a 한 번")
+    ed.ai_panel.send()
+    assert wait_for(gui, lambda: not ed.ai_panel.busy)
+    assert [i["type"] for i in ed.items] == ["kdown", "kup"]
