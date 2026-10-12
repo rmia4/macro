@@ -73,3 +73,12 @@ def test_numbers_clamped_and_control_keys(tmp_path):
     path.write_text(json.dumps({"capture_hotkey": "f8", "play_hotkey": "f2"}), encoding="utf-8")  # 녹화 키와 같음
     s = Settings(path)
     assert (s["capture_hotkey"], s["record_hotkey"], s["play_hotkey"]) == ("f7", "f8", "f9")
+
+
+def test_non_finite_numbers_fall_back_to_default(tmp_path):
+    from settings import clamp
+    p = tmp_path / "settings.json"
+    p.write_text('{"start_delay": 1e309, "flash_seconds": NaN}', encoding="utf-8")   # json 은 둘 다 읽는다
+    s = Settings(p)
+    assert s["start_delay"] == DEFAULTS["start_delay"] and s["flash_seconds"] == DEFAULTS["flash_seconds"]
+    assert clamp("start_delay", float("nan")) == DEFAULTS["start_delay"]

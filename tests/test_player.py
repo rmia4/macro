@@ -498,3 +498,98 @@ def test_scale_coords_scales_conditions_capture_and_offset():
     assert v.captured == [2, 4, 6, 8]
     assert ("abs", 510, 394) in be.names()
     assert img["region"] == [10, 20, 30, 40]   # 원본 매크로는 그대로
+
+
+def test_stop_during_preload_is_kept():
+    """화면 인식 준비 중에 들어온 중지 요청도 지켜져 입력을 보내지 않는다."""
+    p, be, clock, m = build([{"t": 0, "type": "wait_until", "cond": PIX}, key(0.1, "kdown")])
+    v = ScriptedVision([True])
+    v.preload = lambda conds: p.stop()
+    p.vision = v
+    p.run(m)
+    assert be.calls == [] and v.checks == []
+    v.preload = lambda conds: None
+    p.run(m)  # 끝난 뒤에는 다시 재생할 수 있다
+    assert [c[1] for c in be.calls] == ["kdown", "kup"]
+
+
+def _click_after_check(hook, on_wait=None, **opt):
+    """click_image 판정 중에 hook(p, be, clock) 을 부른다 (판정은 늘 일치)."""
+    evs = [{"t": 0, "type": "click_image", "cond": PIX, "hold": 0}]
+    p, be, clock, m = build(evs, **opt)
+    v = ScriptedVision([])
+
+    def check(cond, origin=(0, 0)):
+        v.checks.append(origin)
+        hook(p, be, clock)
+        return v.Match(True, 1.0, (10, 20))
+    v.check = check
+    p.vision = v
+    clock.on_wait = on_wait and (lambda: on_wait(be, clock))
+    p.run(m)
+    return be, v
+
+
+def test_click_image_not_sent_when_stopped_during_check():
+    be, _ = _click_after_check(lambda p, be, clock: p.stop())
+    assert be.calls == []
+
+
+def test_click_image_not_sent_when_time_limit_passes_during_check():
+    def slow(p, be, clock):
+        clock.t += 10   # 판정에 10초 (제한 6초)
+    be, _ = _click_after_check(slow, max_minutes=0.1)
+    assert be.calls == []
+
+
+def test_click_image_rechecks_after_focus_lost_during_check():
+    def lose_once(p, be, clock):
+        if clock.t < 1:
+            be.title = "Browser"   # 첫 판정 중에 다른 창으로
+
+    def come_back(be, clock):
+        if clock.t > 1:
+            be.title = "Game"
+    be, v = _click_after_check(lose_once, come_back, window_title="Game")
+    assert len(v.checks) == 2   # 포커스가 돌아온 뒤 다시 판정하고
+    assert be.calls[0][0] > 1 and be.names()[0] == ("abs", 10, 20)   # 그 뒤에 클릭
+
+
+def test_approach_waits_for_target_window_focus():
+    p, be, clock, m = build([mv(0.1, 800, 600)], window_title="Game", approach=True)
+    be.title = "Browser"
+    clock.on_wait = lambda: setattr(be, "title", "Game") if clock.t > 1 else None
+    p.run(m)
+    assert be.calls and all(c[0] > 1 for c in be.calls)   # 창이 돌아오기 전에는 커서를 움직이지 않는다
+
+
+def test_approach_stops_when_focus_lost_midway():
+    p, be, clock, m = build([mv(0.1, 800, 600)], window_title="Game", approach=True)
+    clock.on_wait = lambda: setattr(be, "title", "Browser" if 0.05 < clock.t < 2 else "Game")
+    p.run(m)
+    assert not any(0.05 < c[0] < 2 for c in be.calls)
+
+
+def test_zero_delay_infinite_repeat_waits_between_laps():
+    """지연 없는 무한 반복도 한 바퀴마다 최소 간격(MIN_WHILE_LAP)을 둔다."""
+    evs = [{"t": 0, "type": "repeat_start", "count": 0}, key(0, "kdown"), key(0, "kup"),
+           {"t": 0, "type": "repeat_end"}]
+    p, be, clock, m = build(evs)
+    clock.on_wait = lambda: p.stop() if clock.t >= 0.1 else None
+    p.run(m)
+    assert 9 <= sum(c[1] == "kdown" for c in be.calls) <= 11
+
+
+def test_repeat_lap_minimum_keeps_existing_timing():
+    """한 바퀴가 최소 간격보다 길면 시간표는 그대로다."""
+    evs = [{"t": 0, "type": "repeat_start", "count": 3}, key(0.1, "kdown"), key(0.2, "kup"),
+           {"t": 0.2, "type": "repeat_end"}]
+    p, be, clock, m = build(evs)
+    p.run(m)
+    assert [round(c[0], 6) for c in be.calls] == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_set_option_rejects_non_finite(value):
+    with pytest.raises(ValueError):
+        set_option(PlayOptions(), "speed", value)

@@ -31,7 +31,7 @@ class PlayOptions:
     focus_poll: float = 0.1
 
 
-MIN_WHILE_LAP = 0.01  # 동안 반복 한 바퀴의 최소 시간(초)
+MIN_WHILE_LAP = 0.01  # 반복 구간(동안 반복·일반 반복) 한 바퀴의 최소 시간(초)
 
 _MIN = {"repeat": 0, "speed": 0.01, "loop_delay": 0, "time_jitter": 0, "pos_jitter": 0,
         "approach_duration": 0, "min_key_hold": 0, "focus_poll": 0.01, "max_minutes": 0}
@@ -54,6 +54,8 @@ def set_option(opts: PlayOptions, name: str, value: str) -> None:
         parsed = "" if value in ("-", "none") else value
     else:
         parsed = int(value) if typ == "int" else float(value)
+        if not math.isfinite(parsed):
+            raise ValueError(f"{name} 은(는) 숫자여야 합니다")
         if name in _MIN and parsed < _MIN[name]:
             raise ValueError(f"{name} 은(는) {_MIN[name]} 이상이어야 합니다")
         if name in _MAX and parsed > _MAX[name]:
@@ -148,7 +150,6 @@ class Player:
                 if "template" in ev:
                     self.vision.template(ev["template"])
         self.opt = dataclasses.replace(self.options)
-        self._stop.clear()
         self._deadline = self._clock() + self.opt.max_minutes * 60 if self.opt.max_minutes > 0 else None
         n = 0
         try:
@@ -162,10 +163,11 @@ class Player:
                 self._log(f"루프 {n} 완료")
         finally:
             self._release_all()
+            self._stop.clear()  # 다음 run 을 위해 (시작 전·준비 중 들어온 중지는 위에서 지켜진다)
 
     def _play_once(self, macro: Macro) -> bool:
         o = self.opt
-        if not self._locate_window(macro):
+        if not self._locate_window(macro) or not self._wait_focus(macro):
             return False
         events = macro.events
         bl = blocks(events)
@@ -175,7 +177,7 @@ class Player:
         self.variables = {}
         if self.vision is not None and hasattr(self.vision, "clear_images"):
             self.vision.clear_images()  # 이미지 변수도 회차마다 비운다
-        lap_cum: dict[int, float] = {}                   # 동안 반복 -> 이번 회차 시작 시각(cum)
+        lap_cum: dict[int, float] = {}                   # 반복 시작 -> 이번 회차 시작 시각(cum)
         first = next((e for e in events if "x" in e), None)
         self._roll_offset()
         self._cursor = self.backend.cursor_pos()
@@ -223,10 +225,13 @@ class Player:
             self.event_index = i
             if typ == "repeat_start":
                 remaining[ends[i]] = ev["count"] - 1 if ev["count"] > 0 else -1  # -1 = 무한
+                lap_cum[i] = cum
             elif typ == "repeat_end" and remaining.get(i, 0) != 0:
                 if remaining[i] > 0:
                     remaining[i] -= 1
                 start = starts[i]
+                # 한 바퀴에 지연이 없어도 CPU 를 독점하지 않도록 최소 간격을 둔다 (반복 시작 표시는 다시 안 지나므로 여기서 기록)
+                cum = lap_cum[start] = max(cum, lap_cum.get(start, cum) + MIN_WHILE_LAP)
                 i = start + 1  # 구간 처음으로 (반복 시작 표시는 다시 실행하지 않음)
                 continue
             elif typ == "while_start":
@@ -273,11 +278,15 @@ class Player:
         while True:
             remaining = self._origin + cum - self._clock()
             if remaining <= 0:
-                if self._deadline is not None and self._clock() >= self._deadline:
-                    self._expire()
-                return not self._stop.is_set()
+                return not self._halted()
             if self._sleep(remaining):
                 return False
+
+    def _halted(self) -> bool:
+        """중지 요청이 있거나 최대 실행 시간에 도달했으면 True."""
+        if self._deadline is not None and self._clock() >= self._deadline:
+            self._expire()
+        return self._stop.is_set()
 
     # ---- 화면 조건 ----
     def _wait_condition(self, ev: dict, macro: Macro) -> str:
@@ -289,7 +298,12 @@ class Player:
             if not self._wait_focus(macro):
                 return "stopped"
             if self._check(ev["cond"]).matched:
-                return "ok"
+                # 판정에 시간이 걸리므로 입력을 보내기 전에 중지·시간 제한·포커스를 다시 본다
+                if self._halted():
+                    return "stopped"
+                if not self.opt.window_title or self._focused():
+                    return "ok"
+                continue  # 판정 중 포커스를 잃었으면 돌아온 뒤 다시 판정
             waited = self._clock() - start - (self._paused - paused)  # 일시정지한 시간은 세지 않는다
             if timeout > 0 and waited >= timeout:
                 return "timeout"
@@ -413,6 +427,8 @@ class Player:
             s = i / steps
             e = s * s * (3 - 2 * s)  # smoothstep 가감속
             x, y = round(sx + (tx - sx) * e), round(sy + (ty - sy) * e)
+            if self.opt.window_title and not self._focused():
+                return True  # 창을 벗어나면 보간을 그만둔다 (첫 이벤트 전에 포커스를 기다림)
             self.backend.mouse_move_abs(x, y)
             self._cursor = (x, y)
             if self._sleep(dur / steps):

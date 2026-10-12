@@ -17,6 +17,7 @@ template 은 매크로별 이미지 폴더(assets_dir) 안의 파일 이름이�
 """
 from __future__ import annotations
 
+import math
 import re
 import struct
 import threading
@@ -44,7 +45,7 @@ PREFETCH_SLACK = 2.0    # 여러 조건의 영역을 합친 사각형이 각 영
 
 
 def _num(v) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
 def validate_var_name(name) -> None:

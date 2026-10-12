@@ -1,5 +1,7 @@
 import threading
 
+import pytest
+
 from fakes import FakeBackend
 from hotkeys import HotkeyDispatcher
 from main import App
@@ -171,5 +173,48 @@ def test_store_asset_failure_keeps_old_images(tmp_path, monkeypatch):
         pass
     else:
         raise AssertionError("쓰기 실패가 알려져야 함")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["m1", "m1.json", "staging"]
+    assert (tmp_path / "m1" / "a.png").read_bytes() == b"A"
+
+
+def _store_with_images(tmp_path):
+    app, _ = make_app(tmp_path)
+    src = tmp_path / "staging"
+    src.mkdir()
+    (src / "a.png").write_bytes(b"A")
+    (src / "new.png").write_bytes(b"N")
+    m = Macro(events=[{"t": 0, "type": "kdown", "key": "a"}])
+    app.store("m1", m, assets={"a.png": src / "a.png"})
+    return app, src, (tmp_path / "m1.json").read_text(encoding="utf-8")
+
+
+def test_store_folder_swap_failure_restores_old_images(tmp_path, monkeypatch):
+    """새 폴더를 바꿔 넣다 실패해도 기존 이미지와 JSON 이 그대로 남는다."""
+    from pathlib import Path
+    app, src, before = _store_with_images(tmp_path)
+    rename = Path.rename
+
+    def failing(self, target):
+        if self.name.endswith(".saving"):
+            raise OSError("locked")
+        return rename(self, target)
+    monkeypatch.setattr(Path, "rename", failing)
+    m2 = Macro(events=[{"t": 0, "type": "kdown", "key": "b"}])
+    with pytest.raises(OSError):
+        app.store("m1", m2, old_name="m1", assets={"a.png": src / "new.png"})
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["m1", "m1.json", "staging"]
+    assert (tmp_path / "m1" / "a.png").read_bytes() == b"A"
+    assert (tmp_path / "m1.json").read_text(encoding="utf-8") == before
+
+
+def test_store_json_failure_restores_old_images(tmp_path, monkeypatch):
+    import main
+    app, src, before = _store_with_images(tmp_path)
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(main, "save_macro", boom)
+    with pytest.raises(OSError):
+        app.store("m1", Macro(events=[]), old_name="m1", assets={"a.png": src / "new.png"})
     assert sorted(p.name for p in tmp_path.iterdir()) == ["m1", "m1.json", "staging"]
     assert (tmp_path / "m1" / "a.png").read_bytes() == b"A"

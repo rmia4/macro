@@ -126,3 +126,12 @@ def test_save_failure_keeps_original(tmp_path, monkeypatch):
         save_macro(Macro(events=EV[:1]), path)
     assert path.read_text(encoding="utf-8") == before
     assert [p.name for p in tmp_path.iterdir()] == ["t1.json"]   # 임시 파일도 남지 않음
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_non_finite_numbers_rejected(bad):
+    with pytest.raises(MacroFormatError):
+        Macro.from_dict({"version": 1, "events": [{"t": 0, "type": "move", "x": bad, "y": 1}]})
+    with pytest.raises(MacroFormatError):
+        Macro.from_dict({"version": 1, "events": [{"t": 0, "type": "wait_until",
+                                                    "cond": {"kind": "pixel", "x": bad, "y": 1, "color": "#000000"}}]})

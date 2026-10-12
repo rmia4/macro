@@ -213,21 +213,33 @@ class App:
             except BaseException:
                 shutil.rmtree(staged, ignore_errors=True)
                 raise
-        try:
-            save_macro(macro, path)
-        except BaseException:
-            if staged is not None:
-                shutil.rmtree(staged, ignore_errors=True)
-            raise
-        self.library[name] = macro
         old_dir = self.macros_dir / old_name if old_name else None
-        if assets is not None:
-            for d in {target, old_dir} - {None}:
-                if d.is_dir():
-                    shutil.rmtree(d)
+        backups: list[tuple[Path, Path]] = []  # (원래 폴더, 잠시 옮겨 둔 곳)
+        placed = False
+        try:
+            if assets is not None:  # 기존 폴더는 지우지 않고 옮겨 두었다가, 다 끝나면 지운다
+                for d in {target, old_dir} - {None}:
+                    if d.is_dir():
+                        bak = d.with_name(f".{d.name}.old")
+                        if bak.is_dir():
+                            shutil.rmtree(bak)
+                        d.rename(bak)
+                        backups.append((d, bak))
+                if staged is not None:
+                    staged.rename(target)
+                    placed = True
+            save_macro(macro, path)
+        except BaseException:  # 실패하면 새 폴더를 빼고 원래 폴더를 되돌린다
             if staged is not None:
-                staged.rename(target)
-        elif old_dir and old_name != name and old_dir.is_dir() and not target.exists():
+                shutil.rmtree(target if placed else staged, ignore_errors=True)
+            for d, bak in backups:
+                if not d.exists():
+                    bak.rename(d)
+            raise
+        for _, bak in backups:
+            shutil.rmtree(bak, ignore_errors=True)
+        self.library[name] = macro
+        if assets is None and old_dir and old_name != name and old_dir.is_dir() and not target.exists():
             old_dir.rename(target)
         if old_name and old_name != name:
             self.library.pop(old_name, None)
