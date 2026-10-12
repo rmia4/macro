@@ -1807,3 +1807,47 @@ def test_abnormal_stop_reason_shown_on_overlay(gui):
     pump(gui)
     assert gui.overlay_state() == ("■ 창을 찾을 수 없어 중단합니다: 'Game'", gui_mod.COLORS["rec"])
     assert gui.app.play_end_reason is None   # 한 번만 보여준다
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_editor_ai_chat_asks_before_overwriting_edits_made_while_waiting(gui, monkeypatch, apply):
+    """요청을 보낸 뒤 손으로 고쳤으면 AI 결과로 덮어쓸지 묻는다."""
+    import threading
+    ed = open_editor_ai(gui)
+    go = threading.Event()
+    answer = {"name": "", "notes": "두 번", "events": [
+        {"type": "tap", "key": "a", "delay_ms": 0}, {"type": "tap", "key": "a", "delay_ms": 300}]}
+
+    class Slow(FakeAiProvider):
+        def generate(self, system, prompt, schema, images):
+            go.wait(3)
+            return super().generate(system, prompt, schema, images)
+    gui.ai_provider_factory = lambda: Slow(answer)
+    asked = []
+    monkeypatch.setattr("gui.messagebox.askyesno", lambda *a, **k: asked.append(a) or apply)
+    panel = ed.ai_panel
+    panel.text.insert("1.0", "a 두 번")
+    panel.send()
+    ed.items = ed.items[:-1]   # 기다리는 동안 손으로 고침
+    edited = copy.deepcopy(ed.items)
+    go.set()
+    assert wait_for(gui, lambda: not panel.busy)
+    assert len(asked) == 1
+    if apply:
+        assert [i["type"] for i in ed.items] == ["kdown", "kup", "kdown", "kup"]
+        ed.undo()
+        assert ed.items == edited
+    else:
+        assert ed.items == edited and panel.history == []
+        assert panel.text.get("1.0", "end").strip() == "a 두 번"
+
+
+def test_editor_ai_chat_applies_without_asking_when_unchanged(gui, monkeypatch):
+    ed = open_editor_ai(gui)
+    gui.ai_provider_factory = lambda: FakeAiProvider({"name": "", "notes": "", "events": [
+        {"type": "tap", "key": "a", "delay_ms": 0}]})
+    monkeypatch.setattr("gui.messagebox.askyesno", lambda *a, **k: pytest.fail("묻지 않아야 함"))
+    ed.ai_panel.text.insert("1.0", "a 한 번")
+    ed.ai_panel.send()
+    assert wait_for(gui, lambda: not ed.ai_panel.busy)
+    assert [i["type"] for i in ed.items] == ["kdown", "kup"]

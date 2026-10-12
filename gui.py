@@ -2395,6 +2395,7 @@ class AiChatPanel:
         if not text:
             return
         self._pending = text
+        self._sent = em.to_events(self.editor.items)  # 응답이 올 때 그사이 손으로 고쳤는지 비교
         self.add("나", self.with_shots(text, len(self.captures)))
         self.text.delete("1.0", "end")
         self.btn_send.state(["disabled"])
@@ -2410,6 +2411,13 @@ class AiChatPanel:
             self.text.insert("1.0", text)  # 고쳐서 다시 보낼 수 있게
             return
         name, macro, notes, assets = value
+        if em.to_events(self.editor.items) != self._sent and not messagebox.askyesno(
+                "AI 결과 적용", "요청을 보낸 뒤 목록이 바뀌었습니다.\n"
+                "AI 결과로 바꾸면 그 변경은 사라집니다(되돌리기 가능). 적용할까요?",
+                parent=self.editor.top):
+            self.add("AI", "목록이 바뀌어 결과를 적용하지 않았습니다. 다시 보내 주세요.")
+            self.text.insert("1.0", text)
+            return
         count = self.editor.apply_ai(macro, assets, name)
         self.reply(text, notes or "반영했습니다.", count, len(assets))
         if self.captures:
