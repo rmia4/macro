@@ -39,6 +39,7 @@ class App:
         self.playing_name: str | None = None
         self.playing_macro: Macro | None = None
         self.playing_keys: frozenset[str] = frozenset()
+        self.play_end_reason: str | None = None  # 마지막 재생이 오류 등으로 멈췄으면 그 이유 (GUI 가 읽고 비운다)
         self._recorder_factory = recorder_factory
         self._player_factory = player_factory
         self._vision_factory = vision_factory
@@ -120,6 +121,7 @@ class App:
                 vision = self._vision_factory(assets_dir or self.assets_dir(name))
             player = self._player_factory(self.backend, options, log=self.log, vision=vision)
             self._player = player
+            self.play_end_reason = None
             self.playing_macro, self.playing_name = macro, name
             self.playing_keys = frozenset(keys.hotkey_key(ev["key"]) for ev in macro.events if "key" in ev)
             self._thread = threading.Thread(target=self._play, args=(player, macro), daemon=True)
@@ -143,8 +145,10 @@ class App:
     def _play(self, player, macro: Macro) -> None:
         try:
             player.run(macro)
+            self.play_end_reason = getattr(player, "stop_reason", None)
         except Exception as e:  # 입력은 Player 의 finally 에서 이미 해제됨
-            self.log(f"재생 오류: {e}")
+            self.play_end_reason = f"재생 오류: {e}"
+            self.log(self.play_end_reason)
         self.log("■ 재생 종료")
 
     def stop_all(self) -> None:

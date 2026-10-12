@@ -173,3 +173,23 @@ def test_store_asset_failure_keeps_old_images(tmp_path, monkeypatch):
         raise AssertionError("쓰기 실패가 알려져야 함")
     assert sorted(p.name for p in tmp_path.iterdir()) == ["m1", "m1.json", "staging"]
     assert (tmp_path / "m1" / "a.png").read_bytes() == b"A"
+
+
+def test_play_end_reason_from_error_and_player(tmp_path):
+    class Broken(FakePlayer):
+        def run(self, macro):
+            raise OSError("SendInput 실패")
+
+    class Timeout(FakePlayer):
+        stop_reason = "조건 대기 시간 초과로 재생을 멈춥니다 (10초)"
+
+        def run(self, macro):
+            pass
+
+    m = Macro(events=[{"t": 0, "type": "kdown", "key": "a"}])
+    for factory, reason in ((Broken, "재생 오류: SendInput 실패"), (Timeout, Timeout.stop_reason)):
+        app = App(FakeBackend(), macros_dir=tmp_path, log=lambda s: None, player_factory=factory)
+        app.play_end_reason = "이전 것"
+        app.start_play(m, PlayOptions())
+        app._thread.join(1)
+        assert app.play_end_reason == reason

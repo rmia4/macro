@@ -498,3 +498,27 @@ def test_scale_coords_scales_conditions_capture_and_offset():
     assert v.captured == [2, 4, 6, 8]
     assert ("abs", 510, 394) in be.names()
     assert img["region"] == [10, 20, 30, 40]   # 원본 매크로는 그대로
+
+
+def test_stop_reason_set_only_for_abnormal_stops():
+    evs = [{"t": 0, "type": "wait_until", "cond": PIX, "timeout": 1}, key(0.1, "kdown")]
+    p, be, clock, m = build(evs)
+    p.vision = ScriptedVision([])
+    p.run(m)
+    assert p.stop_reason.startswith("조건 대기 시간 초과")
+    p, be, clock, m = build([key(0, "kdown"), key(100, "kup")], max_minutes=0.01)
+    p.run(m)
+    assert p.stop_reason.startswith("최대 실행 시간")
+    clock = FakeClock()
+    be = FakeBackend(clock)
+    be.find_window_rect = lambda t: None
+    p = Player(be, PlayOptions(), clock=clock, waiter=clock.wait)
+    p.run(Macro(events=[key(0, "kdown")], coord_space="window", window={"title": "Game"}))
+    assert p.stop_reason.startswith("창을 찾을 수 없어")
+    p, be, clock, m = build([key(0, "kdown"), key(10, "kup")])
+    clock.on_wait = lambda: p.stop() if clock.t > 1 else None
+    p.run(m)
+    assert p.stop_reason is None   # 사용자가 멈춘 것
+    p, be, clock, m = build([key(0, "kdown"), key(0.1, "kup")])
+    p.run(m)
+    assert p.stop_reason is None   # 정상 종료

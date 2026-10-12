@@ -111,6 +111,7 @@ class Player:
         self._paused = 0.0      # 포커스를 잃어 일시정지한 누적 시간 (조건 대기 제한 시간에서 뺀다)
         self.loop_index = 0     # 진행 중인 루프 (1부터), GUI 표시용
         self.event_index = -1   # 마지막으로 전송한 이벤트 인덱스
+        self.stop_reason: str | None = None  # 끝까지 못 가고 멈춘 이유 (사용자 중지·정상 종료는 None)
 
     def stop(self) -> None:
         self._stop.set()
@@ -130,14 +131,21 @@ class Player:
 
     def _expire(self) -> None:
         if not self._stop.is_set():
-            self._log(f"최대 실행 시간({self.opt.max_minutes:g}분)이 지나 재생을 멈춥니다")
+            self._abort(f"최대 실행 시간({self.opt.max_minutes:g}분)이 지나 재생을 멈춥니다")
         self._stop.set()
+
+    def _abort(self, msg: str) -> None:
+        """재생을 멈추게 된 이유를 남긴다 (처음 것만)."""
+        self._log(msg)
+        if self.stop_reason is None:
+            self.stop_reason = msg
 
     # ---- 실행 ----
     def run(self, macro: Macro) -> None:
         for ev in macro.events:
             if ev["type"] in ("kdown", "kup") and not keys.is_known(ev["key"]):
                 raise ValueError(f"알 수 없는 키: {ev['key']}")
+        self.stop_reason = None
         conds = conditions_in(macro.events)
         images = [ev for ev in macro.events if ev["type"] == "set_image"]
         if conds or images:  # 입력을 보내기 전에 화면 인식 준비가 되었는지 확인
@@ -201,7 +209,7 @@ class Player:
                 if result == "stopped":
                     return False
                 if result == "timeout" and ev.get("on_timeout", "stop") == "stop":
-                    self._log(f"조건 대기 시간 초과로 재생을 멈춥니다 ({ev.get('timeout', 10):g}초)")
+                    self._abort(f"조건 대기 시간 초과로 재생을 멈춥니다 ({ev.get('timeout', 10):g}초)")
                     self._stop.set()
                     return False
                 if result == "timeout":
@@ -323,7 +331,7 @@ class Player:
         title = self.opt.window_title or (macro.window or {}).get("title", "")
         rect = self.backend.find_window_rect(title) if title else None
         if rect is None:
-            self._log(f"창을 찾을 수 없어 중단합니다: {title!r}")
+            self._abort(f"창을 찾을 수 없어 중단합니다: {title!r}")
             return False
         self._win = (rect[0], rect[1])
         rec = macro.window or {}

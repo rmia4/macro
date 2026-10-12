@@ -50,6 +50,8 @@ OVERLAY_LABELS = {"off": "끄기", "nw": "↖ 왼쪽 위", "n": "↑ 위 가운�
                   "w": "← 왼쪽 가운데", "e": "→ 오른쪽 가운데", "sw": "↙ 왼쪽 아래",
                   "s": "↓ 아래 가운데", "se": "↘ 오른쪽 아래"}
 COLORS = {"idle": "#555555", "rec": "#c62828", "play": "#2e7d32", "wait": "#ef6c00"}
+MAX_LOG_LINES = 1000      # 메인 화면 로그 창에 남기는 줄 수 (오래된 줄부터 지움)
+STOP_NOTICE_SECONDS = 6   # 재생이 오류 등으로 멈췄을 때 오버레이에 이유를 보여주는 시간
 NO_HOTKEY = "(없음)"
 REPO_URL = "https://github.com/rmia4/macro"  # 설정 창의 '제작자' 링크
 COORD_LABELS = {"screen": "화면 기준", "window": "창 기준"}
@@ -75,7 +77,7 @@ class Gui:
         self._countdown_what = ""
         self.macros_enabled = bool(self.settings["macros_enabled"])  # True=실행모드, False=편집모드
         self._flash_until = 0.0  # 실행모드/편집모드 전환 직후 오버레이에 잠깐 상태 표시
-        self._notice: tuple[str, float] | None = None  # 오버레이 안내 (문구, 만료 시각)
+        self._notice: tuple[str, float, str] | None = None  # 오버레이 안내 (문구, 만료 시각, 색)
         self.grabber = None  # 화면 캡처. None 이면 처음 쓸 때 MssGrabber 생성 (테스트에서 주입)
         self._after_id = None
         self._closed = False
@@ -349,7 +351,7 @@ class Gui:
     def overlay_state(self) -> tuple[str, str] | None:
         """오버레이에 보여줄 (문구, 색상). 보여줄 게 없으면 None."""
         if self._notice and time.monotonic() < self._notice[1]:
-            return self._notice[0], COLORS["wait"]
+            return self._notice[0], self._notice[2]
         cd = self.countdown_for("main") or self.countdown_for("editor")
         if cd:
             return f"{cd[0]}초 후 {cd[1]}", COLORS["wait"]
@@ -379,7 +381,7 @@ class Gui:
         return self.grabber
 
     def notice(self, text: str, seconds: float = 1.2) -> None:
-        self._notice = (text, time.monotonic() + seconds)
+        self._notice = (text, time.monotonic() + seconds, COLORS["wait"])
         self.log(text)
 
     def run_screen_action(self, windows, label: str, action) -> None:
@@ -570,8 +572,15 @@ class Gui:
         if lines:
             self.log_box.configure(state="normal")
             self.log_box.insert("end", "\n".join(lines) + "\n")
+            extra = int(self.log_box.index("end-1c").split(".")[0]) - MAX_LOG_LINES
+            if extra > 0:
+                self.log_box.delete("1.0", f"{extra + 1}.0")
             self.log_box.see("end")
             self.log_box.configure(state="disabled")
+        reason = self.app.play_end_reason
+        if reason and not self.app.playing:  # 게임 화면에서도 왜 멈췄는지 보이게
+            self.app.play_end_reason = None
+            self._notice = (f"■ {reason}", time.monotonic() + STOP_NOTICE_SECONDS, COLORS["rec"])
         self._poll_count += 1
         if self._poll_count % 20 == 0:  # 약 1초마다: 밖에서 바뀐 매크로 파일 반영
             self._auto_reload()

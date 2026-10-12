@@ -1789,3 +1789,21 @@ def test_settings_dialog_author_link(gui, monkeypatch):
     d.author_link.event_generate("<Button-1>")
     assert opened == ["https://github.com/rmia4/macro"]
     d.close()
+
+
+def test_log_box_keeps_recent_lines_only(gui):
+    import gui as gui_mod
+    for i in range(gui_mod.MAX_LOG_LINES + 300):
+        gui.log(f"줄 {i}")
+    pump(gui)
+    text = logs(gui).strip().splitlines()
+    assert len(text) <= gui_mod.MAX_LOG_LINES
+    assert text[-1] == f"줄 {gui_mod.MAX_LOG_LINES + 299}"
+
+
+def test_abnormal_stop_reason_shown_on_overlay(gui):
+    import gui as gui_mod
+    gui.app.play_end_reason = "창을 찾을 수 없어 중단합니다: 'Game'"
+    pump(gui)
+    assert gui.overlay_state() == ("■ 창을 찾을 수 없어 중단합니다: 'Game'", gui_mod.COLORS["rec"])
+    assert gui.app.play_end_reason is None   # 한 번만 보여준다
