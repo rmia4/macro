@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 from ctypes import wintypes
 from typing import Protocol
@@ -128,6 +129,8 @@ class WindowsBackend:
         self._u.IsWindowVisible.argtypes = (wintypes.HWND,)
         self._u.GetClientRect.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.RECT))
         self._u.ClientToScreen.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.POINT))
+        self._u.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
+        self._pid = os.getpid()
         self._enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
     def _send(self, inp: INPUT) -> None:
@@ -178,9 +181,16 @@ class WindowsBackend:
         self._u.GetWindowTextW(hwnd, buf, n + 1)
         return buf.value
 
+    def _is_own(self, hwnd) -> bool:
+        """이 프로그램의 창인지 (기록 화면 제목에 매크로 이름이 들어가 대상 창 제목과 겹칠 수 있다)."""
+        pid = wintypes.DWORD()
+        self._u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return pid.value == self._pid
+
     def foreground_title(self) -> str:
+        """앞에 있는 창 제목. 이 프로그램의 창이면 빈 문자열 (대상 창이 아니다)."""
         hwnd = self._u.GetForegroundWindow()
-        return self._title(hwnd) if hwnd else ""
+        return self._title(hwnd) if hwnd and not self._is_own(hwnd) else ""
 
     def _client_rect(self, hwnd) -> tuple[int, int, int, int] | None:
         rect, pt = wintypes.RECT(), wintypes.POINT(0, 0)
@@ -191,17 +201,17 @@ class WindowsBackend:
         return pt.x, pt.y, pt.x + rect.right, pt.y + rect.bottom
 
     def find_window_rect(self, title: str) -> tuple[int, int, int, int] | None:
-        """제목에 title(대소문자 무시)이 포함된 창의 클라이언트 영역 (l, t, r, b)."""
+        """제목에 title(대소문자 무시)이 포함된 창의 클라이언트 영역 (l, t, r, b). 이 프로그램의 창은 뺀다."""
         needle = title.lower()
         fg = self._u.GetForegroundWindow()
-        if fg and needle in self._title(fg).lower():
+        if fg and not self._is_own(fg) and needle in self._title(fg).lower():
             rect = self._client_rect(fg)
             if rect:
                 return rect
         found: list[tuple[int, int, int, int]] = []
 
         def cb(hwnd, _):
-            if self._u.IsWindowVisible(hwnd) and needle in self._title(hwnd).lower():
+            if self._u.IsWindowVisible(hwnd) and not self._is_own(hwnd) and needle in self._title(hwnd).lower():
                 rect = self._client_rect(hwnd)
                 if rect:
                     found.append(rect)

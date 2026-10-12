@@ -238,3 +238,31 @@ def test_store_json_failure_restores_old_images(tmp_path, monkeypatch):
         app.store("m1", Macro(events=[]), old_name="m1", assets={"a.png": src / "new.png"})
     assert sorted(p.name for p in tmp_path.iterdir()) == ["m1", "m1.json", "staging"]
     assert (tmp_path / "m1" / "a.png").read_bytes() == b"A"
+
+
+def test_stop_all_releases_keys_when_player_hangs(tmp_path):
+    import time
+    from player import PlayOptions
+    from vision import Match
+    gate = threading.Event()
+
+    class HangVision:  # 판정이 멈춰 중지 요청을 못 보는 상태
+        def preload(self, conds): pass
+
+        def check(self, cond, origin=(0, 0)):
+            gate.wait(5)
+            return Match(False, 0.0)
+    be = FakeBackend()
+    app = App(be, macros_dir=tmp_path, log=lambda m: None, vision_factory=lambda d: HangVision())
+    app.STOP_TIMEOUT = 0.2
+    pix = {"kind": "pixel", "x": 0, "y": 0, "color": "#000000"}
+    app.start_play(Macro(events=[{"t": 0, "type": "kdown", "key": "a"},
+                                 {"t": 0, "type": "wait_until", "cond": pix},
+                                 {"t": 0.1, "type": "kup", "key": "a"}]), PlayOptions(approach=False))
+    deadline = time.monotonic() + 2
+    while ("kdown", "a") not in be.names() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    app.stop_all()
+    assert app.playing and be.names()[-1] == ("kup", "a")  # 스레드는 아직 멈춰 있지만 키는 뗐다
+    gate.set()
+    app._thread.join(2)

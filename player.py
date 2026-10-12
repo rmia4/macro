@@ -170,7 +170,7 @@ class Player:
                 n += 1
                 self._log(f"루프 {n} 완료")
         finally:
-            self._release_all()
+            self.release_all()
             self._stop.clear()  # 다음 run 을 위해 (시작 전·준비 중 들어온 중지는 위에서 지켜진다)
 
     def _play_once(self, macro: Macro) -> bool:
@@ -221,6 +221,8 @@ class Player:
                 self._origin = self._clock() - cum  # 대기한 만큼 이후 시간표를 뒤로 민다
             elif typ in ("if_start", "break_if", "while_start"):
                 self._check(ev["cond"])
+                # 판정이 시간표보다 늦어졌으면 그만큼 이후를 민다 (안 그러면 반복마다 쌓여 뒤의 지연이 사라진다)
+                self._origin = max(self._origin, self._clock() - cum)
             elif typ == "set_var":
                 self.variables[ev["name"]] = ev["cond"]  # 지금 판정하지 않고, 변수가 쓰일 때 판정한다
             elif typ == "set_image":
@@ -361,7 +363,7 @@ class Player:
             return True
         self._log("대상 창이 포커스를 잃어 일시정지합니다")
         held = list(self._held_keys)
-        self._release_all()
+        self.release_all()
         start = self._clock()
         while not self._focused():
             if self._sleep(self.opt.focus_poll):
@@ -478,7 +480,8 @@ class Player:
         # "wait", "repeat_start", "repeat_end": 대기는 이미 타임라인에 반영됨, 반복은 _play_once 가 처리
         return True
 
-    def _release_all(self) -> None:
+    def release_all(self) -> None:
+        """눌린 키·버튼을 모두 뗀다 (재생 끝·포커스 잃음, 멈추지 않는 재생을 밖에서 정리할 때)."""
         for key in list(self._held_keys):
             try:
                 self.backend.key_up(key)

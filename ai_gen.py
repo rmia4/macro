@@ -468,11 +468,12 @@ class ClaudeCliProvider:
         self._proc = None
         self.cancelled = False
 
-    def command(self, system: str, schema: dict, with_images: bool = False) -> list[str]:
+    def command(self, system_file: str, schema: dict, with_images: bool = False) -> list[str]:
+        """system_file: 시스템 프롬프트를 담은 파일 (지금 매크로가 들어가면 Windows 명령줄 길이 32767자를 넘는다)."""
         tools = ["--tools", "Read", "--allowedTools", "Read"] if with_images else ["--tools", ""]
         cmd = [self.path, "-p", "--output-format", "json",
                "--json-schema", json.dumps(schema, ensure_ascii=False),
-               "--system-prompt", system, *tools, "--no-session-persistence"]
+               "--system-prompt-file", system_file, *tools, "--no-session-persistence"]
         if self.model:
             cmd += ["--model", self.model]
         return cmd
@@ -480,21 +481,25 @@ class ClaudeCliProvider:
     def generate(self, system: str, prompt: str, schema: dict, images: list[bytes]) -> dict:
         if self.cancelled:
             raise AiError("취소했습니다.")
+        sysdir = Path(tempfile.mkdtemp(prefix="macro_ai_sys_"))  # 화면 폴더(작업 폴더)와 따로 둔다
         workdir = Path(tempfile.mkdtemp(prefix="macro_ai_")) if images else None
         try:
+            system_file = sysdir / "system_prompt.txt"
+            system_file.write_text(system, encoding="utf-8")
             for i, png in enumerate(images):
                 (workdir / image_name(i)).write_bytes(png)
-            return self._run(system, prompt, schema, workdir)
+            return self._run(str(system_file), prompt, schema, workdir)
         finally:
+            shutil.rmtree(sysdir, ignore_errors=True)
             if workdir is not None:
                 shutil.rmtree(workdir, ignore_errors=True)
 
-    def _run(self, system: str, prompt: str, schema: dict, workdir: Path | None) -> dict:
+    def _run(self, system_file: str, prompt: str, schema: dict, workdir: Path | None) -> dict:
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
         timeout = self.image_timeout if workdir else self.timeout
         try:
             path = shutil.which(self.path) or self.path
-            cmd = self.command(system, schema, workdir is not None)
+            cmd = self.command(system_file, schema, workdir is not None)
             self._proc = self._popen([path, *cmd[1:]], stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      cwd=str(workdir) if workdir else None, creationflags=flags)

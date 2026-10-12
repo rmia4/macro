@@ -26,6 +26,8 @@ HELP = """명령: record | play | stop | save <이름> | load <이름> | delete 
 
 
 class App:
+    STOP_TIMEOUT = 2.0  # 종료할 때 재생이 멈추기를 기다리는 시간(초)
+
     def __init__(self, backend, macros_dir: Path = MACROS_DIR, log=print,
                  recorder_factory=Recorder, player_factory=Player, vision_factory=Vision) -> None:
         self.backend = backend
@@ -154,7 +156,10 @@ class App:
     def stop_all(self) -> None:
         if self.playing:
             self._player.stop()
-            self._thread.join(timeout=2)
+            self._thread.join(timeout=self.STOP_TIMEOUT)
+            if self._thread.is_alive():  # 판정·입력이 막혀 멈추지 않으면 (데몬 스레드라 finally 가 안 돌 수 있다)
+                self.log("재생이 멈추지 않아 눌린 키·버튼을 직접 해제합니다")
+                self._player.release_all()
         if self.recording:
             self.toggle_record()
 

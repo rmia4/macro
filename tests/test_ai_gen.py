@@ -1,5 +1,6 @@
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -140,13 +141,17 @@ def test_cli_command_and_structured_output():
 
     def popen(cmd, **kw):
         seen["cmd"], seen["kw"] = cmd, kw
+        seen["system"] = Path(cmd[cmd.index("--system-prompt-file") + 1]).read_text(encoding="utf-8")
         seen["proc"] = FakeProc(out=envelope(structured_output=GOOD))
         return seen["proc"]
     p = ClaudeCliProvider("claude-not-on-path", model="sonnet", popen=popen)
-    assert p.generate("SYS", "한글 설명", {"type": "object"}, []) == GOOD
+    system = "시스템 " + "x" * 40000  # Windows 명령줄 한도(32767자)보다 길어도 파일로 넘긴다
+    assert p.generate(system, "한글 설명", {"type": "object"}, []) == GOOD
     cmd = seen["cmd"]
     assert cmd[0] == "claude-not-on-path" and cmd[1] == "-p"
-    assert cmd[cmd.index("--system-prompt") + 1] == "SYS"
+    assert seen["system"] == system and "--system-prompt" not in cmd
+    assert sum(len(a) for a in cmd) < 2000
+    assert not Path(cmd[cmd.index("--system-prompt-file") + 1]).exists()  # 끝나면 지운다
     assert cmd[cmd.index("--tools") + 1] == "" and "--no-session-persistence" in cmd
     assert cmd[cmd.index("--model") + 1] == "sonnet"
     assert json.loads(cmd[cmd.index("--json-schema") + 1]) == {"type": "object"}
