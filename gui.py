@@ -62,6 +62,12 @@ def ai_guide() -> str:
             "예) 화면 2의 확인 버튼 클릭")
 
 
+def make_tray(on_event) -> input_backend.TrayIcon:
+    tray = input_backend.TrayIcon("매크로 도구", str(resource_path("icon.ico")), on_event)
+    tray.start()
+    return tray
+
+
 class Gui:
     """메인 화면: 매크로 목록과 재생."""
 
@@ -88,6 +94,9 @@ class Gui:
         self.capture_session: AiPromptDialog | None = None  # AI 화면 캡처 모드 (F7 캡처, F8 끝)
         self.ai_provider_factory = lambda: ai_gen.make_provider(self.settings)  # 테스트에서 주입
         self.hotkey_listener: HotkeyListener | None = None
+        self.tray_factory = make_tray if input_backend.IS_WINDOWS else None  # (on_event) -> 트레이. 테스트에서 주입
+        self._tray = None
+        self._tray_noticed = False  # 처음 트레이로 숨길 때만 알림
         self._apply_runtime_settings()
         self._poll_count = 0
         app.log = self._logs.put
@@ -98,7 +107,8 @@ class Gui:
         self.overlay = Overlay(root, self.settings["overlay_position"])
         self._build()
         self.reload()
-        root.protocol("WM_DELETE_WINDOW", self.close)
+        root.protocol("WM_DELETE_WINDOW", self.on_close_button)
+        root.bind("<Unmap>", self._on_unmap)
         self._poll()
 
     # ---- 화면 구성 ----
@@ -614,6 +624,46 @@ class Gui:
         else:
             self.overlay.hide()
 
+    # ---- 시스템 트레이 ----
+    def on_close_button(self) -> None:
+        """메인 창의 X: 설정에 따라 트레이로 숨기거나 종료."""
+        if not (self.settings["close_to_tray"] and self.hide_to_tray()):
+            self.close()
+
+    def _on_unmap(self, e) -> None:
+        if e.widget is self.root and self.settings["minimize_to_tray"] and self.root.state() == "iconic":
+            self.root.after_idle(self.hide_to_tray)
+
+    def hide_to_tray(self) -> bool:
+        """메인 창을 숨기고 트레이 아이콘을 띄운다 (기록 화면 등 다른 창은 그대로). 트레이를 못 쓰면 False."""
+        if self._closed:
+            return False
+        if self._tray is None:
+            if self.tray_factory is None:
+                return False
+            try:
+                self._tray = self.tray_factory(self._tray_event)
+            except Exception as e:
+                self.log(f"트레이 아이콘을 만들 수 없습니다: {e}")
+                return False
+        self.root.withdraw()
+        if not self._tray_noticed:
+            self._tray_noticed = True
+            self._tray.notify("매크로 도구", "트레이에서 계속 실행 중입니다. 아이콘을 클릭하면 다시 열립니다.")
+        return True
+
+    def show_from_tray(self) -> None:
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def _tray_event(self, what: str) -> None:
+        """트레이 스레드에서 호출됨 -> 큐로 Tk 스레드에 전달."""
+        if what == "show":
+            self._calls.put(self.show_from_tray)
+        elif what == "quit":
+            self._calls.put(self.close)
+
     def close(self) -> None:
         if self._closed:
             return
@@ -627,6 +677,9 @@ class Gui:
         self.settings["main_geometry"] = self.root.geometry()
         self.settings.save()
         self.overlay.destroy()
+        if self._tray is not None:
+            self._tray.stop()
+            self._tray = None
         if self._after_id is not None:
             try:
                 self.root.after_cancel(self._after_id)
@@ -2803,6 +2856,8 @@ class SettingsDialog:
     확인하면 적용·저장, 취소하면 버린다."""
 
     # 기본 키 번호 순 (F7 -> F8 -> F9 -> F10 -> Ctrl+F12). 키를 바꿔도 줄 순서는 그대로
+    TRAY_ROWS = (("close_to_tray", "X 버튼을 누르면 트레이로 숨기기 (종료하지 않음)"),
+                 ("minimize_to_tray", "최소화하면 트레이로 숨기기"))
     KEY_ROWS = (("capture", "AI 화면 캡처"), ("record", "녹화 시작/종료"), ("play", "재생/중지"),
                 ("quit", "프로그램 종료"), ("toggle", "실행모드/편집모드 전환"))
     ADD_NOTE = ("기록 화면에서 항목을 직접 추가할 때 처음 채워지는 값입니다.\n"
@@ -2837,6 +2892,7 @@ class SettingsDialog:
                         "quit": hk.HOTKEY_QUIT, "toggle": gui.toggle_hotkey}
         self.v_delay = tk.StringVar(self.top, value=gui.delay.get())
         self.v_overlay = tk.StringVar(self.top, value=OVERLAY_LABELS[s["overlay_position"]])
+        self.v_tray = {key: tk.BooleanVar(self.top, value=s[key]) for key, _ in self.TRAY_ROWS}
         self.v_num = {key: tk.StringVar(self.top, value=self._fmt(s[key])) for _, key, _ in self.ADVANCED_FIELDS}
         f = ttk.Frame(self.top, padding=10)
         f.pack(fill="both", expand=True)
@@ -2863,8 +2919,11 @@ class SettingsDialog:
         ttk.Label(general, text="상태 오버레이 위치").grid(row=1, column=0, sticky="w", pady=3)
         ttk.Combobox(general, textvariable=self.v_overlay, state="readonly", width=14,
                      values=[OVERLAY_LABELS[p] for p in OVERLAY_POSITIONS]).grid(row=1, column=1, sticky="w", padx=8)
+        for row, (key, text) in enumerate(self.TRAY_ROWS, start=2):
+            ttk.Checkbutton(general, text=text, variable=self.v_tray[key]).grid(
+                row=row, column=0, columnspan=2, sticky="w", pady=1)
         ttk.Button(general, text="⚙ AI 설정", command=lambda: AiSettingsDialog.open(gui, self.top)).grid(
-            row=2, column=0, sticky="w", pady=(6, 0))
+            row=2 + len(self.TRAY_ROWS), column=0, sticky="w", pady=(6, 0))
         bottom = ttk.Frame(basic)
         bottom.pack(side="bottom", fill="x", pady=(6, 0))
         self.author_link = tk.Label(bottom, text="제작자", fg="#1a5fb4", cursor="hand2", font=("", 9, "underline"))
@@ -2902,13 +2961,15 @@ class SettingsDialog:
         return f"{value:g}" if isinstance(value, float) else str(value)
 
     def reset_basic(self) -> None:
-        """기본 설정 칸만 기본값으로 (단축키·시작 지연·오버레이 위치, AI 설정은 그대로. 적용은 확인)."""
+        """기본 설정 칸만 기본값으로 (단축키·시작 지연·오버레이 위치·트레이, AI 설정은 그대로. 적용은 확인)."""
         d = settings_mod.DEFAULTS
         for which in self.hotkeys:
             self.hotkeys[which] = d[f"{which}_hotkey"]
             self.hotkey_labels[which].configure(text=self._hotkey_text(which))
         self.v_delay.set(str(d["start_delay"]))
         self.v_overlay.set(OVERLAY_LABELS[d["overlay_position"]])
+        for key, var in self.v_tray.items():
+            var.set(d[key])
 
     def reset_advanced(self) -> None:
         """고급 칸만 기본값으로 (적용은 확인)."""
@@ -2960,7 +3021,9 @@ class SettingsDialog:
             if error:
                 messagebox.showerror("설정", error, parent=self.top)
                 return
-        self.gui.apply_numbers(values)
+        for key, var in self.v_tray.items():
+            self.gui.settings[key] = bool(var.get())
+        self.gui.apply_numbers(values)  # 저장도 함
         position = next(k for k, v in OVERLAY_LABELS.items() if v == self.v_overlay.get())
         if position != self.gui.settings["overlay_position"]:
             self.gui.set_overlay_position(position)
