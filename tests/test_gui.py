@@ -1851,3 +1851,98 @@ def test_editor_ai_chat_applies_without_asking_when_unchanged(gui, monkeypatch):
     ed.ai_panel.send()
     assert wait_for(gui, lambda: not ed.ai_panel.busy)
     assert [i["type"] for i in ed.items] == ["kdown", "kup"]
+
+
+# ---- 시스템 트레이 ----
+class FakeTray:
+    def __init__(self, on_event):
+        self.on_event, self.notices, self.stopped = on_event, [], False
+
+    def notify(self, title, text):
+        self.notices.append(text)
+
+    def stop(self):
+        self.stopped = True
+
+
+def use_fake_tray(g):
+    trays = []
+    g.tray_factory = lambda cb: trays.append(FakeTray(cb)) or trays[-1]
+    return trays
+
+
+def test_close_button_hides_to_tray_when_enabled(gui):
+    trays = use_fake_tray(gui)
+    gui.root.update()
+    gui.settings["close_to_tray"] = True
+    gui.on_close_button()
+    gui.root.update()
+    assert not gui._closed and gui.root.state() == "withdrawn"
+    assert len(trays) == 1 and len(trays[0].notices) == 1
+    trays[0].on_event("show")                    # 트레이 스레드 -> 큐 -> Tk
+    pump(gui)
+    assert gui.root.state() == "normal"
+    gui.on_close_button()                        # 두 번째: 같은 트레이, 알림은 처음만
+    gui.root.update()
+    assert len(trays) == 1 and len(trays[0].notices) == 1 and gui.root.state() == "withdrawn"
+    gui.show_from_tray()
+
+
+def test_close_button_without_tray_closes(gui, monkeypatch):
+    closed = []
+    monkeypatch.setattr(gui, "close", lambda: closed.append(1))
+    gui.on_close_button()                        # 설정 꺼짐 -> 종료
+    gui.settings["close_to_tray"] = True
+    gui.tray_factory = None                      # 트레이를 못 쓰면 -> 종료
+    gui.on_close_button()
+    assert closed == [1, 1]
+
+
+def test_minimize_hides_to_tray_when_enabled(gui):
+    trays = use_fake_tray(gui)
+    gui.root.update()
+    gui.root.iconify()
+    pump(gui, 3)
+    assert gui.root.state() == "iconic" and not trays   # 설정 꺼짐 -> 그냥 최소화
+    gui.root.deiconify()
+    pump(gui)
+    gui.settings["minimize_to_tray"] = True
+    gui.root.iconify()
+    pump(gui, 3)
+    assert gui.root.state() == "withdrawn" and len(trays) == 1
+    gui.show_from_tray()
+
+
+def test_tray_quit_closes_and_removes_icon(tmp_path):
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("디스플레이 없음")
+    import gui as gui_mod
+    app = App(FakeBackend(), macros_dir=tmp_path, recorder_factory=FakeRecorder, player_factory=FakePlayer)
+    g = gui_mod.Gui(root, app)
+    trays = use_fake_tray(g)
+    g.settings["close_to_tray"] = True
+    g.on_close_button()
+    trays[0].on_event("quit")
+    for _ in range(5):
+        time.sleep(0.06)
+        if g._closed:
+            break
+        root.update()
+    assert g._closed and trays[0].stopped
+
+
+def test_settings_dialog_tray_options(gui):
+    import gui as gui_mod
+    d = gui_mod.SettingsDialog.open(gui)
+    d.v_tray["close_to_tray"].set(True)
+    d.v_tray["minimize_to_tray"].set(True)
+    d.ok()
+    assert gui.settings["close_to_tray"] and gui.settings["minimize_to_tray"]
+    d = gui_mod.SettingsDialog.open(gui)
+    assert d.v_tray["close_to_tray"].get()
+    d.reset_basic()
+    assert not d.v_tray["close_to_tray"].get() and not d.v_tray["minimize_to_tray"].get()
+    d.close()                                    # 취소 -> 그대로
+    assert gui.settings["close_to_tray"]

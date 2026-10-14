@@ -24,6 +24,8 @@ DEFAULTS = {
     "record_hotkey": hotkeys.DEFAULT_RECORD,    # 녹화 시작/종료 키 (한 키)
     "play_hotkey": hotkeys.DEFAULT_PLAY,        # 선택한 매크로 재생/중지 키 (한 키)
     "quit_hotkey": hotkeys.DEFAULT_QUIT,        # 프로그램 종료 키 (한 키)
+    "close_to_tray": False,        # 창의 X 를 누르면 종료 대신 트레이로 숨김
+    "minimize_to_tray": False,     # 최소화하면 작업 표시줄 대신 트레이로 숨김
     # ---- 고급: 직접 추가할 때 처음 채워지는 값 (녹화·저장된 항목에는 영향 없음) ----
     "event_delay_ms": 100,         # 이벤트 앞 지연
     "key_hold_ms": 50,             # 키 입력 누름 유지

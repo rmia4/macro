@@ -378,6 +378,190 @@ class RawMouseListener:
         self._hwnd = None
 
 
+# ---- 시스템 트레이 아이콘 (Windows 전용) ----
+
+NIM_ADD, NIM_MODIFY, NIM_DELETE = 0, 1, 2
+NIF_MESSAGE, NIF_ICON, NIF_TIP, NIF_INFO = 0x01, 0x02, 0x04, 0x10
+NIIF_INFO = 0x01
+WM_APP, WM_NULL, WM_LBUTTONUP, WM_RBUTTONUP = 0x8000, 0x0000, 0x0202, 0x0205
+TPM_RIGHTBUTTON, TPM_RETURNCMD = 0x0002, 0x0100
+MF_STRING, MF_SEPARATOR = 0x0000, 0x0800
+IMAGE_ICON, LR_LOADFROMFILE, SM_CXSMICON, SM_CYSMICON = 1, 0x0010, 49, 50
+IDI_APPLICATION = 32512
+
+
+class NOTIFYICONDATAW(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("hWnd", wintypes.HWND), ("uID", wintypes.UINT),
+                ("uFlags", wintypes.UINT), ("uCallbackMessage", wintypes.UINT), ("hIcon", wintypes.HICON),
+                ("szTip", wintypes.WCHAR * 128), ("dwState", wintypes.DWORD), ("dwStateMask", wintypes.DWORD),
+                ("szInfo", wintypes.WCHAR * 256), ("uTimeout", wintypes.UINT),
+                ("szInfoTitle", wintypes.WCHAR * 64), ("dwInfoFlags", wintypes.DWORD),
+                ("guidItem", ctypes.c_byte * 16), ("hBalloonIcon", wintypes.HICON)]
+
+
+class TrayIcon:
+    """백그라운드 스레드의 숨은 창으로 트레이 아이콘을 띄운다.
+
+    왼쪽 클릭 -> on_event("show"), 오른쪽 클릭 메뉴 '열기'/'종료' -> on_event("show" | "quit").
+    on_event 는 트레이 스레드에서 불리므로 받는 쪽이 자기 스레드로 넘겨야 한다.
+    탐색기가 다시 시작되면(TaskbarCreated) 아이콘을 다시 등록한다.
+    """
+
+    _CALLBACK = WM_APP + 1
+    _MENU = ((1, "열기", "show"), (2, "종료", "quit"))
+
+    def __init__(self, tooltip: str, icon_path: str, on_event) -> None:
+        if not IS_WINDOWS:
+            raise OSError("트레이 아이콘은 Windows 에서만 사용할 수 있습니다")
+        import threading
+        self.tooltip, self.icon_path, self.on_event = tooltip, icon_path, on_event
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._ready = threading.Event()
+        self._hwnd = None
+        self._icon = None
+        self._error: Exception | None = None
+        self._shell = ctypes.WinDLL("shell32", use_last_error=True)
+        self._shell.Shell_NotifyIconW.argtypes = (wintypes.DWORD, ctypes.POINTER(NOTIFYICONDATAW))
+
+    def start(self) -> None:
+        self._thread.start()
+        self._ready.wait(2)
+        if self._error:
+            raise self._error
+
+    def stop(self) -> None:
+        if self._hwnd:
+            ctypes.windll.user32.PostMessageW(self._hwnd, WM_CLOSE, 0, 0)
+        self._thread.join(timeout=2)
+
+    def notify(self, title: str, text: str) -> None:
+        """풍선(알림) 표시."""
+        if self._hwnd:
+            data = self._data(NIF_INFO)
+            data.szInfoTitle, data.szInfo, data.dwInfoFlags = title[:63], text[:255], NIIF_INFO
+            self._shell.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(data))
+
+    def _data(self, flags: int) -> NOTIFYICONDATAW:
+        return NOTIFYICONDATAW(cbSize=ctypes.sizeof(NOTIFYICONDATAW), hWnd=self._hwnd, uID=1, uFlags=flags)
+
+    def _add(self) -> bool:
+        data = self._data(NIF_MESSAGE | NIF_ICON | NIF_TIP)
+        data.uCallbackMessage, data.hIcon, data.szTip = self._CALLBACK, self._icon, self.tooltip[:127]
+        return bool(self._shell.Shell_NotifyIconW(NIM_ADD, ctypes.byref(data)))
+
+    def _emit(self, what: str) -> None:
+        try:
+            self.on_event(what)
+        except Exception:
+            pass
+
+    def _run(self) -> None:
+        u = ctypes.WinDLL("user32", use_last_error=True)
+        k = ctypes.windll.kernel32
+        LRESULT = ctypes.c_ssize_t
+        WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+        u.DefWindowProcW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+        u.DefWindowProcW.restype = LRESULT
+        u.CreateWindowExW.restype = wintypes.HWND
+        u.CreateWindowExW.argtypes = (wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+                                      ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.HWND,
+                                      wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID)
+        u.LoadImageW.restype = wintypes.HANDLE
+        u.LoadImageW.argtypes = (wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT, ctypes.c_int, ctypes.c_int,
+                                 wintypes.UINT)
+        u.LoadIconW.restype = wintypes.HICON
+        u.LoadIconW.argtypes = (wintypes.HINSTANCE, ctypes.c_void_p)
+        u.CreatePopupMenu.restype = wintypes.HMENU
+        u.AppendMenuW.argtypes = (wintypes.HMENU, wintypes.UINT, ctypes.c_size_t, wintypes.LPCWSTR)
+        u.TrackPopupMenu.argtypes = (wintypes.HMENU, wintypes.UINT, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                     wintypes.HWND, ctypes.c_void_p)
+        u.DestroyMenu.argtypes = (wintypes.HMENU,)
+        u.PostMessageW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+        u.DestroyIcon.argtypes = (wintypes.HICON,)
+        u.DestroyWindow.argtypes = (wintypes.HWND,)
+        u.SetForegroundWindow.argtypes = (wintypes.HWND,)
+        taskbar_created = u.RegisterWindowMessageW("TaskbarCreated")
+
+        def show_menu(hwnd) -> None:
+            menu = u.CreatePopupMenu()
+            for cid, text, _ in self._MENU:
+                if cid == 2:
+                    u.AppendMenuW(menu, MF_SEPARATOR, 0, None)
+                u.AppendMenuW(menu, MF_STRING, cid, text)
+            pt = wintypes.POINT()
+            u.GetCursorPos(ctypes.byref(pt))
+            u.SetForegroundWindow(hwnd)  # 없으면 메뉴 밖을 눌러도 메뉴가 닫히지 않는다
+            cmd = u.TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, 0, hwnd, None)
+            u.PostMessageW(hwnd, WM_NULL, 0, 0)
+            u.DestroyMenu(menu)
+            for cid, _, what in self._MENU:
+                if cmd == cid:
+                    self._emit(what)
+
+        def wndproc(hwnd, msg, wparam, lparam):
+            if msg == self._CALLBACK:
+                event = lparam & 0xFFFF
+                if event == WM_LBUTTONUP:
+                    self._emit("show")
+                elif event == WM_RBUTTONUP:
+                    show_menu(hwnd)
+                return 0
+            if taskbar_created and msg == taskbar_created:  # 탐색기 재시작
+                self._add()
+                return 0
+            if msg == WM_CLOSE:
+                self._shell.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(self._data(0)))
+                u.DestroyWindow(hwnd)
+                return 0
+            if msg == WM_DESTROY:
+                u.PostQuitMessage(0)
+                return 0
+            return u.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+        proc = WNDPROC(wndproc)  # 참조 유지 (GC 방지)
+
+        class WNDCLASSW(ctypes.Structure):
+            _fields_ = [("style", wintypes.UINT), ("lpfnWndProc", WNDPROC), ("cbClsExtra", ctypes.c_int),
+                        ("cbWndExtra", ctypes.c_int), ("hInstance", wintypes.HINSTANCE),
+                        ("hIcon", wintypes.HICON), ("hCursor", wintypes.HANDLE), ("hbrBackground", wintypes.HBRUSH),
+                        ("lpszMenuName", wintypes.LPCWSTR), ("lpszClassName", wintypes.LPCWSTR)]
+
+        own_icon = False
+        try:
+            hinst = k.GetModuleHandleW(None)
+            cls_name = f"MacroToolTray{id(self)}"
+            wc = WNDCLASSW(lpfnWndProc=proc, hInstance=hinst, lpszClassName=cls_name)
+            if not u.RegisterClassW(ctypes.byref(wc)):
+                raise OSError(ctypes.get_last_error(), "RegisterClassW 실패")
+            # 메시지 전용 창은 TaskbarCreated 를 못 받으므로 보이지 않는 일반 창을 쓴다
+            hwnd = u.CreateWindowExW(0, cls_name, "", 0, 0, 0, 0, 0, None, None, hinst, None)
+            if not hwnd:
+                raise OSError(ctypes.get_last_error(), "CreateWindowExW 실패")
+            self._hwnd = hwnd
+            self._icon = u.LoadImageW(None, self.icon_path, IMAGE_ICON, u.GetSystemMetrics(SM_CXSMICON),
+                                      u.GetSystemMetrics(SM_CYSMICON), LR_LOADFROMFILE)
+            own_icon = bool(self._icon)
+            if not own_icon:
+                self._icon = u.LoadIconW(None, IDI_APPLICATION)
+            if not self._add():
+                u.DestroyWindow(hwnd)
+                raise OSError(ctypes.get_last_error(), "Shell_NotifyIconW 실패")
+        except Exception as e:
+            self._hwnd = None
+            self._error = e
+            self._ready.set()
+            return
+        self._ready.set()
+        msg = wintypes.MSG()
+        while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            u.TranslateMessage(ctypes.byref(msg))
+            u.DispatchMessageW(ctypes.byref(msg))
+        if own_icon:
+            u.DestroyIcon(self._icon)
+        u.UnregisterClassW(cls_name, hinst)
+        self._hwnd = None
+
+
 # ---- 화면 캡처: DXGI 데스크톱 복제 (Windows 8+) ----
 
 class _GUID(ctypes.Structure):
